@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: Apache-2.0
+
+import Foundation
+
+// MARK: - Speech output abstraction
+
+/// Text-to-speech + playback. The macOS app implements this with Kokoro or the
+/// system voice; the CLI prints (or uses `say`); tests use a fake.
+public protocol SpeechOutput: AnyObject, Sendable {
+    var events: AsyncStream<SpeechOutputEvent> { get }
+    /// Queues an utterance; utterances play in order.
+    func enqueue(_ utterance: Utterance)
+    /// Stops playback immediately and clears the queue. Returns the IDs that did
+    /// not finish (the one playing first), so speech can resume later.
+    @discardableResult func stopAll() -> [Int]
+    func setRate(_ rate: Double)
+}
+
+public enum SpeechOutputEvent: Sendable, Equatable {
+    case started(Int)
+    case finished(Int)
+    case failed(Int, String)
+    /// Queue drained and nothing is playing.
+    case idle
+}
+
+// MARK: - Snapshot published to the UI
+
+public enum EnginePhase: String, Sendable, Equatable {
+    case starting
+    case idle
+    case listening
+    case transcribing
+    case thinking
+    case working
+    case speaking
+    case awaitingPermission
+    case needsSetup
+}
+
+public struct TranscriptEntry: Sendable, Equatable, Identifiable {
+    public enum Role: String, Sendable { case user, assistant, tool, system }
+    public enum Status: String, Sendable { case streaming, done, interrupted, failed }
+
+    public let id: Int
+    public var role: Role
+    public var text: String
+    public var spoken: [String]
+    public var skipped: [SkippedSegment]
+    public var status: Status
+    public var date: Date
+
+    public init(id: Int, role: Role, text: String, spoken: [String] = [], skipped: [SkippedSegment] = [],
+                status: Status = .done, date: Date = Date()) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.spoken = spoken
+        self.skipped = skipped
+        self.status = status
+        self.date = date
+    }
+}
+
+public struct PendingPermission: Sendable, Equatable {
+    public var request: PermissionRequest
+    public var assessment: PermissionAssessment
+}
+
+public struct UsageSnapshot: Sendable, Equatable {
+    public var turns = 0
+    /// Only meaningful with an API key; subscription usage is shown as utilization.
+    public var costUSD: Double = 0
+    public var fiveHourUtilization: Double?
+    public var sevenDayUtilization: Double?
+    public var limitResetsAt: Date?
+    public var limitStatus: String?
+    public var sessionStarted = Date()
+    public init() {}
+}
+
+/// Latency of the last turn, for the debug HUD and the CLI `--metrics` flag.
+public struct TurnLatency: Sendable, Equatable {
+    /// Send → first streamed token.
+    public var firstToken: TimeInterval?
+    /// Send → first utterance handed to TTS.
+    public var firstUtterance: TimeInterval?
+    /// Send → first audio actually playing.
+    public var firstAudio: TimeInterval?
+}
+
+public struct EngineSnapshot: Sendable, Equatable {
+    public var phase: EnginePhase = .starting
+    public var transcript: [TranscriptEntry] = []
+    public var pendingPermission: PendingPermission?
+    public var session: SessionInfo?
+    public var usage = UsageSnapshot()
+    public var speechMode: SpeechMode = .skipCode
+    public var conversationMode: ConversationMode = .execute
+    public var verbosity: Verbosity = .normal
+    public var isClaudeWorking = false
+    public var isSpeaking = false
+    public var hasHeldBack = false
+    public var authProblem: String?
+    public var lastNotice: String?
+    public var lastLatency: TurnLatency?
+    public var speechRate: Double = 1.0
+    public init() {}
+}
+
+/// Engine configuration (a subset of `AppSettings`, resolved for one project).
+public struct EngineConfiguration: Sendable {
+    public var projectRoot: String?
+    public var speechMode: SpeechMode
+    public var conversationMode: ConversationMode
+    public var verbosity: Verbosity
+    public var acknowledgements: Bool
+    public var autoApproveLowRisk: Bool
+    public var pronunciation: [String: String]
+    public var speechRate: Double
+    /// Delay before a filler acknowledgement if nothing has been said yet.
+    public var acknowledgementDelay: TimeInterval
+
+    public init(projectRoot: String? = nil, speechMode: SpeechMode = .skipCode,
+                conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
+                acknowledgements: Bool = true, autoApproveLowRisk: Bool = false, pronunciation: [String: String] = [:],
+                speechRate: Double = 1.0, acknowledgementDelay: TimeInterval = 1.2) {
+        self.projectRoot = projectRoot
+        self.speechMode = speechMode
+        self.conversationMode = conversationMode
+        self.verbosity = verbosity
+        self.acknowledgements = acknowledgements
+        self.autoApproveLowRisk = autoApproveLowRisk
+        self.pronunciation = pronunciation
+        self.speechRate = speechRate
+        self.acknowledgementDelay = acknowledgementDelay
+    }
+
+    public init(settings: AppSettings, project: String?) {
+        self.init(projectRoot: project,
+                  speechMode: settings.effectiveSpeechMode(for: project),
+                  conversationMode: settings.effectiveConversationMode(for: project),
+                  verbosity: settings.verbosity,
+                  acknowledgements: settings.acknowledgements,
+                  autoApproveLowRisk: settings.autoApproveLowRisk,
+                  pronunciation: settings.pronunciation,
+                  speechRate: settings.speechRate)
+    }
+}

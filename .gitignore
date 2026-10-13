@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+.DS_Store
+/dist/
+/Models/
+*.dmg
+*.zip
+Package.resolved.bak
