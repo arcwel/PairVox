@@ -23,6 +23,8 @@ struct Options {
     var metrics = false
     var acknowledgements = true
     var rawLog: String?
+    var logDir: String?
+    var logText = false
 }
 
 func usage() -> Never {
@@ -43,6 +45,8 @@ func usage() -> Never {
       --metrics             Print per-turn latency
       --no-ack              No "On it." acknowledgements
       --raw-log FILE        Append raw stream-json lines to FILE
+      --log [DIR]           Write structured diagnostics (JSON lines) to DIR (default ~/Library/Logs/PairVox)
+      --log-text            With --log, also record conversation text (off by default)
 
     Type a message and press Enter. Typing while it talks interrupts it (barge-in).
     Voice commands work as text: stop, repeat that, details, read the code, skip,
@@ -80,6 +84,10 @@ func parseOptions() -> Options {
         case "--metrics": o.metrics = true
         case "--no-ack": o.acknowledgements = false
         case "--raw-log": o.rawLog = next(a)
+        case "--log":
+            if let upcoming = args.first, !upcoming.hasPrefix("--") { o.logDir = (next(a) as NSString).expandingTildeInPath }
+            else { o.logDir = ("~/Library/Logs/PairVox" as NSString).expandingTildeInPath }
+        case "--log-text": o.logText = true
         default:
             FileHandle.standardError.write(Data("Unknown option \(a). Try --help.\n".utf8))
             exit(2)
@@ -99,6 +107,14 @@ func stdinLines() -> AsyncStream<String> {
 }
 
 let opts = parseOptions()
+if let dir = opts.logDir {
+    DiagnosticLog.shared.configure(.init(directory: URL(fileURLWithPath: dir, isDirectory: true), minLevel: .debug,
+                                         includeContent: opts.logText))
+    DiagnosticLog.shared.log(.info, .app, "cli.launch", ["model": .string(opts.model ?? "default"),
+                                                         "conversationText": .bool(opts.logText)])
+    atexit { DiagnosticLog.shared.flush() }
+    Term.dim("Logging to \(dir)/\(DiagnosticLog.fileName)")
+}
 let env = await ShellEnvironment.loginShellEnvironment()
 guard let claude = ClaudeLocator.locate(override: opts.claudePath, pathVariable: env["PATH"]) else {
     print("Could not find the `claude` CLI. Install Claude Code, run `claude` once to sign in, or pass --claude PATH.")

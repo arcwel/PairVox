@@ -33,6 +33,7 @@ public actor ConversationEngine {
     private var turnMuted = false
     private var latency = TurnLatency()
     private var utterancesThisTurn = 0
+    private let log = DiagnosticLog.shared
     private var ackTask: Task<Void, Never>?
     private var firstTokenSeen = false
 
@@ -115,6 +116,8 @@ public actor ConversationEngine {
 
     /// The user started talking (VAD). Stops our speech immediately (barge-in).
     public func userStartedSpeaking() {
+        log.log(.info, .engine, "user.speech.start",
+                ["bargeIn": .bool(snapshot.isSpeaking || !queueOrder.isEmpty), "phase": "\(snapshot.phase)"])
         if snapshot.isSpeaking || !queueOrder.isEmpty {
             let remaining = queueOrder.compactMap { queued[$0] }
             output.stopAll()
@@ -131,6 +134,7 @@ public actor ConversationEngine {
 
     /// The user stopped talking; a transcript will follow.
     public func userStoppedSpeaking() {
+        log.log(.info, .engine, "user.speech.end")
         userIsSpeaking = false
         transcribing = true
         recomputePhase()
@@ -138,6 +142,7 @@ public actor ConversationEngine {
 
     /// Speech recognition produced nothing usable.
     public func transcriptionFailed() {
+        log.log(.warning, .engine, "user.transcription.empty")
         userIsSpeaking = false
         transcribing = false
         resumeAfterFalseBargeIn()
@@ -157,7 +162,11 @@ public actor ConversationEngine {
         let context = VoiceCommand.Context(awaitingPermission: snapshot.pendingPermission != nil,
                                            claudeIsWorking: !sendTimes.isEmpty,
                                            hasHeldBack: !(lastPlanner?.heldBack.isEmpty ?? true))
-        if let command = VoiceCommand.parse(text, context: context) {
+        let parsed = VoiceCommand.parse(text, context: context)
+        log.log(.info, .engine, "user.submit",
+                ["text": log.content(text), "command": parsed.map { "\($0)" } ?? "none",
+                 "awaitingPermission": .bool(context.awaitingPermission), "claudeWorking": .bool(context.claudeIsWorking)])
+        if let command = parsed {
             appendEntry(.user, text, status: .done)
             perform(command)
             return
@@ -257,6 +266,7 @@ public actor ConversationEngine {
     // MARK: - Commands
 
     public func perform(_ command: VoiceCommand) {
+        log.log(.info, .engine, "command", ["name": "\(command)"])
         switch command {
         case .stopSpeaking:
             output.stopAll()
@@ -348,6 +358,7 @@ public actor ConversationEngine {
         guard generation == backendGeneration else { return }
         switch event {
         case .started(let info):
+            log.log(.info, .session, "session.started", ["info": "\(info)"])
             snapshot.session = info
             snapshot.authProblem = nil
             spokenAuthProblem = false
@@ -381,7 +392,10 @@ public actor ConversationEngine {
 
         case .permissionRequested(let request):
             let assessment = policy.assess(request)
-            if config.autoApproveLowRisk && assessment.risk == .low {
+            let auto = config.autoApproveLowRisk && assessment.risk == .low
+            log.log(.info, .policy, "permission.requested",
+                    ["tool": .string(request.toolName), "risk": "\(assessment.risk)", "autoApproved": .bool(auto)])
+            if auto {
                 try? backend?.respond(to: request, decision: .allow)
                 break
             }
@@ -411,6 +425,9 @@ public actor ConversationEngine {
             speak([make(message, .notice)], record: false, force: true)
 
         case .processExited(let code, let stderr):
+            log.log(code == 0 ? .info : .error, .session, "process.exited",
+                    ["code": .int(Int(code)), "stderrTail": .string(String(stderr.suffix(400))),
+                     "turnInFlight": .bool(!sendTimes.isEmpty)])
             if !sendTimes.isEmpty {
                 let detail = code == 0 ? "" : " (exit code \(code))"
                 snapshot.lastNotice = "Claude Code stopped unexpectedly\(detail)."
@@ -427,6 +444,11 @@ public actor ConversationEngine {
     }
 
     private func completeTurn(_ result: TurnResult) {
+        func ms(_ t: TimeInterval?) -> LogValue { t.map { .int(Int($0 * 1000)) } ?? .int(-1) }
+        log.log(.info, .engine, "turn.completed",
+                ["outcome": "\(result.outcome)", "durationMs": .int(result.durationMs), "numTurns": .int(result.numTurns),
+                 "firstTokenMs": ms(latency.firstToken), "firstUtteranceMs": ms(latency.firstUtterance),
+                 "firstAudioMs": ms(latency.firstAudio), "utterances": .int(utterancesThisTurn)])
         var final = planner.finishTurn(result)
         if readMoreWhenDone {
             readMoreWhenDone = false
@@ -476,12 +498,18 @@ public actor ConversationEngine {
     private func handleOutput(_ event: SpeechOutputEvent) {
         switch event {
         case .started(let id):
+            log.log(.debug, .tts, "utterance.started", ["id": .int(id)])
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
             if measuredIDs.contains(id), latency.firstAudio == nil, let start = sendTimes.first {
                 latency.firstAudio = Date().timeIntervalSince(start)
             }
         case .finished(let id), .failed(let id, _):
+            if case .failed(_, let why) = event {
+                log.log(.error, .tts, "utterance.failed", ["id": .int(id), "reason": .string(why)])
+            } else {
+                log.log(.debug, .tts, "utterance.finished", ["id": .int(id)])
+            }
             queued.removeValue(forKey: id)
             queueOrder.removeAll { $0 == id }
             measuredIDs.remove(id)
@@ -533,6 +561,13 @@ public actor ConversationEngine {
     }
 
     private func respondToPermission(_ request: PermissionRequest, decision: PermissionDecision) {
+        log.log(.info, .policy, "permission.decided", ["tool": .string(request.toolName), "decision": .string({
+            switch decision {
+            case .allow: return "allow"
+            case .allowAlways: return "allowAlways"
+            case .deny: return "deny"
+            }
+        }())])
         do {
             try backend?.respond(to: request, decision: decision)
         } catch {
@@ -605,6 +640,7 @@ public actor ConversationEngine {
     }
 
     private func noteProblem(_ message: String) {
+        log.log(.error, .engine, "problem", ["message": .string(message)])
         snapshot.authProblem = message
         snapshot.phase = .needsSetup
         if !spokenAuthProblem {
