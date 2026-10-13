@@ -48,6 +48,8 @@ final class AppModel: ObservableObject {
     private var notifiedPermissionID: String?
     private var turnsAtDeactivation = 0
     private var receivedFirstSnapshot = false
+    /// True while copying engine-originated values into settings (don't echo them back).
+    private var syncingFromEngine = false
 
     init() {
         let loaded = store.load()
@@ -305,8 +307,10 @@ final class AppModel: ObservableObject {
         // Voice commands ("faster", "summary mode") change these inside the engine;
         // mirror them into settings (but not the engine's initial per-project values).
         if receivedFirstSnapshot {
-            if abs(snap.speechRate - previous.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
-            if snap.speechMode != previous.speechMode { settings.speechMode = snap.speechMode }
+            syncingFromEngine = true
+            if abs(snap.speechRate - settings.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
+            if snap.speechMode != settings.speechMode { settings.speechMode = snap.speechMode }
+            syncingFromEngine = false
         }
         receivedFirstSnapshot = true
         if snap.phase == .needsSetup && previous.phase != .needsSetup { showSetup = true }
@@ -331,11 +335,11 @@ final class AppModel: ObservableObject {
         voice.apply(settings)
         input?.setBargeInEnabled(settings.bargeInEnabled)
         input?.setEndSilence(settings.endOfTurnSilence)
-        if old.speechRate != settings.speechRate {
+        if !syncingFromEngine, old.speechRate != settings.speechRate {
             let rate = settings.speechRate
             Task { await engine?.setSpeechRate(rate) }
         }
-        if old.speechMode != settings.speechMode {
+        if !syncingFromEngine, old.speechMode != settings.speechMode {
             let mode = settings.speechMode
             Task { await engine?.setSpeechMode(mode) }
         }

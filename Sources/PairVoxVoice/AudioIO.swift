@@ -25,7 +25,7 @@ public final class AudioIO: @unchecked Sendable {
     }
     private var _onFrame: (([Float]) -> Void)?
     private let frameLock = NSLock()
-    private var lastRestart = Date.distantPast
+    private var restartPending = false
     /// Called when the audio route changed and capture restarted.
     public var onRestart: (() -> Void)?
 
@@ -115,15 +115,19 @@ public final class AudioIO: @unchecked Sendable {
 
     private func restartAfterConfigurationChange() {
         // Headphones plugged in, default device changed, etc. Re-enabling voice
-        // processing can itself post a change notification, so debounce.
-        guard Date().timeIntervalSince(lastRestart) > 0.5 else { return }
-        lastRestart = Date()
-        stop()
-        do {
-            try start()
-            onRestart?()
-        } catch {
-            NSLog("PairVox: could not restart audio after a device change: \(error)")
+        // processing can post another change notification, so coalesce bursts.
+        guard !restartPending else { return }
+        restartPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.restartPending = false
+            self.stop()
+            do {
+                try self.start()
+                self.onRestart?()
+            } catch {
+                NSLog("PairVox: could not restart audio after a device change: \(error)")
+            }
         }
     }
 

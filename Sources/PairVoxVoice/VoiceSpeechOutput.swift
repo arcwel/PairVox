@@ -46,6 +46,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
     public func stopAll() -> [Int] {
         lock.lock()
         generation += 1
+        let hadAudio = playing != nil
         var ids: [Int] = []
         if let p = playing { ids.append(p.id) }
         ids += ready.map(\.0.id) + waiting.map(\.id)
@@ -53,7 +54,8 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         ready.removeAll()
         waiting.removeAll()
         lock.unlock()
-        audio.stopPlayback()
+        // Only touch the shared player if this output was actually playing.
+        if hadAudio { audio.stopPlayback() }
         onPlaybackActiveChange?(false)
         continuation.yield(.idle)
         return ids

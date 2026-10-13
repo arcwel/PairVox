@@ -79,7 +79,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
                     return
                 }
                 // Warm up so the first real sentence is fast.
-                if let style = loaded[self._voice + ".npy"] ?? loaded.values.first {
+                if let style = loaded[self.voice + ".npy"] ?? loaded.values.first {
                     _ = try? engine.generateAudio(voice: style, language: .enUS, text: "Ready.")
                 }
                 self.lock.lock()
