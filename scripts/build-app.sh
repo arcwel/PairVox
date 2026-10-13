@@ -25,7 +25,11 @@ TEAM="${DEVELOPMENT_TEAM:-}"
 xcodegen generate --quiet
 
 SIGN_ARGS=(CODE_SIGN_IDENTITY="$IDENTITY")
-if [[ "$IDENTITY" != "-" ]]; then
+if [[ "$IDENTITY" == "-" ]]; then
+  # Hardened runtime enforces library validation, and ad-hoc signatures have no Team ID,
+  # so dyld refuses the embedded frameworks. Local builds run without it.
+  SIGN_ARGS+=(ENABLE_HARDENED_RUNTIME=NO)
+else
   SIGN_ARGS+=(CODE_SIGN_STYLE=Manual OTHER_CODE_SIGN_FLAGS="--timestamp")
   [[ -n "$TEAM" ]] && SIGN_ARGS+=(DEVELOPMENT_TEAM="$TEAM")
 fi

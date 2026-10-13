@@ -64,6 +64,12 @@ final class AppModel: ObservableObject {
     // MARK: Startup
 
     private func bootstrap() async {
+        // Model loads don't need any permission, so they must not wait behind the prompts below.
+        let whisperModel = settings.whisperModel
+        let stack = voice
+        Task.detached(priority: .utility) { await stack.prepareRecognition(model: whisperModel) }
+        Task.detached(priority: .utility) { await stack.prepareKokoro() }
+
         loginEnvironment = await ShellEnvironment.loginShellEnvironment()
         await refreshSetup()
 
@@ -76,11 +82,6 @@ final class AppModel: ObservableObject {
         hotKeys.onPress = { [weak self] in self?.pushToTalk(down: true) }
         hotKeys.onRelease = { [weak self] in self?.pushToTalk(down: false) }
         hotKeys.register()
-
-        let whisperModel = settings.whisperModel
-        let stack = voice
-        Task.detached(priority: .utility) { await stack.prepareRecognition(model: whisperModel) }
-        Task.detached(priority: .utility) { await stack.prepareKokoro() }
 
         if !setup.claudeFound || setup.microphone != .granted {
             showSetup = true
