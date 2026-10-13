@@ -1,0 +1,18 @@
+PairVox
+Copyright 2026 SCOAEONGEO and PairVox contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+PairVox works with Claude Code but is not affiliated with, sponsored by, or
+endorsed by Anthropic PBC. "Claude" and "Claude Code" are trademarks of
+Anthropic PBC.
+
+This product depends on third-party software and model files distributed under
+their own licenses. See THIRD_PARTY_LICENSES.md for the list and terms:
+
+  - WhisperKit (MIT) - Copyright (c) 2024 argmax, inc.
+  - kokoro-ios / KokoroSwift (MIT) - Copyright (c) 2025 Lassi Maksimainen
+  - MisakiSwift (Apache-2.0)
+  - MLXUtilsLibrary (Apache-2.0)
+  - MLX Swift (MIT) - Copyright (c) 2023 ml-explore
+  - Kokoro-82M model weights and voices (Apache-2.0) - hexgrad

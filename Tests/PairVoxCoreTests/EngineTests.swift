@@ -166,6 +166,18 @@ final class ConversationEngineTests: XCTestCase {
         XCTAssertEqual(output.queue.map(\.text), ["First point here.", "Second point here.", "Third point here.", "Fourth point."])
     }
 
+    func testBackchannelWhileWorkingDoesNotInterrupt() async {
+        await engine.submit("Refactor the parser")
+        backend.emit(.textDelta("Starting with the tokenizer. Then the AST. "))
+        await settle()
+        output.playNext(finish: false)
+        await engine.userStartedSpeaking()
+        await engine.submit("okay")
+        XCTAssertEqual(backend.interrupts, 0)
+        XCTAssertEqual(backend.sent, ["Refactor the parser"])
+        XCTAssertEqual(output.queue.map(\.text), ["Starting with the tokenizer.", "Then the AST."], "speech resumes")
+    }
+
     func testStopCommandSilencesRestOfTurn() async {
         await engine.submit("Explain")
         backend.emit(.textDelta("One. Two. "))

@@ -31,6 +31,8 @@ public enum VoiceCommand: Sendable, Equatable {
     case newSession
     case faster
     case slower
+    /// "yeah", "okay", "mm-hmm" while Claude is working: acknowledgement, not an instruction.
+    case backchannel
 
     /// Context that changes how short replies are interpreted.
     public struct Context: Sendable {
@@ -57,6 +59,9 @@ public enum VoiceCommand: Sendable, Equatable {
 
         if context.awaitingPermission, let answer = permissionAnswer(core) {
             return answer
+        }
+        if context.claudeIsWorking, !context.awaitingPermission, backchannels.contains(core) {
+            return .backchannel
         }
 
         switch core {
@@ -96,6 +101,11 @@ public enum VoiceCommand: Sendable, Equatable {
             return nil
         }
     }
+
+    static let backchannels: Set<String> = [
+        "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "right", "cool", "great", "nice", "thanks", "thank you",
+        "uh huh", "mm hmm", "mhm", "mm", "got it", "alright", "all right", "sounds good", "perfect", "awesome",
+    ]
 
     static let approveWords: Set<String> = ["yes", "yeah", "yep", "yup", "sure", "allow", "approve", "approved", "ok",
                                             "okay", "confirm", "confirmed", "fine", "absolutely", "definitely"]

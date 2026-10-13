@@ -30,8 +30,11 @@ public enum SynthesisError: Error, LocalizedError {
 /// MisakiSwift (Apache-2.0) for phonemes. Runs on the GPU via Metal.
 public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     public let displayName = "Kokoro"
-    public var voice: String
-    public var onStateChange: ((String?) -> Void)?
+    public var voice: String {
+        get { lock.lock(); defer { lock.unlock() }; return _voice }
+        set { lock.lock(); _voice = newValue; lock.unlock() }
+    }
+    private var _voice: String
 
     private let queue = DispatchQueue(label: "app.pairvox.kokoro", qos: .userInitiated)
     private let lock = NSLock()
@@ -40,7 +43,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     private var loadError: String?
 
     public init(voice: String) {
-        self.voice = voice
+        self._voice = voice
     }
 
     public var isReady: Bool {
@@ -61,6 +64,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     /// Loads weights and voices. Call only after `ModelStore` verified the files,
     /// because the underlying loader traps on a corrupt file.
     public func load(model: URL, voices voicesURL: URL) async throws {
+        if isReady { return }
         guard MLXRuntime.metalLibraryAvailable() else {
             let msg = "Kokoro needs MLX's Metal shaders. Build the app with Xcode or scripts/build-app.sh."
             lock.lock(); loadError = msg; lock.unlock()
@@ -75,7 +79,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
                     return
                 }
                 // Warm up so the first real sentence is fast.
-                if let style = loaded[self.voice + ".npy"] ?? loaded.values.first {
+                if let style = loaded[self._voice + ".npy"] ?? loaded.values.first {
                     _ = try? engine.generateAudio(voice: style, language: .enUS, text: "Ready.")
                 }
                 self.lock.lock()
@@ -91,8 +95,8 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     public func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
         lock.lock()
         let engine = tts
-        let style = voices[voice + ".npy"] ?? voices["af_heart.npy"] ?? voices.values.first
-        let language: Language = voice.hasPrefix("b") ? .enGB : .enUS
+        let style = voices[_voice + ".npy"] ?? voices["af_heart.npy"] ?? voices.values.first
+        let language: Language = _voice.hasPrefix("b") ? .enGB : .enUS
         lock.unlock()
         guard let engine, let style else { throw SynthesisError.notReady }
 
@@ -138,12 +142,16 @@ public enum MLXRuntime {
 /// through the same echo-cancelled playback path as Kokoro.
 public final class SystemSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     public let displayName = "System voice"
-    public var voiceIdentifier: String?
+    public var voiceIdentifier: String? {
+        get { lock.lock(); defer { lock.unlock() }; return _voiceIdentifier }
+        set { lock.lock(); _voiceIdentifier = newValue; lock.unlock() }
+    }
+    private var _voiceIdentifier: String?
     private let synthesizer = AVSpeechSynthesizer()
     private let lock = NSLock()
 
     public init(voiceIdentifier: String? = nil) {
-        self.voiceIdentifier = voiceIdentifier
+        self._voiceIdentifier = voiceIdentifier
     }
 
     public var isReady: Bool { true }
@@ -159,6 +167,7 @@ public final class SystemSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     }
 
     public func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
+        guard text.contains(where: { $0.isLetter || $0.isNumber }) else { throw SynthesisError.failed("Nothing to say.") }
         let utterance = AVSpeechUtterance(string: text)
         if let id = voiceIdentifier, let v = AVSpeechSynthesisVoice(identifier: id) {
             utterance.voice = v
@@ -168,38 +177,57 @@ public final class SystemSynthesizer: SpeechSynthesizing, @unchecked Sendable {
         let base = AVSpeechUtteranceDefaultSpeechRate
         utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate, max(AVSpeechUtteranceMinimumSpeechRate, base * Float(rate)))
 
+        let synth = synthesizer
         return try await withCheckedThrowingContinuation { cont in
-            var collected: [AVAudioPCMBuffer] = []
+            let collected = BufferBox()
             let once = ResumeOnce()
-            lock.lock()
-            synthesizer.write(utterance) { buffer in
+            func finish() {
+                // Merge in the voice's own format, then resample once (no clicks between chunks).
+                if let merged = SystemSynthesizer.merge(collected.items), let out = AudioIO.convertForPlayback(merged) {
+                    cont.resume(returning: out)
+                } else {
+                    cont.resume(throwing: SynthesisError.failed("System voice produced no audio."))
+                }
+            }
+            synth.write(utterance) { buffer in
                 guard let pcm = buffer as? AVAudioPCMBuffer else { return }
                 if pcm.frameLength == 0 {
-                    // Zero-length buffer marks the end.
-                    if once.claim() {
-                        if let merged = SystemSynthesizer.merge(collected) {
-                            cont.resume(returning: merged)
-                        } else {
-                            cont.resume(throwing: SynthesisError.failed("System voice produced no audio."))
-                        }
-                    }
+                    // A zero-length buffer marks the end.
+                    if once.claim() { finish() }
                     return
                 }
-                if let converted = AudioIO.convertForPlayback(pcm) { collected.append(converted) }
+                collected.append(pcm)
             }
-            lock.unlock()
+            // Some voices never send the end marker: never stall the speech queue.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                if once.claim() {
+                    synth.stopSpeaking(at: .immediate)
+                    finish()
+                }
+            }
         }
     }
 
+    /// Concatenates buffers that share one format.
     static func merge(_ buffers: [AVAudioPCMBuffer]) -> AVAudioPCMBuffer? {
-        let total = buffers.reduce(0) { $0 + Int($1.frameLength) }
-        guard total > 0, let out = AVAudioPCMBuffer(pcmFormat: AudioIO.playbackFormat, frameCapacity: AVAudioFrameCount(total))
-        else { return nil }
-        var offset = 0
-        for b in buffers {
+        guard let first = buffers.first else { return nil }
+        let format = first.format
+        let same = buffers.filter { $0.format == format }
+        let total = same.reduce(0) { $0 + Int($1.frameLength) }
+        guard total > 0, let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(total)) else {
+            return nil
+        }
+        let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+        let dst = UnsafeMutableAudioBufferListPointer(out.mutableAudioBufferList)
+        var offsetFrames = 0
+        for b in same {
+            let src = UnsafeMutableAudioBufferListPointer(b.mutableAudioBufferList)
             let n = Int(b.frameLength)
-            out.floatChannelData![0].advanced(by: offset).update(from: b.floatChannelData![0], count: n)
-            offset += n
+            for i in 0..<min(src.count, dst.count) {
+                guard let s = src[i].mData, let d = dst[i].mData else { continue }
+                memcpy(d.advanced(by: offsetFrames * bytesPerFrame), s, n * bytesPerFrame)
+            }
+            offsetFrames += n
         }
         out.frameLength = AVAudioFrameCount(total)
         return out
@@ -212,12 +240,17 @@ public final class SystemSynthesizer: SpeechSynthesizing, @unchecked Sendable {
 public final class FallbackSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     public let kokoro: KokoroSynthesizer
     public let system: SystemSynthesizer
-    public var choice: SynthesizerChoice
+    private let lock = NSLock()
+    private var _choice: SynthesizerChoice
+    public var choice: SynthesizerChoice {
+        get { lock.lock(); defer { lock.unlock() }; return _choice }
+        set { lock.lock(); _choice = newValue; lock.unlock() }
+    }
 
     public init(kokoro: KokoroSynthesizer, system: SystemSynthesizer, choice: SynthesizerChoice) {
         self.kokoro = kokoro
         self.system = system
-        self.choice = choice
+        self._choice = choice
     }
 
     public var isReady: Bool { true }
@@ -236,4 +269,12 @@ public final class FallbackSynthesizer: SpeechSynthesizing, @unchecked Sendable 
         }
         return try await system.synthesize(text, rate: rate)
     }
+}
+
+/// Thread-safe accumulator for synthesizer callbacks.
+final class BufferBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _items: [AVAudioPCMBuffer] = []
+    var items: [AVAudioPCMBuffer] { lock.lock(); defer { lock.unlock() }; return _items }
+    func append(_ b: AVAudioPCMBuffer) { lock.lock(); _items.append(b); lock.unlock() }
 }

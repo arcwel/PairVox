@@ -123,9 +123,10 @@ struct StatusOrbView: View {
         let normalized = CGFloat(max(0, min(1, (level + 60) / 50)))
         TimelineView(.animation(minimumInterval: 1 / 30)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            let breathing = (phase == .thinking || phase == .working) ? 0.08 * sin(t * 4) : 0
-            let speaking = phase == .speaking ? 0.06 * sin(t * 9) : 0
-            let scale = 0.75 + 0.25 * (phase == .listening ? normalized : 0) + breathing + speaking
+            let breathing: CGFloat = (phase == .thinking || phase == .working) ? 0.08 * CGFloat(sin(t * 4)) : 0
+            let speaking: CGFloat = phase == .speaking ? 0.06 * CGFloat(sin(t * 9)) : 0
+            let listen: CGFloat = phase == .listening ? normalized : 0
+            let scale: CGFloat = 0.75 + 0.25 * listen + breathing + speaking
             ZStack {
                 Circle().fill(color.opacity(0.18))
                 Circle().fill(color.gradient).scaleEffect(scale)

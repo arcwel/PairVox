@@ -28,7 +28,10 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
     public let displayName = "WhisperKit"
     private let lock = NSLock()
     private var pipe: WhisperKit?
+    private var loadedModel: String?
     private var _state: TranscriberState = .notLoaded
+    /// WhisperKit instances are not re-entrant: one transcription at a time.
+    private let gate = AsyncGate()
     public var onStateChange: ((TranscriberState) -> Void)?
 
     public init() {}
@@ -47,15 +50,17 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
 
     /// Downloads (first run) and loads the model. Safe to call more than once.
     public func load(model: String) async {
-        switch state {
-        case .loading, .ready: return
-        default: break
-        }
+        lock.lock()
+        let current = _state
+        let same = loadedModel == model
+        lock.unlock()
+        if case .loading = current { return }
+        if same, current == .ready { return }
         setState(.loading("Loading speech recognition model…"))
         do {
             let config = WhisperKitConfig(model: model, verbose: false, prewarm: true, load: true, download: true)
             let kit = try await WhisperKit(config)
-            lock.lock(); pipe = kit; lock.unlock()
+            lock.lock(); pipe = kit; loadedModel = model; lock.unlock()
             setState(.ready)
         } catch {
             setState(.failed(error.localizedDescription))
@@ -77,8 +82,15 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
             let tokens = tokenizer.encode(text: prompt).filter { $0 < limit }
             if !tokens.isEmpty { options.promptTokens = Array(tokens.suffix(120)) }
         }
-        let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
-        return TranscriptCleaner.clean(results.map(\.text).joined(separator: " "))
+        await gate.enter()
+        do {
+            let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
+            await gate.leave()
+            return TranscriptCleaner.clean(results.map(\.text).joined(separator: " "))
+        } catch {
+            await gate.leave()
+            throw error
+        }
     }
 }
 
@@ -146,12 +158,17 @@ public final class AppleSpeechTranscriber: UtteranceTranscriber, @unchecked Send
 public final class FallbackTranscriber: UtteranceTranscriber, @unchecked Sendable {
     public let primary: WhisperKitTranscriber
     public let fallback: AppleSpeechTranscriber
-    public var choice: TranscriberChoice
+    private let lock = NSLock()
+    private var _choice: TranscriberChoice
+    public var choice: TranscriberChoice {
+        get { lock.lock(); defer { lock.unlock() }; return _choice }
+        set { lock.lock(); _choice = newValue; lock.unlock() }
+    }
 
     public init(primary: WhisperKitTranscriber, fallback: AppleSpeechTranscriber, choice: TranscriberChoice) {
         self.primary = primary
         self.fallback = fallback
-        self.choice = choice
+        self._choice = choice
     }
 
     public var displayName: String {
@@ -217,5 +234,27 @@ final class ResumeOnce: @unchecked Sendable {
         if done { return false }
         done = true
         return true
+    }
+}
+
+/// A FIFO async mutex.
+actor AsyncGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        if !busy {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func leave() {
+        if waiters.isEmpty {
+            busy = false
+        } else {
+            waiters.removeFirst().resume()
+        }
     }
 }

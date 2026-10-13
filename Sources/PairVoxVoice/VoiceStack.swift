@@ -14,6 +14,8 @@ public final class VoiceStack: @unchecked Sendable {
     public let systemVoice: SystemSynthesizer
     public let synthesizer: FallbackSynthesizer
     public let models = ModelStore()
+    private let lock = NSLock()
+    private var preparingKokoro = false
 
     public var onWhisperState: ((TranscriberState) -> Void)? {
         didSet { whisper.onStateChange = onWhisperState }
@@ -44,7 +46,12 @@ public final class VoiceStack: @unchecked Sendable {
 
     /// Downloads, verifies and loads Kokoro. Falls back silently to the system voice on failure.
     public func prepareKokoro() async {
-        guard synthesizer.choice != .system else { return }
+        guard synthesizer.choice != .system, !kokoro.isReady else { return }
+        lock.lock()
+        if preparingKokoro { lock.unlock(); return }
+        preparingKokoro = true
+        lock.unlock()
+        defer { lock.lock(); preparingKokoro = false; lock.unlock() }
         do {
             if models.isPresent {
                 models.onStatus?(.verifying)

@@ -39,7 +39,8 @@ public actor ConversationEngine {
     // Speech bookkeeping
     private var queued: [Int: Utterance] = [:]
     private var queueOrder: [Int] = []
-    private var proseIDs: Set<Int> = []
+    /// Utterances that count toward "first audio" (everything except fillers).
+    private var measuredIDs: Set<Int> = []
     private var holdSpeech = false
     private var interruptedRemainder: [Utterance] = []
     private var nextEntryID = 1
@@ -218,6 +219,14 @@ public actor ConversationEngine {
         publish()
     }
 
+    /// Updates the user pronunciation dictionary without restarting the session.
+    public func setPronunciation(_ dictionary: [String: String]) {
+        config.pronunciation = dictionary
+        pronunciation = Pronunciation(dictionary: dictionary)
+        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation)
+        planner.pronunciation = pronunciation
+    }
+
     public func setModel(_ model: String?) {
         try? backend?.setModel(model)
     }
@@ -322,6 +331,9 @@ public actor ConversationEngine {
             resumeRemainder()
         case .slower:
             setSpeechRate(config.speechRate - 0.1)
+            resumeRemainder()
+        case .backchannel:
+            // Just acknowledging: keep talking, keep working.
             resumeRemainder()
         }
         // Any speech held for a barge-in that the command didn't resume is dropped,
@@ -466,13 +478,13 @@ public actor ConversationEngine {
         case .started(let id):
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
-            if proseIDs.contains(id), latency.firstAudio == nil, let start = sendTimes.first {
+            if measuredIDs.contains(id), latency.firstAudio == nil, let start = sendTimes.first {
                 latency.firstAudio = Date().timeIntervalSince(start)
             }
         case .finished(let id), .failed(let id, _):
             queued.removeValue(forKey: id)
             queueOrder.removeAll { $0 == id }
-            proseIDs.remove(id)
+            measuredIDs.remove(id)
         case .idle:
             if queueOrder.isEmpty { snapshot.isSpeaking = false }
         }
@@ -557,7 +569,7 @@ public actor ConversationEngine {
         for u in utterances {
             queued[u.id] = u
             queueOrder.append(u.id)
-            if u.kind == .prose || u.kind == .code { proseIDs.insert(u.id) }
+            if record && u.kind != .ack { measuredIDs.insert(u.id) }
             output.enqueue(u)
             if record && u.kind != .ack {
                 utterancesThisTurn += 1

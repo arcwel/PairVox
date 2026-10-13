@@ -47,6 +47,7 @@ final class AppModel: ObservableObject {
     private let notifier = Notifier()
     private var notifiedPermissionID: String?
     private var turnsAtDeactivation = 0
+    private var receivedFirstSnapshot = false
 
     init() {
         let loaded = store.load()
@@ -183,12 +184,16 @@ final class AppModel: ObservableObject {
     func closeSession() {
         snapshotTask?.cancel()
         snapshotTask = nil
+        // Stop this session's audio now, not later from a background task that
+        // could cut off the next session's speech on the shared audio engine.
+        output?.stopAll()
         if let engine { Task { await engine.shutdown() } }
         input?.setMode(.muted)
         engine = nil
         input = nil
         output = nil
         snapshot = EngineSnapshot()
+        receivedFirstSnapshot = false
     }
 
     func restartSession() {
@@ -215,8 +220,7 @@ final class AppModel: ObservableObject {
     func perform(_ command: VoiceCommand) { Task { await engine?.perform(command) } }
 
     func setSpeechMode(_ mode: SpeechMode) {
-        settings.speechMode = mode
-        Task { await engine?.setSpeechMode(mode) }
+        settings.speechMode = mode // settingsChanged pushes it to the engine
     }
 
     func setConversationMode(_ mode: ConversationMode) {
@@ -298,6 +302,13 @@ final class AppModel: ObservableObject {
     private func receive(_ snap: EngineSnapshot) {
         let previous = snapshot
         snapshot = snap
+        // Voice commands ("faster", "summary mode") change these inside the engine;
+        // mirror them into settings (but not the engine's initial per-project values).
+        if receivedFirstSnapshot {
+            if abs(snap.speechRate - previous.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
+            if snap.speechMode != previous.speechMode { settings.speechMode = snap.speechMode }
+        }
+        receivedFirstSnapshot = true
         if snap.phase == .needsSetup && previous.phase != .needsSetup { showSetup = true }
 
         // Background notifications.
@@ -331,6 +342,10 @@ final class AppModel: ObservableObject {
         if old.verbosity != settings.verbosity {
             let v = settings.verbosity
             Task { await engine?.setVerbosity(v) }
+        }
+        if old.pronunciation != settings.pronunciation {
+            let dict = settings.pronunciation
+            Task { await engine?.setPronunciation(dict) }
         }
         if old.whisperModel != settings.whisperModel || (old.transcriber == .apple && settings.transcriber != .apple) {
             reloadWhisper()

@@ -60,7 +60,8 @@ dependencies += [
 
 products += [
     .library(name: "PairVoxVoice", targets: ["PairVoxVoice"]),
-    .executable(name: "PairVox", targets: ["PairVoxApp"]),
+    // Dev convenience (`swift run pairvox-app`); the distributable app is built from project.yml.
+    .executable(name: "pairvox-app", targets: ["PairVoxApp"]),
 ]
 
 targets += [

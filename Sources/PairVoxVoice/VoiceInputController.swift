@@ -87,6 +87,7 @@ public final class VoiceInputController: @unchecked Sendable {
         pushToTalkHeld = true
         capturing = true
         utterance = preRoll
+        vad.reset()
         lock.unlock()
         Task { await engine.userStartedSpeaking() }
     }
@@ -121,6 +122,11 @@ public final class VoiceInputController: @unchecked Sendable {
         case .pushToTalk:
             if pushToTalkHeld { utterance.append(contentsOf: frame) }
         case .handsFree:
+            // Holding push-to-talk overrides the detector.
+            if pushToTalkHeld {
+                utterance.append(contentsOf: frame)
+                break
+            }
             // Without barge-in, ignore the mic while we're talking (half duplex).
             if playbackActive && !bargeInEnabled && !capturing { break }
             if capturing { utterance.append(contentsOf: frame) }

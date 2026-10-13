@@ -167,7 +167,7 @@ public struct SpeechPlanner: Sendable {
                 out += route(chunker.append(t))
             case .boundary:
                 out += route(chunker.boundary())
-            case .paragraphBreak:
+            case .paragraphBreak, .sectionBreak:
                 out += route(chunker.boundary())
                 if mode == .summary, proseSpokenInBlock { summaryClosed = true }
             case .codeBlock(let lang, let code):

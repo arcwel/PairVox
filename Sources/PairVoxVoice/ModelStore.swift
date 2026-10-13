@@ -83,7 +83,7 @@ public final class ModelStore: NSObject, @unchecked Sendable {
             try FileManager.default.moveItem(at: tmp, to: dest)
             doneBytes += Double(file.bytes)
         }
-        onStatus?(.ready)
+        onStatus?(.verifying)
     }
 
     /// Hash check for files already on disk (call before loading).

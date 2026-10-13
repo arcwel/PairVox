@@ -18,8 +18,14 @@ public final class AudioIO: @unchecked Sendable {
     /// All synthesized speech is converted to this format before playback.
     public static let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
 
-    /// Called on the audio thread with each 30 ms frame.
-    public var onFrame: (([Float]) -> Void)?
+    /// Called on the audio thread with each 30 ms frame. Thread-safe to replace.
+    public var onFrame: (([Float]) -> Void)? {
+        get { frameLock.lock(); defer { frameLock.unlock() }; return _onFrame }
+        set { frameLock.lock(); _onFrame = newValue; frameLock.unlock() }
+    }
+    private var _onFrame: (([Float]) -> Void)?
+    private let frameLock = NSLock()
+    private var lastRestart = Date.distantPast
     /// Called when the audio route changed and capture restarted.
     public var onRestart: (() -> Void)?
 
@@ -96,17 +102,22 @@ public final class AudioIO: @unchecked Sendable {
     }
 
     public func stop() {
+        // Only the flag is guarded: player.stop() fires buffer completions that may
+        // call back into schedule(), which takes the same lock.
         lock.lock()
-        defer { lock.unlock() }
-        guard isRunning else { return }
+        guard isRunning else { lock.unlock(); return }
+        isRunning = false
+        lock.unlock()
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
-        isRunning = false
     }
 
     private func restartAfterConfigurationChange() {
-        // Headphones plugged in, default device changed, etc.
+        // Headphones plugged in, default device changed, etc. Re-enabling voice
+        // processing can itself post a change notification, so debounce.
+        guard Date().timeIntervalSince(lastRestart) > 0.5 else { return }
+        lastRestart = Date()
         stop()
         do {
             try start()
@@ -132,14 +143,13 @@ public final class AudioIO: @unchecked Sendable {
         let capacity = AVAudioFrameCount(Double(frames) * ratio + 64)
         guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
 
-        var supplied = false
+        let once = ConvertOnce()
         var error: NSError?
         _ = converter.convert(to: out, error: &error) { _, status in
-            if supplied {
+            guard once.claim() else {
                 status.pointee = .noDataNow
                 return nil
             }
-            supplied = true
             status.pointee = .haveData
             return mono
         }
@@ -160,7 +170,9 @@ public final class AudioIO: @unchecked Sendable {
     /// (or when playback was stopped).
     public func schedule(_ buffer: AVAudioPCMBuffer, completion: @escaping @Sendable () -> Void) {
         lock.lock()
-        let running = isRunning
+        // The system may stop the engine (device change) before our observer runs;
+        // play() on a stopped engine raises an exception.
+        let running = isRunning && engine.isRunning
         lock.unlock()
         guard running else {
             completion()
@@ -169,7 +181,7 @@ public final class AudioIO: @unchecked Sendable {
         player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { _ in
             completion()
         }
-        if !player.isPlaying { player.play() }
+        if !player.isPlaying, engine.isRunning { player.play() }
     }
 
     /// Stops speech immediately (barge-in). Pending completions fire.
@@ -191,14 +203,13 @@ public final class AudioIO: @unchecked Sendable {
         let ratio = playbackFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 1024)
         guard let out = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: capacity) else { return nil }
-        var supplied = false
+        let once = ConvertOnce()
         var error: NSError?
         _ = converter.convert(to: out, error: &error) { _, status in
-            if supplied {
+            guard once.claim() else {
                 status.pointee = .endOfStream
                 return nil
             }
-            supplied = true
             status.pointee = .haveData
             return buffer
         }
@@ -207,6 +218,7 @@ public final class AudioIO: @unchecked Sendable {
 
     /// Wraps raw mono samples (at `sampleRate`) as a playback buffer.
     public static func playbackBuffer(samples: [Float], sampleRate: Double) -> AVAudioPCMBuffer? {
+        guard !samples.isEmpty else { return nil }
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
         else { return nil }
@@ -228,5 +240,15 @@ public final class AudioIO: @unchecked Sendable {
             if let base = src.baseAddress { buffer.floatChannelData![0].update(from: base, count: samples.count) }
         }
         return buffer
+    }
+}
+
+/// Supplies the converter's input exactly once per `convert` call.
+final class ConvertOnce: @unchecked Sendable {
+    private var used = false
+    func claim() -> Bool {
+        if used { return false }
+        used = true
+        return true
     }
 }

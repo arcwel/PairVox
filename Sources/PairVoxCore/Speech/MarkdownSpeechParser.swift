@@ -10,6 +10,8 @@ public enum SpeechPiece: Sendable, Equatable {
     case boundary
     /// Blank line between paragraphs.
     case paragraphBreak
+    /// A heading starts a new section (closes the summary in summary mode).
+    case sectionBreak
     case codeBlock(language: String?, code: String)
     case table(rows: Int)
 }
@@ -171,6 +173,8 @@ public struct MarkdownSpeechParser: Sendable {
             let hashes = trimmed.prefix(while: { $0 == "#" })
             if trimmed.count == hashes.count && !final { return }
             if hashes.count <= 6, trimmed.dropFirst(hashes.count).first == " " {
+                closeInline()
+                emit(.sectionBreak)
                 startProse(dropping: hashes.count + 1, kind: .heading)
             } else {
                 startProse(dropping: 0, kind: .prose)

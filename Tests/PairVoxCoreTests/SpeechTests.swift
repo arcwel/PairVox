@@ -68,7 +68,8 @@ final class MarkdownSpeechParserTests: XCTestCase {
 
     func testHeadingsAndListsEndSentences() {
         let pieces = parseAll("## Summary\n- first item\n- second item\n")
-        XCTAssertEqual(pieces, [.text("Summary"), .boundary, .text("first item"), .boundary, .text("second item"), .boundary])
+        XCTAssertEqual(pieces, [.sectionBreak, .text("Summary"), .boundary, .text("first item"), .boundary,
+                                .text("second item"), .boundary])
     }
 
     func testOrderedListAndDecimal() {
@@ -262,6 +263,14 @@ final class SpeechPlannerTests: XCTestCase {
         XCTAssertFalse(planner.heldBack.isEmpty)
         XCTAssertTrue(planner.heldBack.contains { $0.text == "A 3-line Swift snippet." })
         XCTAssertFalse(planner.codeReadings.isEmpty)
+    }
+
+    func testSummaryClosesAtHeadingWithoutBlankLine() {
+        var p = SpeechPlanner(mode: .summary)
+        var out = p.textDelta("SQLite is the better default for this.\n## Setup\nIt needs no server.\n")
+        out += p.textBlockEnded()
+        XCTAssertEqual(out.map(\.text), ["SQLite is the better default for this."])
+        XCTAssertEqual(p.heldBack.map(\.text), ["Setup", "It needs no server."])
     }
 
     func testFirstUtteranceArrivesBeforeReplyEnds() {

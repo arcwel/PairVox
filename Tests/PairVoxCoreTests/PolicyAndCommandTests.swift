@@ -85,6 +85,13 @@ final class VoiceCommandTests: XCTestCase {
         XCTAssertEqual(VoiceCommand.parse("always allow", context: ctx), .approveAlways)
     }
 
+    func testBackchannelOnlyWhileWorking() {
+        XCTAssertEqual(VoiceCommand.parse("okay", context: .init(claudeIsWorking: true)), .backchannel)
+        XCTAssertNil(VoiceCommand.parse("okay"), "when idle, 'okay' may answer Claude's question")
+        XCTAssertEqual(VoiceCommand.parse("yes", context: .init(awaitingPermission: true, claudeIsWorking: true)), .approve)
+        XCTAssertNil(VoiceCommand.parse("okay use the second option", context: .init(claudeIsWorking: true)))
+    }
+
     func testCancelDependsOnWhetherClaudeIsWorking() {
         XCTAssertEqual(VoiceCommand.parse("never mind", context: .init(claudeIsWorking: true)), .interruptClaude)
         XCTAssertEqual(VoiceCommand.parse("never mind"), .stopSpeaking)
