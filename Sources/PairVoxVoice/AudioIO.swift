@@ -2,6 +2,7 @@
 
 import AVFoundation
 import Foundation
+import PairVoxCore
 
 /// Microphone capture and speech playback on a single `AVAudioEngine` with
 /// Apple's voice processing enabled, so the echo canceller knows what PairVox is
@@ -9,7 +10,14 @@ import Foundation
 public final class AudioIO: @unchecked Sendable {
     public enum AudioError: Error, LocalizedError {
         case noInputDevice
-        public var errorDescription: String? { "No microphone is available." }
+        case engineStart(underlying: String, details: String)
+        public var errorDescription: String? {
+            switch self {
+            case .noInputDevice: return "No microphone is available."
+            case .engineStart(let underlying, let details):
+                return "The audio engine could not start (\(underlying)). \(details)"
+            }
+        }
     }
 
     /// Format delivered to `onFrame`: 16 kHz mono Float32, 30 ms frames.
@@ -28,13 +36,64 @@ public final class AudioIO: @unchecked Sendable {
     private var restartPending = false
     /// Called when the audio route changed and capture restarted.
     public var onRestart: (() -> Void)?
+    /// Called when speech was dropped because the audio engine wasn't running.
+    public var onPlaybackDropped: (() -> Void)?
 
     public var voiceProcessingEnabled = true
     public private(set) var isRunning = false
+    /// False when the engine only started after voice processing was dropped (no echo cancellation).
+    public private(set) var echoCancellationActive = false
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    /// Rebuilt on every `start()`: a stale engine keeps its old input node, which breaks output-only
+    /// starts and carries voice-processing state across restarts.
+    private var engine = AVAudioEngine()
+    private var player = AVAudioPlayerNode()
     private let lock = NSLock()
+    /// True when the microphone is being captured. False in output-only mode (no input device, or
+    /// microphone permission not granted yet): PairVox can still speak, you just can't talk to it.
+    public private(set) var captureAvailable = false
+    private var captureWantedLast = true
+    /// Which devices to use: nil is automatic (the default input, plus the same headset's output when
+    /// the input is a Bluetooth headset). `"none"` for the input means no microphone.
+    public var inputDeviceUID: String?
+    public var outputDeviceUID: String?
+    private var startSignature = ""
+    /// Why voice processing is off even though the setting asks for it (nil when it is on or not wanted).
+    public private(set) var voiceProcessingSkipReason: String?
+    /// Called when repeated restarts made PairVox turn echo cancellation off for this session.
+    public var onVoiceProcessingAutoDisabled: (() -> Void)?
+    private var restartTimes: [DispatchTime] = []
+    /// True while the engine is being stopped and started again on purpose (a device change, a setting, microphone
+    /// permission arriving). Speech scheduled in that window waits instead of being dropped.
+    private var restartInFlight = false
+    /// Buffers waiting for a restart to finish. Touched only on `playerQueue`.
+    private var held: [(buffer: AVAudioPCMBuffer, completion: @Sendable () -> Void)] = []
+
+    /// Everything handed to the player and not yet confirmed played. Stopping an AVAudioPlayerNode unschedules
+    /// all of it, and its completion handlers still fire as if the audio had played (Apple confirms the
+    /// unscheduling; developers report the handlers). So a completion only counts when the engine is
+    /// still running in the same generation. Touched only on `playerQueue`.
+    private struct InFlight { let id: Int; let buffer: AVAudioPCMBuffer; let completion: @Sendable () -> Void }
+    private var inFlight: [InFlight] = []
+    private var nextToken = 0
+    /// Bumped whenever the engine is torn down or rebuilt.
+    private var engineGeneration = 0
+    /// Called after every start with whether the microphone is being captured.
+    public var onCaptureAvailabilityChange: ((Bool) -> Void)?
+    private var inputWatcher: AudioRoute.DefaultInputWatcher?
+    private let log = DiagnosticLog.shared
+    private let meter = OutputMeter()
+    private let recorder = PlaybackRecorder()
+    private let statsLock = NSLock()
+    private var statsTimer: DispatchSourceTimer?
+    private var capturedFrames = 0
+    private var captureSumSq: Float = 0
+    private var capturePeak: Float = 0
+    private var scheduledBuffers = 0
+    private var droppedBuffers = 0
+    private var playbackEstimateEnd: DispatchTime?
+    /// Opt-in: record exactly what PairVox plays into the log folder (see `PlaybackRecorder`).
+    public var recordPlayback = false
     /// Every player-node call goes through this queue, so the running check and `play()` can't be split by
     /// a device change or a stop, and a stop is always ordered before a later schedule.
     private let playerQueue = DispatchQueue(label: "app.pairvox.audio.player", qos: .userInteractive)
@@ -44,7 +103,6 @@ public final class AudioIO: @unchecked Sendable {
     private var monoSourceFormat: AVAudioFormat?
     private var pending: [Float] = []
     private var configObserver: NSObjectProtocol?
-    private var playerConnected = false
 
     public init() {
         engine.attach(player)
@@ -54,28 +112,146 @@ public final class AudioIO: @unchecked Sendable {
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
     }
 
+    /// A fresh engine and player, and a configuration-change observer bound to the new engine.
+    private func rebuildEngine() {
+        playerQueue.sync {
+            engineGeneration += 1
+            player.stop()
+            if engine.isRunning { engine.stop() }
+            engine = AVAudioEngine()
+            player = AVAudioPlayerNode()
+            engine.attach(player)
+            playbackEstimateEnd = nil
+        }
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            self?.restartAfterConfigurationChange()
+        }
+    }
+
+    /// A headset or microphone appeared or went away. Restart only when that changes whether we can capture.
+    private func defaultInputChanged() {
+        lock.lock()
+        let running = isRunning
+        lock.unlock()
+        let now = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        var fields = AudioRoute.fields()
+        fields["signatureChanged"] = .bool(now != startSignature)
+        log.log(.info, .audio, "input.defaultChanged", fields)
+        if running, now != startSignature { restartAfterConfigurationChange() }
+    }
+
     // MARK: Lifecycle
 
-    public func start() throws {
+    /// Starts playback, and capture too when `captureWanted` and a microphone exists. With no microphone
+    /// (or no permission yet) it runs output-only so replies are still spoken.
+    public func start(captureWanted: Bool = true) throws {
+        lock.lock()
+        let already = isRunning
+        lock.unlock()
+        if already { return }
+        captureWantedLast = captureWanted
+        rebuildEngine()
+
         lock.lock()
         defer { lock.unlock() }
         guard !isRunning else { return }
+        if inputWatcher == nil { inputWatcher = AudioRoute.DefaultInputWatcher { [weak self] in self?.defaultInputChanged() } }
 
+        let route = AudioRoute.resolve(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        guard captureWanted, route.input != nil else {
+            let reason = !captureWanted ? "microphone not authorized" : (inputDeviceUID == "none" ? "microphone turned off" : "no input device")
+            try startOutputOnly(reason: reason, route: route)
+            return
+        }
+        var useVoiceProcessing = voiceProcessingEnabled
+        voiceProcessingSkipReason = nil
+        if useVoiceProcessing, AudioRoute.usesBluetooth() {
+            useVoiceProcessing = false
+            voiceProcessingSkipReason = "Bluetooth headset"
+            log.log(.info, .audio, "voiceProcessing.skipped", ["reason": "Bluetooth headset: no echo to cancel, and call mode makes the engine restart"])
+        }
+        do {
+            try startLocked(voiceProcessing: useVoiceProcessing, route: route)
+        } catch let error as AudioError where useVoiceProcessing {
+            // Some devices and routes can't initialize the voice-processing unit (CoreAudio -10875).
+            // Capture without echo cancellation beats no capture: use headphones, or push to talk.
+            NSLog("PairVox: audio failed to start with voice processing (\(error.localizedDescription)); retrying without it")
+            log.log(.warning, .audio, "engine.start.voiceProcessing.failed", ["error": .string(error.localizedDescription)])
+            engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
+            try startLocked(voiceProcessing: false, route: route, isRetry: true)
+        }
+    }
+
+    /// Binds the engine's OUTPUT to a specific device, so macOS moving its default output (which Bluetooth
+    /// headsets make it do whenever their microphone opens) can't pull the engine apart. The input is left
+    /// on the system default: AVAudioEngine has one I/O unit and rejects a second, different device
+    /// (CoreAudio -10851), which leaves the engine unable to start. Skipped with voice processing on,
+    /// whose I/O unit must follow the system devices.
+    private func pin(_ route: (input: AudioRoute.Device?, output: AudioRoute.Device?), input: Bool) {
+        guard let output = route.output else { return }
+        do { try engine.outputNode.auAudioUnit.setDeviceID(output.id) } catch {
+            log.log(.warning, .audio, "pin.output.failed", ["device": .string(output.name), "error": .string("\(error)")])
+        }
+    }
+
+    private func startOutputOnly(reason: String, route: (input: AudioRoute.Device?, output: AudioRoute.Device?)) throws {
+        pin(route, input: false)
+        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+        engine.connect(player, to: engine.mainMixerNode, format: AudioIO.playbackFormat)
+        if outputFormat.sampleRate > 0, outputFormat.channelCount > 0 {
+            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
+        }
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            throw AudioError.engineStart(underlying: error.localizedDescription, details: "Output only (\(reason)).")
+        }
+        isRunning = true
+        echoCancellationActive = false
+        captureAvailable = false
+        installOutputTap()
+        startStatsTimer()
+        startSignature = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        var fields: [String: LogValue] = ["captureAvailable": false, "reason": .string(reason),
+                                          "pinnedOut": .string(route.output?.name ?? "-")]
+        fields.merge(AudioRoute.fields()) { a, _ in a }
+        log.log(.warning, .audio, "engine.started.outputOnly", fields)
+        onCaptureAvailabilityChange?(false)
+    }
+
+    private func startLocked(voiceProcessing: Bool, route: (input: AudioRoute.Device?, output: AudioRoute.Device?),
+                             isRetry: Bool = false) throws {
+        // Pin FIRST: once anything has touched the input node (even setVoiceProcessingEnabled(false)),
+        // the engine's single I/O unit is bound and a device change is rejected with -10851.
+        if !voiceProcessing, !isRetry { pin(route, input: false) }
         let input = engine.inputNode
-        if voiceProcessingEnabled {
-            do {
-                try input.setVoiceProcessingEnabled(true)
+        var vpApplied = false
+        do {
+            // A fresh engine already has voice processing off; calling it again would only bind the unit.
+            if voiceProcessing || isRetry { try input.setVoiceProcessingEnabled(voiceProcessing) }
+            vpApplied = voiceProcessing
+            if voiceProcessing {
                 // Don't let voice processing turn the user's music down to a whisper.
                 input.voiceProcessingOtherAudioDuckingConfiguration =
                     AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
-            } catch {
-                NSLog("PairVox: voice processing unavailable (\(error)); continuing without echo cancellation")
             }
+        } catch {
+            NSLog("PairVox: voice processing \(voiceProcessing ? "unavailable" : "could not be turned off") (\(error)); continuing")
         }
 
-        if !playerConnected {
-            engine.connect(player, to: engine.mainMixerNode, format: AudioIO.playbackFormat)
-            playerConnected = true
+        // Wire playback every start. Voice processing makes the output unit run at its own format
+        // (e.g. 24 kHz mono), but connecting a player to the mixer defaults the mixer-to-output link
+        // to 44.1 kHz stereo, and that mismatch fails initialization (CoreAudio -10875). So read the
+        // output unit's format first and connect the mixer to it explicitly.
+        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
+        engine.connect(player, to: engine.mainMixerNode, format: AudioIO.playbackFormat)
+        if outputFormat.sampleRate > 0, outputFormat.channelCount > 0 {
+            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
         }
 
         let format = input.outputFormat(forBus: 0)
@@ -92,16 +268,26 @@ public final class AudioIO: @unchecked Sendable {
         }
 
         engine.prepare()
-        try engine.start()
-        isRunning = true
-
-        if configObserver == nil {
-            configObserver = NotificationCenter.default.addObserver(
-                forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-            ) { [weak self] _ in
-                self?.restartAfterConfigurationChange()
-            }
+        do {
+            try engine.start()
+        } catch {
+            throw AudioError.engineStart(
+                underlying: error.localizedDescription,
+                details: "Input \(Int(format.sampleRate)) Hz, \(format.channelCount) ch; voice processing \(vpApplied ? "on" : "off").")
         }
+        isRunning = true
+        echoCancellationActive = vpApplied
+        captureAvailable = true
+        installOutputTap()
+        startStatsTimer()
+        startSignature = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        var fields: [String: LogValue] = ["voiceProcessing": .bool(vpApplied), "inRate": .int(Int(format.sampleRate)),
+                                          "inChannels": .int(Int(format.channelCount)), "captureAvailable": true,
+                                          "pinnedIn": "system default",
+                                          "pinnedOut": .string(vpApplied ? "system default" : (route.output?.name ?? "-"))]
+        fields.merge(AudioRoute.fields()) { a, _ in a }
+        log.log(.info, .audio, "engine.started", fields)
+        onCaptureAvailabilityChange?(true)
     }
 
     public func stop() {
@@ -110,28 +296,83 @@ public final class AudioIO: @unchecked Sendable {
         lock.lock()
         guard isRunning else { lock.unlock(); return }
         isRunning = false
+        let hadCapture = captureAvailable
+        captureAvailable = false
         lock.unlock()
-        engine.inputNode.removeTap(onBus: 0)
+        if hadCapture { engine.inputNode.removeTap(onBus: 0) }
+        engine.mainMixerNode.removeTap(onBus: 0)
+        statsTimer?.cancel()
+        statsTimer = nil
+        recorder.finish()
         // Completions fired by stop() may call schedule(); that only enqueues, so waiting here is safe.
-        playerQueue.sync { player.stop(); engine.stop() }
+        playerQueue.sync { engineGeneration += 1; player.stop(); engine.stop() }
+        log.log(.info, .audio, "engine.stopped")
     }
 
     private func restartAfterConfigurationChange() {
-        // Headphones plugged in, default device changed, etc. Re-enabling voice
-        // processing can post another change notification, so coalesce bursts.
+        let signature = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        var fields = AudioRoute.fields()
+        fields["signatureChanged"] = .bool(signature != startSignature)
+        fields["engineRunning"] = .bool(engine.isRunning)
+        // The engine only needs rebuilding when it stopped or the devices it uses changed. macOS also posts
+        // this notification when it just moves its default device elsewhere.
+        if engine.isRunning, signature == startSignature {
+            log.log(.info, .audio, "engine.configChange.ignored", fields)
+            return
+        }
+        log.log(.info, .audio, "engine.configChange", fields)
         guard !restartPending else { return }
+        // Safety valve: a device that keeps reconfiguring under voice processing (seen with Bluetooth
+        // headsets) would restart forever, cutting every sentence. Give up on voice processing instead.
+        let now = DispatchTime.now()
+        restartTimes = restartTimes.filter { now.uptimeNanoseconds - $0.uptimeNanoseconds < 20_000_000_000 } + [now]
+        if restartTimes.count >= 3, voiceProcessingEnabled, echoCancellationActive {
+            voiceProcessingEnabled = false
+            voiceProcessingSkipReason = "restart loop"
+            log.log(.warning, .audio, "engine.restartLoop", ["restartsIn20s": .int(restartTimes.count)])
+            onVoiceProcessingAutoDisabled?()
+        }
         restartPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        lock.lock(); restartInFlight = true; lock.unlock()
+        // A Bluetooth headset takes a second or two to finish switching profiles after its microphone
+        // opens or closes. Restarting in the middle of that makes the next start see a half-switched
+        // format and fail again, so wait until the route has been quiet for a while.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            self.restartPending = false
-            self.stop()
-            do {
-                try self.start()
-                self.onRestart?()
-            } catch {
-                NSLog("PairVox: could not restart audio after a device change: \(error)")
+            let waited = self.waitForRouteToSettle(quiet: 1.0, maxWait: 6.0)
+            DispatchQueue.main.async {
+                self.restartPending = false
+                let began = DispatchTime.now()
+                self.stop()
+                do {
+                    try self.start(captureWanted: self.captureWantedLast)
+                    self.onRestart?()
+                    self.finishRestart(succeeded: true)
+                    self.log.log(.info, .audio, "engine.restarted",
+                                 ["tookMs": .int(Int((DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000)),
+                                  "settleMs": .int(Int(waited * 1000))])
+                } catch {
+                    self.finishRestart(succeeded: false)
+                    NSLog("PairVox: could not restart audio after a device change: \(error)")
+                    self.log.log(.error, .audio, "engine.restart.failed", ["error": .string(error.localizedDescription)])
+                }
             }
         }
+    }
+
+    /// Blocks (call off the main thread) until the devices PairVox uses have not changed for `quiet`
+    /// seconds, or `maxWait` runs out. Returns how long it waited.
+    private func waitForRouteToSettle(quiet: TimeInterval, maxWait: TimeInterval) -> TimeInterval {
+        let began = Date()
+        var last = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        var stableSince = Date()
+        while Date().timeIntervalSince(began) < maxWait {
+            Thread.sleep(forTimeInterval: 0.2)
+            let now = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+            if now != last { last = now; stableSince = Date() }
+            if Date().timeIntervalSince(stableSince) >= quiet { break }
+        }
+        return Date().timeIntervalSince(began)
     }
 
     // MARK: Capture
@@ -163,6 +404,7 @@ public final class AudioIO: @unchecked Sendable {
         guard error == nil, let data = out.floatChannelData else { return }
         let count = Int(out.frameLength)
         pending.append(contentsOf: UnsafeBufferPointer(start: data[0], count: count))
+        noteCaptured(UnsafeBufferPointer(start: data[0], count: count))
 
         while pending.count >= AudioIO.frameSize {
             let frame = Array(pending.prefix(AudioIO.frameSize))
@@ -182,20 +424,87 @@ public final class AudioIO: @unchecked Sendable {
             lock.lock()
             let running = isRunning
             lock.unlock()
+            lock.lock(); let restarting = restartInFlight; lock.unlock()
+            if restarting, !(running && engine.isRunning) {
+                held.append((buffer, completion))
+                log.log(.info, .audio, "playback.held", ["queued": .int(held.count)])
+                return
+            }
             guard running, engine.isRunning else {
+                // Don't let a dead engine look like speech: tell the app, then finish the utterance.
+                statsLock.lock(); droppedBuffers += 1; statsLock.unlock()
+                log.log(.error, .audio, "playback.dropped", ["engineRunning": .bool(engine.isRunning), "ioRunning": .bool(running)])
+                onPlaybackDropped?()
                 completion()
                 return
             }
-            player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { _ in
-                completion()
+            noteScheduled(seconds: Double(buffer.frameLength) / buffer.format.sampleRate)
+            nextToken += 1
+            let token = nextToken, generation = engineGeneration
+            inFlight.append(InFlight(id: token, buffer: buffer, completion: completion))
+            player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                self?.playerQueue.async { self?.bufferFinished(token: token, generation: generation) }
             }
             if !player.isPlaying { player.play() }
         }
     }
 
     /// Stops speech immediately (barge-in). Pending completions fire.
+    /// A buffer's completion handler fired. If the engine was stopped or rebuilt meanwhile, the audio never
+    /// finished: keep it for the restart instead of reporting it played.
+    private func bufferFinished(token: Int, generation: Int) {
+        guard let index = inFlight.firstIndex(where: { $0.id == token }) else { return }   // already discarded (barge-in)
+        let stale = generation != engineGeneration || !engine.isRunning
+        if stale {
+            log.log(.info, .audio, "playback.interrupted", ["kept": .int(inFlight.count)])
+            return   // stays in inFlight; finishRestart replays it
+        }
+        let item = inFlight.remove(at: index)
+        item.completion()
+    }
+
     public func stopPlayback() {
-        playerQueue.async { [self] in player.stop() }
+        playerQueue.async { [self] in
+            // Barge-in or "stop": discard everything, queued or not, and report it finished.
+            let discarded = inFlight.map(\.completion) + held.map(\.completion)
+            inFlight.removeAll()
+            held.removeAll()
+            player.stop()
+            playbackEstimateEnd = nil
+            for completion in discarded { completion() }
+        }
+    }
+
+    /// Stops and starts the engine again (a setting changed, or microphone permission arrived). Speech
+    /// scheduled meanwhile is kept and plays once the engine is back.
+    public func restart(captureWanted: Bool? = nil) throws {
+        let wanted = captureWanted ?? captureWantedLast
+        lock.lock(); restartInFlight = true; lock.unlock()
+        stop()
+        do {
+            try start(captureWanted: wanted)
+            finishRestart(succeeded: true)
+        } catch {
+            finishRestart(succeeded: false)
+            throw error
+        }
+    }
+
+    private func finishRestart(succeeded: Bool) {
+        lock.lock(); restartInFlight = false; lock.unlock()
+        playerQueue.async { [self] in
+            // Interrupted buffers go first (they were queued before anything held), each replayed from its start.
+            let waiting = inFlight.map { (buffer: $0.buffer, completion: $0.completion) } + held
+            inFlight.removeAll()
+            held.removeAll()
+            guard !waiting.isEmpty else { return }
+            if succeeded {
+                log.log(.info, .audio, "playback.resumed", ["buffers": .int(waiting.count)])
+                for item in waiting { schedule(item.buffer, completion: item.completion) }
+            } else {
+                for item in waiting { onPlaybackDropped?(); item.completion() }
+            }
+        }
     }
 
     /// Mutes the microphone at the voice-processing level (push-to-talk idle state).
@@ -203,7 +512,93 @@ public final class AudioIO: @unchecked Sendable {
         engine.inputNode.isVoiceProcessingInputMuted = muted
     }
 
+    // MARK: Diagnostics
+
+    private func noteCaptured(_ samples: UnsafeBufferPointer<Float>) {
+        var sumSq: Float = 0, peak: Float = 0
+        for v in samples { sumSq += v * v; peak = max(peak, abs(v)) }
+        statsLock.lock()
+        capturedFrames += samples.count
+        captureSumSq += sumSq
+        capturePeak = max(capturePeak, peak)
+        statsLock.unlock()
+    }
+
+    /// Call on `playerQueue`. Tracks when the player will run dry, so a gap before the next
+    /// sentence (an underrun: synthesis was too slow) shows up in the log.
+    private func noteScheduled(seconds: Double) {
+        let now = DispatchTime.now()
+        statsLock.lock(); scheduledBuffers += 1; statsLock.unlock()
+        if let end = playbackEstimateEnd, now > end {
+            let gapMs = Int((now.uptimeNanoseconds - end.uptimeNanoseconds) / 1_000_000)
+            if gapMs > 60, gapMs < 4000 { log.log(.info, .audio, "playback.gap", ["gapMs": .int(gapMs)]) }
+        }
+        let start = max(now, playbackEstimateEnd ?? now)
+        playbackEstimateEnd = start + .nanoseconds(Int(seconds * 1_000_000_000))
+    }
+
+    private func installOutputTap() {
+        let mixer = engine.mainMixerNode
+        mixer.removeTap(onBus: 0)
+        mixer.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
+            guard let self else { return }
+            let playing = self.player.isPlaying
+            self.meter.process(buffer, playing: playing)
+            if playing, self.recordPlayback, let dir = self.log.directory {
+                self.recorder.write(buffer, directory: dir, runID: self.log.runID)
+            }
+        }
+    }
+
+    private func startStatsTimer() {
+        statsTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in self?.logStats() }
+        timer.resume()
+        statsTimer = timer
+    }
+
+    private func logStats() {
+        statsLock.lock()
+        let frames = capturedFrames, sumSq = captureSumSq, peak = capturePeak
+        let scheduled = scheduledBuffers, dropped = droppedBuffers
+        capturedFrames = 0; captureSumSq = 0; capturePeak = 0; scheduledBuffers = 0; droppedBuffers = 0
+        statsLock.unlock()
+        let w = meter.takeWindow()
+        func db(_ amplitude: Float) -> Double { amplitude > 0 ? Double(20 * log10f(amplitude)) : -120 }
+        let rms = frames > 0 ? sqrtf(sumSq / Float(frames)) : 0
+        log.log(.info, .audio, "stats",
+                ["captureSeconds": .double(Double(frames) / AudioIO.captureSampleRate), "captureRmsDb": .double(db(rms)),
+                 "capturePeakDb": .double(db(peak)), "scheduledBuffers": .int(scheduled), "droppedBuffers": .int(dropped),
+                 "outBuffers": .int(w.buffers), "outPlayingBuffers": .int(w.playingBuffers), "outPeakDb": .double(db(w.peak)),
+                 "outNoiseBursts": .int(w.noiseBursts), "outClicks": .int(w.clicks),
+                 "outMaxHfRatio": .double(Double(w.maxHighFrequencyRatio)), "voiceProcessing": .bool(echoCancellationActive)])
+    }
+
     // MARK: Conversion helpers
+
+    /// Looks for NaN, infinity or impossibly large samples in a buffer (all channels).
+    public static func inspect(_ buffer: AVAudioPCMBuffer) -> AudioSanity.Report {
+        guard let data = buffer.floatChannelData else { return AudioSanity.Report() }
+        var total = AudioSanity.Report()
+        for c in 0..<Int(buffer.format.channelCount) {
+            let r = AudioSanity.inspect(UnsafeBufferPointer(start: data[c], count: Int(buffer.frameLength)))
+            total.frames += r.frames
+            total.peak = max(total.peak, r.peak)
+            total.nonFinite += r.nonFinite
+            total.overRange += r.overRange
+        }
+        return total
+    }
+
+    /// Repairs a buffer in place: non-finite samples become silence and the rest are clamped to ±1.
+    public static func sanitize(_ buffer: AVAudioPCMBuffer) {
+        guard let data = buffer.floatChannelData else { return }
+        for c in 0..<Int(buffer.format.channelCount) {
+            AudioSanity.sanitize(UnsafeMutableBufferPointer(start: data[c], count: Int(buffer.frameLength)))
+        }
+    }
 
     /// Converts any PCM buffer to `playbackFormat`.
     public static func convertForPlayback(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {

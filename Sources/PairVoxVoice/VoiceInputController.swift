@@ -23,6 +23,7 @@ public final class VoiceInputController: @unchecked Sendable {
     private let transcriber: any UtteranceTranscriber
     private let engine: ConversationEngine
     private let lock = NSLock()
+    private let log = DiagnosticLog.shared
     private let workQueue = DispatchQueue(label: "app.pairvox.vad")
 
     private var vad: VoiceActivityDetector
@@ -115,6 +116,7 @@ public final class VoiceInputController: @unchecked Sendable {
 
         var startEvent = false
         var finished: [Float]?
+        let wasPlaying = playbackActive
 
         switch mode {
         case .muted:
@@ -146,8 +148,15 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.unlock()
 
         if let level { onLevel?(level) }
-        if startEvent { Task { await engine.userStartedSpeaking() } }
-        if let finished { finishUtterance(finished) }
+        if startEvent {
+            log.log(.info, .input, "vad.speech.start", ["playbackActive": .bool(wasPlaying), "bargeIn": .bool(wasPlaying)])
+            Task { await engine.userStartedSpeaking() }
+        }
+        if let finished {
+            log.log(.info, .input, "vad.speech.end",
+                    ["seconds": .double(Double(finished.count) / AudioIO.captureSampleRate)])
+            finishUtterance(finished)
+        }
     }
 
     private func finishUtterance(_ samples: [Float]) {
@@ -158,13 +167,21 @@ public final class VoiceInputController: @unchecked Sendable {
             await engine.userStoppedSpeaking()
             // Ignore blips shorter than 0.3 s.
             guard samples.count > Int(AudioIO.captureSampleRate * 0.3) else {
+                self.log.log(.info, .input, "utterance.ignored", ["reason": "shorter than 0.3 s"])
                 await engine.transcriptionFailed()
                 return
             }
+            let began = DispatchTime.now()
             do {
                 let text = try await transcriber.transcribe(samples, vocabulary: words)
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
+                self.log.log(.info, .stt, "transcribed",
+                             ["engine": .string(transcriber.displayName), "audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate),
+                              "decodeMs": .double(ms), "text": self.log.content(text)])
                 await engine.submit(text)
             } catch {
+                self.log.log(.error, .stt, "transcribe.failed", ["engine": .string(transcriber.displayName),
+                                                                 "error": .string(error.localizedDescription)])
                 self.onError?(error.localizedDescription)
                 await engine.transcriptionFailed()
             }

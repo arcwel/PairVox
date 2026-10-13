@@ -267,6 +267,7 @@ public final class FallbackSynthesizer: SpeechSynthesizing, @unchecked Sendable 
                 return try await kokoro.synthesize(text, rate: rate)
             } catch {
                 NSLog("PairVox: Kokoro failed (\(error)); using the system voice")
+                DiagnosticLog.shared.log(.warning, .tts, "fallback.system", ["error": .string("\(error)")])
             }
         }
         return try await system.synthesize(text, rate: rate)

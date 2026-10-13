@@ -14,6 +14,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
     private let audio: AudioIO
     private let synthesizer: any SpeechSynthesizing
     private let lock = NSLock()
+    private let log = DiagnosticLog.shared
 
     private var waiting: [Utterance] = []                       // not yet synthesized
     private var ready: [(Utterance, AVAudioPCMBuffer)] = []     // synthesized, not yet playing
@@ -86,11 +87,50 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            let result: Result<AVAudioPCMBuffer, Error>
+            var result: Result<AVAudioPCMBuffer, Error>
+            let began = DispatchTime.now()
             do {
                 result = .success(try await self.synthesizer.synthesize(next.text, rate: r))
             } catch {
                 result = .failure(error)
+            }
+            // Check every sentence before it can play. A buffer holding NaN or values in the thousands would
+            // come out as a burst of loud noise: synthesize it once more, and if it is still bad, repair it.
+            if case .success(var buffer) = result {
+                var report = AudioIO.inspect(buffer)
+                if !report.isClean {
+                    self.log.log(.error, .tts, "synth.corrupt",
+                                 ["id": .int(next.id), "engine": .string(self.synthesizer.displayName), "attempt": 1,
+                                  "peak": .double(Double(report.peak)), "nonFinite": .int(report.nonFinite),
+                                  "overRange": .int(report.overRange), "frames": .int(report.frames)])
+                    if let again = try? await self.synthesizer.synthesize(next.text, rate: r) {
+                        buffer = again
+                        report = AudioIO.inspect(again)
+                        if !report.isClean {
+                            self.log.log(.error, .tts, "synth.corrupt",
+                                         ["id": .int(next.id), "attempt": 2, "peak": .double(Double(report.peak)),
+                                          "nonFinite": .int(report.nonFinite), "overRange": .int(report.overRange)])
+                        }
+                    }
+                    if !report.isClean { AudioIO.sanitize(buffer) }
+                    result = .success(buffer)
+                }
+            }
+            let synthMs = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
+            switch result {
+            case .success(let buffer):
+                let audioMs = Double(buffer.frameLength) / buffer.format.sampleRate * 1000
+                let (readyCount, waitingCount) = self.lock.withLock { (self.ready.count, self.waiting.count) }
+                self.log.log(.info, .tts, "synth",
+                             ["id": .int(next.id), "chars": .int(next.text.count), "engine": .string(self.synthesizer.displayName),
+                              "peak": .double(Double(AudioIO.inspect(buffer).peak)),
+                              "synthMs": .double(synthMs), "audioMs": .double(audioMs),
+                              "realtimeFactor": .double(audioMs > 0 ? synthMs / audioMs : 0),
+                              "ready": .int(readyCount), "waiting": .int(waitingCount)])
+            case .failure(let error):
+                self.log.log(.error, .tts, "synth.failed",
+                             ["id": .int(next.id), "engine": .string(self.synthesizer.displayName),
+                              "error": .string(error.localizedDescription), "synthMs": .double(synthMs)])
             }
             let current = self.lock.withLock { () -> Bool in
                 self.synthesizing = false
@@ -124,6 +164,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         lock.unlock()
 
         onPlaybackActiveChange?(true)
+        log.log(.debug, .tts, "play.start", ["id": .int(utterance.id), "kind": "\(utterance.kind)"])
         continuation.yield(.started(utterance.id))
         audio.schedule(buffer) { [weak self] in
             guard let self else { return }

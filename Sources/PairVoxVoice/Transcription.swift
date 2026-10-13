@@ -45,6 +45,7 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
 
     private func setState(_ s: TranscriberState) {
         lock.lock(); _state = s; lock.unlock()
+        DiagnosticLog.shared.log(.info, .stt, "whisper.state", ["state": .string("\(s)")])
         onStateChange?(s)
     }
 
@@ -189,6 +190,7 @@ public final class FallbackTranscriber: UtteranceTranscriber, @unchecked Sendabl
             } catch {
                 guard fallback.isReady else { throw error }
                 NSLog("PairVox: WhisperKit failed (\(error)); using Apple Speech")
+                DiagnosticLog.shared.log(.warning, .stt, "fallback.apple", ["error": .string("\(error)")])
             }
         }
         return try await fallback.transcribe(samples, vocabulary: vocabulary)
