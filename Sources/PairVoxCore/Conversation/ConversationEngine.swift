@@ -46,6 +46,7 @@ public actor ConversationEngine {
     private var spokenAuthProblem = false
     private var userIsSpeaking = false
     private var transcribing = false
+    private var readMoreWhenDone = false
 
     public init(configuration: EngineConfiguration, authKind: AuthKind = .subscription, output: any SpeechOutput,
                 backendFactory: @escaping SessionBackendFactory) {
@@ -268,7 +269,11 @@ public actor ConversationEngine {
             speak(replay.isEmpty ? [make("I haven't said anything yet.", .notice)] : replay.map { make($0.text, $0.kind) },
                   record: false)
         case .readMore:
-            if !interruptedRemainder.isEmpty {
+            if !sendTimes.isEmpty {
+                // Reply still coming: finish the summary, then read the detail when the turn ends.
+                resumeRemainder()
+                readMoreWhenDone = true
+            } else if !interruptedRemainder.isEmpty {
                 resumeRemainder()
             } else if let held = lastPlanner?.heldBack, !held.isEmpty {
                 speak(held.map { make($0.text, $0.kind) }, record: false)
@@ -319,6 +324,9 @@ public actor ConversationEngine {
             setSpeechRate(config.speechRate - 0.1)
             resumeRemainder()
         }
+        // Any speech held for a barge-in that the command didn't resume is dropped,
+        // so later replies are never stuck behind it.
+        if holdSpeech { dropRemainder() }
         recomputePhase()
     }
 
@@ -407,7 +415,13 @@ public actor ConversationEngine {
     }
 
     private func completeTurn(_ result: TurnResult) {
-        let final = planner.finishTurn(result)
+        var final = planner.finishTurn(result)
+        if readMoreWhenDone {
+            readMoreWhenDone = false
+            final.removeAll { $0.kind == .prompt }
+            final += planner.heldBack.map { make($0.text, $0.kind) }
+            planner.clearHeldBack()
+        }
         speakFromPlanner(final)
         if let id = assistantEntryID {
             updateEntry(id) {
@@ -442,6 +456,7 @@ public actor ConversationEngine {
         utterancesThisTurn = 0
         firstTokenSeen = false
         ackTask?.cancel()
+        readMoreWhenDone = false
     }
 
     // MARK: - Speech output events

@@ -211,6 +211,38 @@ final class ConversationEngineTests: XCTestCase {
         XCTAssertNil(snap.pendingPermission)
     }
 
+    func testRepliesAfterSpokenApprovalAreNotSwallowed() async {
+        await engine.submit("Fix it")
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "p9", toolName: "Edit",
+                                                            input: ["file_path": "/Users/dev/app/a.swift"])))
+        await settle()
+        output.playNext(finish: false)        // prompt is playing
+        await settle()
+        await engine.userStartedSpeaking()   // user talks over it
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        XCTAssertEqual(backend.responses.first?.1, .allow)
+        backend.emit(.textDelta("Done, the file is fixed. "))
+        backend.emit(.textBlockEnded)
+        await settle()
+        XCTAssertEqual(output.queue.map(\.text), ["Done, the file is fixed."])
+    }
+
+    func testDetailsDuringStreamingReadsDetailAtEnd() async {
+        await engine.setSpeechMode(.summary)
+        await engine.submit("Review it")
+        backend.emit(.textDelta("Two issues found.\n\nThe cache key ignores locale. "))
+        await settle()
+        output.playNext(finish: false)
+        await engine.userStartedSpeaking()
+        await engine.submit("details")
+        backend.emit(.textDelta("A test is flaky.\n"))
+        backend.emit(.textBlockEnded)
+        backend.emit(.turnCompleted(TurnResult(outcome: .success)))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.text), ["Two issues found.", "The cache key ignores locale.", "A test is flaky."])
+    }
+
     func testVoiceCannotApproveHighRisk() async {
         await engine.submit("Clean up")
         let req = PermissionRequest(requestID: "p2", toolName: "Bash", input: ["command": "rm -rf build"])
