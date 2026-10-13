@@ -48,14 +48,15 @@ Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13
 
 ### Approvals you can understand and question
 
-- [ ] **Approve all** for the prompts currently waiting, in one action, with the list shown first.
-- [ ] **Plain-language summary** of every request ("Claude wants to rename 3 files in `src/`") shown and spoken in place of the raw command. The exact command stays one tap away.
+- [x] **Approve all** for the prompts currently waiting, in one action, with the list shown first. (Card button; skips high-risk and screen-only requests; voice version still to do.)
+- [x] **Plain-language summary** of every request ("Claude wants to rename 3 files in `src/`") shown and spoken in place of the raw command. The exact command stays one tap away.
   - The summary must be derived from the normalized tool input, never from Claude's own `description` field (audit lead: spoken prompt uses model description).
   - The card must show the full command, not a 6-line cut-off.
-- [ ] **Ask before you approve.** While a request is pending, the user can ask questions about it ("what other files does this affect?", "could this delete files in the folder later?") and get an answer before deciding.
+  - Built as a separate one-shot `claude -p` call (Haiku, tools limited to Read/Grep/Glob, user-level settings only) shown as "AI summary, check the command", with the deterministic spoken prompt unchanged. Voice: say "explain" to hear it; a spoken question ending in "?" while a request is pending goes to the advisor instead of counting as a refusal. Settings toggle: "Explain each request in plain words". Checked live with two real calls: it flagged a misleading model-written description.
+- [x] **Ask before you approve.** While a request is pending, the user can ask questions about it ("what other files does this affect?", "could this delete files in the folder later?") and get an answer before deciding.
   - Answers come from a read-only side query that sees the pending request and the project, and cannot run tools or change the pending request.
   - An answer is advice only; the approval still has to come from the user.
-- [ ] Approvals bound to a request ID, with a queue instead of one pending slot (audit lead: pending slot overwritten).
+- [x] Approvals bound to a request ID, with a queue instead of one pending slot (audit lead: pending slot overwritten).
 
 ### Folder-level approvals
 

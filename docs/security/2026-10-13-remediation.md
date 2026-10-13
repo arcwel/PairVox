@@ -22,7 +22,7 @@ Follow-up to [2026-10-13-phase1-hardening.md](2026-10-13-phase1-hardening.md). T
 | Bash risk defaults to low | Fixed | Low only for plain read-only commands; git global options stripped; tests |
 | "Don't always allow" parsed as always-allow | Fixed | Refusals parsed first; test |
 | One pending-permission slot | Fixed | Queue, request-ID bound buttons; tests |
-| Own speech accepted as approval | **Open by design** | Owner decision: allowed only when the spoken-confirmation toggle is on; toggle not built yet |
+| Own speech accepted as approval | **Accepted by design for high risk** | Spoken confirmation is a Settings toggle, off by default. When on, PairVox's own prompt contains the phrase "confirm high risk", so speech heard by the microphone can satisfy it, and Settings says so. It is not offered for requests Claude Code says need the screen. Low- and medium-risk voice approvals still have no echo filter |
 | Always-allow persists unseen suggestions | Fixed | Every suggestion is applied to the session; test |
 | `claudePathOverride` sends the API key to any program | Fixed | Override must be an absolute, regular, non-group/world-writable file owned by the user or root, in a folder not writable by everyone; `settings.json` saved 0600 in a 0700 folder and ignored for the override if loose; tests. The Keychain access question for the signed build was not measured |
 | Markdown links open any scheme | Fixed | http, https and mailto only |
@@ -44,6 +44,5 @@ WhisperKit model and tokenizer pinning, exact WhisperKit version, `ExitPlanMode`
 
 ## Still to do
 
-- The spoken-confirmation toggle (roadmap v0.2b).
-- Measure the Keychain item's access from another process on the signed release build.
+- Run the Keychain check on the signed release build with a saved key (`scripts/check-keychain-access.sh --probe`). On this Mac with a dummy item created like the app's, the item trusted exactly one program and a second program (`security`) was held at an approval prompt.
 - Hunter notes not acted on: notification bodies include commands, log and diagnostics file modes, the `.gitignore` guard entries, `KeychainStore` delete-then-add ordering.
