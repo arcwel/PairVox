@@ -43,11 +43,14 @@ Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13
 ### Folder-level approvals
 
 - [ ] Prompt once per project: "This project works in `~/Documents/project/x`. Allow Claude to edit all files within it?" Granting skips the per-request prompt for edits inside that folder and passes them straight to Claude.
-- [ ] **Double confirmation** to grant, with the exact folder path and what is and is not covered.
-- [ ] Grants listed in Settings, each removable, with when it was granted.
+- [ ] **Double confirmation** to grant, with the exact folder path and what is and is not covered. The first time a grant is approved by voice, PairVox asks twice, and the second ask repeats the path and scope back.
+- [ ] **Shell commands are a separate toggle**, off by default, per folder grant. Turning it on needs its own double confirmation, and the user can switch it on or off at any time without removing the file-edit grant.
+  - With it on, shell commands run with that folder as the working directory skip the per-request prompt.
+  - Commands that reach outside the folder (absolute paths elsewhere, `cd ..`, network downloads piped to a shell) are not covered and still prompt. This relies on a stricter command check than the current denylist (audit lead: risk classifier defaults to low), so that check ships first.
+- [ ] Grants listed in Settings, each removable, with when it was granted and whether shell commands are on.
 - [ ] Scope limits, decided with the audit in mind:
-  - covers file edits inside the resolved folder only (symlinks resolved), not shell commands, network, or other folders
-  - high-risk requests still need a click
+  - file-edit grants cover the resolved folder only (symlinks resolved), not other folders
+  - high-risk requests still need an explicit confirmation, even inside a granted folder. A confirmation can be a click or a deliberate spoken one: PairVox reads the plain-language summary back and requires a specific confirm phrase, not a casual "yes". Today high-risk requests cannot be approved by voice at all, so this changes the policy. The spoken path must not be satisfiable by PairVox's own speech echo (audit lead: own TTS echo accepted as approval)
   - grants are stored by resolved path, are not shared across projects, and never come from repo-supplied config (audit lead: repo config bypass)
 
 ### Multiple projects at once
