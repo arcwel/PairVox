@@ -50,7 +50,8 @@ Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13
 - [ ] Grants listed in Settings, each removable, with when it was granted and whether shell commands are on.
 - [ ] Scope limits, decided with the audit in mind:
   - file-edit grants cover the resolved folder only (symlinks resolved), not other folders
-  - high-risk requests still need an explicit confirmation, even inside a granted folder. A confirmation can be a click or a deliberate spoken one: PairVox reads the plain-language summary back and requires a specific confirm phrase, not a casual "yes". Today high-risk requests cannot be approved by voice at all, so this changes the policy. The spoken path must not be satisfiable by PairVox's own speech echo (audit lead: own TTS echo accepted as approval)
+  - high-risk requests still need an explicit confirmation, even inside a granted folder. A confirmation can be a click or a deliberate spoken one: PairVox reads the plain-language summary back and requires a specific confirm phrase, not a casual "yes". Today high-risk requests cannot be approved by voice at all, so this changes the policy.
+  - **Spoken confirmation is a settings toggle.** On: the user may confirm high-risk requests by voice. Off (the safer default): the user must click the button when prompted, and voice cannot approve them. The toggle applies to high-risk requests only; the lower-risk voice approvals keep their own behavior. The toggle is off by default. When it is on, the user has accepted that PairVox's own speech picked up by the microphone can satisfy the confirmation (audit lead: own TTS echo accepted as approval), so no echo filtering is required on that path. The setting's description must say this plainly, and the click path stays available either way.
   - grants are stored by resolved path, are not shared across projects, and never come from repo-supplied config (audit lead: repo config bypass)
 
 ### Multiple projects at once
