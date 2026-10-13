@@ -14,6 +14,7 @@ public final class VoiceStack: @unchecked Sendable {
     public let systemVoice: SystemSynthesizer
     public let synthesizer: FallbackSynthesizer
     public let models = ModelStore()
+    private let preview = VoicePreview()
     private let lock = NSLock()
     private var preparingKokoro = false
 
@@ -47,11 +48,13 @@ public final class VoiceStack: @unchecked Sendable {
     /// Downloads, verifies and loads Kokoro. Falls back silently to the system voice on failure.
     public func prepareKokoro() async {
         guard synthesizer.choice != .system, !kokoro.isReady else { return }
-        lock.lock()
-        if preparingKokoro { lock.unlock(); return }
-        preparingKokoro = true
-        lock.unlock()
-        defer { lock.lock(); preparingKokoro = false; lock.unlock() }
+        let alreadyPreparing = lock.withLock { () -> Bool in
+            if preparingKokoro { return true }
+            preparingKokoro = true
+            return false
+        }
+        if alreadyPreparing { return }
+        defer { lock.withLock { preparingKokoro = false } }
         do {
             if models.isPresent {
                 models.onStatus?(.verifying)
@@ -67,4 +70,15 @@ public final class VoiceStack: @unchecked Sendable {
             models.onStatus?(.failed(error.localizedDescription))
         }
     }
+
+    /// Speaks a short sample in `voice` so the user can compare voices. Throws if Kokoro isn't ready.
+    /// `completion` runs when the sample plays to the end (see `VoicePreview.play`).
+    public func previewKokoroVoice(_ voice: String, text: String, rate: Double,
+                                   completion: @escaping @Sendable () -> Void) async throws {
+        guard kokoro.isReady else { throw SynthesisError.notReady }
+        let buffer = try await kokoro.synthesize(text, voice: voice, rate: rate)
+        preview.play(buffer, completion: completion)
+    }
+
+    public func stopPreview() { preview.stop() }
 }

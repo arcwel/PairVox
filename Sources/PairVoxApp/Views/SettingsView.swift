@@ -70,9 +70,6 @@ private struct GeneralSettings: View {
 private struct VoiceSettings: View {
     @EnvironmentObject var model: AppModel
 
-    static let kokoroVoices = ["af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky", "af_nova", "am_michael",
-                               "am_adam", "am_eric", "am_liam", "am_onyx", "bf_emma", "bf_isabella", "bm_george",
-                               "bm_lewis", "bm_daniel"]
     struct WhisperChoice: Identifiable {
         let id: String
         let label: String
@@ -91,9 +88,6 @@ private struct VoiceSettings: View {
                     Text("Automatic (Kokoro when ready)").tag(SynthesizerChoice.automatic)
                     Text("Kokoro").tag(SynthesizerChoice.kokoro)
                     Text("macOS system voice").tag(SynthesizerChoice.system)
-                }
-                Picker("Kokoro voice", selection: $model.settings.kokoroVoice) {
-                    ForEach(Self.kokoroVoices, id: \.self) { v in Text(Self.label(v)).tag(v) }
                 }
                 Picker("System voice", selection: $model.settings.systemVoiceIdentifier) {
                     Text("Best available").tag(String?.none)
@@ -115,6 +109,23 @@ private struct VoiceSettings: View {
                     }
                 }
             }
+            Section("Kokoro voice") {
+                ForEach(VoiceCatalog.featured) { v in voiceRow(v) }
+                DisclosureGroup("More voices") {
+                    Picker("Voice", selection: Binding(
+                        get: { VoiceCatalog.others.contains(model.settings.kokoroVoice) ? model.settings.kokoroVoice : "" },
+                        set: { if !$0.isEmpty { model.settings.kokoroVoice = $0 } })) {
+                        Text("Choose another…").tag("")
+                        ForEach(VoiceCatalog.others, id: \.self) { Text(VoiceCatalog.label(for: $0)).tag($0) }
+                    }
+                    if VoiceCatalog.others.contains(model.settings.kokoroVoice) {
+                        Button(model.previewingVoice == model.settings.kokoroVoice ? "Stop" : "Preview this voice") {
+                            model.previewVoice(model.settings.kokoroVoice)
+                        }
+                        .disabled(!kokoroReady)
+                    }
+                }
+            }
             Section("Listening") {
                 Picker("Recognition", selection: $model.settings.transcriber) {
                     Text("Automatic (WhisperKit, Apple fallback)").tag(TranscriberChoice.automatic)
@@ -130,11 +141,30 @@ private struct VoiceSettings: View {
         .formStyle(.grouped)
     }
 
-    static func label(_ v: String) -> String {
-        let accent = v.hasPrefix("b") ? "British" : "American"
-        let gender = v.dropFirst().first == "f" ? "female" : "male"
-        let name = v.split(separator: "_").last.map { $0.capitalized } ?? v
-        return "\(name) — \(accent) \(gender)"
+    private func voiceRow(_ v: KokoroVoiceInfo) -> some View {
+        let selected = model.settings.kokoroVoice == v.id
+        let playing = model.previewingVoice == v.id
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Button { model.settings.kokoroVoice = v.id } label: {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle").imageScale(.medium)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Use \(v.name)")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(v.name) · \(v.summary)").fontWeight(selected ? .semibold : .regular)
+                Text(v.blurb).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(playing ? "Stop" : "Preview") { model.previewVoice(v.id) }
+                .disabled(!kokoroReady)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.settings.kokoroVoice = v.id }
+    }
+
+    private var kokoroReady: Bool {
+        if case .ready = model.kokoroStatus { return true }
+        return false
     }
 
     private var kokoroStatus: String {

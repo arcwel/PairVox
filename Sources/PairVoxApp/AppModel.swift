@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var listeningMode: VoiceInputController.ListeningMode = .handsFree
     @Published private(set) var pushToTalkActive = false
     @Published private(set) var hasAPIKey = KeychainStore.readAPIKey() != nil
+    @Published private(set) var previewingVoice: String?
     @Published var showSetup = false
     @Published var errorMessage: String?
 
@@ -292,6 +293,34 @@ final class AppModel: ObservableObject {
     func downloadKokoroNow() {
         let stack = voice
         Task.detached(priority: .userInitiated) { await stack.prepareKokoro() }
+    }
+
+    /// Plays a sample of a Kokoro voice. Tapping the voice that is already playing stops it.
+    func previewVoice(_ id: String) {
+        if previewingVoice == id { stopVoicePreview(); return }
+        guard voice.kokoro.isReady else {
+            errorMessage = "The Kokoro voice is still downloading. Previews work once it is ready."
+            return
+        }
+        previewingVoice = id
+        let stack = voice
+        let rate = settings.speechRate
+        let line = VoiceCatalog.sampleLine(for: id)
+        Task {
+            do {
+                try await stack.previewKokoroVoice(id, text: line, rate: rate) { [weak self] in
+                    Task { @MainActor in if self?.previewingVoice == id { self?.previewingVoice = nil } }
+                }
+            } catch {
+                if previewingVoice == id { previewingVoice = nil }
+                errorMessage = "Couldn't play the sample: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func stopVoicePreview() {
+        voice.stopPreview()
+        previewingVoice = nil
     }
 
     func reloadWhisper() {

@@ -67,7 +67,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
         if isReady { return }
         guard MLXRuntime.metalLibraryAvailable() else {
             let msg = "Kokoro needs MLX's Metal shaders. Build the app with Xcode or scripts/build-app.sh."
-            lock.lock(); loadError = msg; lock.unlock()
+            lock.withLock { loadError = msg }
             throw SynthesisError.failed(msg)
         }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -93,11 +93,13 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     }
 
     public func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
-        lock.lock()
-        let engine = tts
-        let style = voices[_voice + ".npy"] ?? voices["af_heart.npy"] ?? voices.values.first
-        let language: Language = _voice.hasPrefix("b") ? .enGB : .enUS
-        lock.unlock()
+        try await synthesize(text, voice: voice, rate: rate)
+    }
+
+    /// Speaks with a specific voicepack without changing the selected voice (used by previews).
+    public func synthesize(_ text: String, voice id: String, rate: Double) async throws -> AVAudioPCMBuffer {
+        let (engine, style) = lock.withLock { (tts, voices[id + ".npy"] ?? voices["af_heart.npy"] ?? voices.values.first) }
+        let language: Language = id.hasPrefix("b") ? .enGB : .enUS
         guard let engine, let style else { throw SynthesisError.notReady }
 
         let samples: [Float] = try await withCheckedThrowingContinuation { cont in
