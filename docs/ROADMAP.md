@@ -20,6 +20,23 @@
 - [ ] Session picker (resume earlier Claude Code sessions by ID)
 - [ ] Sparkle auto-updates
 
+## v0.2a: approval-gate hardening (done 2026-10-13)
+
+Fixes from the security audit (`docs/security/2026-10-13-phase1-hardening.md`), each with a regression test. These come first because folder grants and multi-project build on the gate.
+
+- [x] Spoken Bash prompts come from the command, never Claude's `description`
+- [x] Unrecognized shell commands are never "low"; git global options are normalized; interpreters and nested shells are flagged
+- [x] Auto-approve answers only plain read-only tools, follows the Settings toggle on a running session, and never skips `ExitPlanMode` or sensitive files
+- [x] Refusals ("don't always allow", "never ask again") are parsed before approvals
+- [x] One request is shown and spoken at a time; later ones queue; buttons are bound to the request ID
+- [x] "Always allow" is applied to the session only
+- [x] A new session keeps the conversation mode the user switched to, and voice mode changes are saved
+- [x] The child loads only user-level Claude Code settings unless "Load this project's own settings" is on. Confirmed by running `claude` 2.1.296 in a no-network sandbox (`scripts/validate-claude-config.sh`): with default arguments a repository's hook and MCP server both ran with no prompt; with `--setting-sources user` neither ran and the user's own MCP servers still loaded
+- [x] Permission card shows the whole command; menu-bar Allow shows risk and sends high-risk requests to the window
+- [x] Transcript links open web and mail links only; `say` gets `--`; CLI output strips control characters; repo scan skips symlinks and bounds reads
+- [x] Audit follow-ups closed: repo-config behavior measured in a sandbox and fixed, release workflow split and pinned, Whisper models and tokenizers pinned by commit and hash, `claudePathOverride` and `settings.json` hardened (see `docs/security/2026-10-13-remediation.md`)
+- [ ] Still open: whether PairVox's own speech heard by the microphone can approve a low- or medium-risk request (owner decision: allowed only through the spoken-confirmation toggle, not yet built), and the Keychain access check on the signed release build
+
 ## v0.2b: access control and multi-project (planned)
 
 Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13-phase1-hardening.md`; the audit leads named below should be settled first or alongside.
