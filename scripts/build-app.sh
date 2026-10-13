@@ -39,7 +39,6 @@ fi
 set -x
 xcodebuild -project PairVox.xcodeproj -scheme PairVox -configuration "$CONFIG" \
   -derivedDataPath .build/xcode -destination "generic/platform=macOS" \
-  -skipPackagePluginValidation -skipMacroValidation \
   "${SIGN_ARGS[@]}" "${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"}" build | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
 set +x
 

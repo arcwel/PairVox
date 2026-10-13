@@ -25,7 +25,7 @@ qa-smoke:         ## Non-audio QA via pairvox-cli (4 real Haiku turns): make qa-
 	scripts/qa-smoke.sh $(ARGS)
 
 release:          ## Signed + notarized DMG: make release VERSION=0.1.0
-	scripts/release.sh $(VERSION)
+	scripts/release.sh "$(VERSION)"
 
 clean:
 	rm -rf .build dist PairVox.xcodeproj
