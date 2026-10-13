@@ -12,6 +12,7 @@ final class DiagnosticsSettingsTests: XCTestCase {
         XCTAssertTrue(s.echoCancellation)
         XCTAssertNil(s.outputDeviceUID, "automatic output by default")
         XCTAssertTrue(s.microphoneEnabled, "an old settings file keeps the microphone on")
+        XCTAssertFalse(s.separateAudioEngines, "the experimental mode is opt-in")
     }
 
     func testChosenOutputDeviceRoundTrips() throws {

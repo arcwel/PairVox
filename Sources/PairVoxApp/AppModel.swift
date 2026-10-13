@@ -64,6 +64,7 @@ final class AppModel: ObservableObject {
         settings = loaded
         let stack = VoiceStack(settings: loaded)
         stack.audio.outputDeviceUID = loaded.outputDeviceUID
+        stack.audio.separateEngines = loaded.separateAudioEngines
         stack.audio.voiceProcessingEnabled = loaded.echoCancellation
         stack.audio.recordPlayback = loaded.recordPlaybackAudio
         voice = stack
@@ -245,6 +246,7 @@ final class AppModel: ObservableObject {
         let audio = voice.audio
         audio.voiceProcessingEnabled = settings.echoCancellation
         audio.outputDeviceUID = settings.outputDeviceUID
+        audio.separateEngines = settings.separateAudioEngines
         do {
             if audio.isRunning, capture != audio.captureAvailable {
                 try audio.restart(captureWanted: capture)   // keeps any speech queued meanwhile
@@ -569,6 +571,10 @@ final class AppModel: ObservableObject {
         }
         if old.outputDeviceUID != settings.outputDeviceUID {
             voice.audio.outputDeviceUID = settings.outputDeviceUID
+            restartAudioEngine()
+        }
+        if old.separateAudioEngines != settings.separateAudioEngines {
+            voice.audio.separateEngines = settings.separateAudioEngines
             restartAudioEngine()
         }
         input?.setBargeInEnabled(settings.bargeInEnabled)

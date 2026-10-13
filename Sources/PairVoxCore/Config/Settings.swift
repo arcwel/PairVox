@@ -73,6 +73,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
     /// Off = playback only. A Bluetooth headset then stays in its high-quality music mode (an open
     /// microphone forces the narrow, fragile call mode). You can still type to Claude.
     public var microphoneEnabled = true
+    /// Experimental: capture and play on separate audio stacks so a Bluetooth headset's microphone and speaker
+    /// are not joined into one fragile aggregate device. No echo cancellation in this mode.
+    public var separateAudioEngines = false
 
     // Diagnostics (logs stay on this Mac until the user exports them)
     public var verboseLogging = false
@@ -148,6 +151,7 @@ public struct AppSettings: Sendable, Codable, Equatable {
         echoCancellation = (try? c.decode(Bool.self, forKey: .echoCancellation)) ?? d.echoCancellation
         outputDeviceUID = try? c.decode(String.self, forKey: .outputDeviceUID)
         microphoneEnabled = (try? c.decode(Bool.self, forKey: .microphoneEnabled)) ?? d.microphoneEnabled
+        separateAudioEngines = (try? c.decode(Bool.self, forKey: .separateAudioEngines)) ?? d.separateAudioEngines
         verboseLogging = (try? c.decode(Bool.self, forKey: .verboseLogging)) ?? d.verboseLogging
         logConversationText = (try? c.decode(Bool.self, forKey: .logConversationText)) ?? d.logConversationText
         recordPlaybackAudio = (try? c.decode(Bool.self, forKey: .recordPlaybackAudio)) ?? d.recordPlaybackAudio

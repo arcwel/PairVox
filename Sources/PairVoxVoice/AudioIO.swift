@@ -58,6 +58,18 @@ public final class AudioIO: @unchecked Sendable {
     public var inputDeviceUID: String?
     public var outputDeviceUID: String?
     private var startSignature = ""
+
+    /// Experimental: capture with AVCaptureSession and play with an output-only engine pinned to the chosen
+    /// output, so the microphone and the speaker are not joined into one aggregate device and a route change
+    /// on one side leaves the other alone. No echo cancellation in this mode.
+    public var separateEngines = false
+    private var separateActive = false
+    private var capture: MicrophoneCapture?
+    private var captureConverter: AVAudioConverter?
+    private var captureSourceFormat: AVAudioFormat?
+    private var captureInputSignature = ""
+    private var startOutputSignature = ""
+    private var captureRestartPending = false
     /// Why voice processing is off even though the setting asks for it (nil when it is on or not wanted).
     public private(set) var voiceProcessingSkipReason: String?
     /// Called when repeated restarts made PairVox turn echo cancellation off for this session.
@@ -136,6 +148,17 @@ public final class AudioIO: @unchecked Sendable {
         lock.lock()
         let running = isRunning
         lock.unlock()
+        if separateActive {
+            let inputChanged = AudioRoute.inputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID) != captureInputSignature
+            let outputChanged = AudioRoute.outputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID) != startOutputSignature
+            var fields = AudioRoute.fields()
+            fields["inputChanged"] = .bool(inputChanged)
+            fields["outputChanged"] = .bool(outputChanged)
+            log.log(.info, .audio, "input.defaultChanged", fields)
+            if running, outputChanged { restartAfterConfigurationChange() }
+            else if running, inputChanged { restartCapture() }
+            return
+        }
         let now = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
         var fields = AudioRoute.fields()
         fields["signatureChanged"] = .bool(now != startSignature)
@@ -164,6 +187,10 @@ public final class AudioIO: @unchecked Sendable {
         guard captureWanted, route.input != nil else {
             let reason = !captureWanted ? "microphone not authorized" : (inputDeviceUID == "none" ? "microphone turned off" : "no input device")
             try startOutputOnly(reason: reason, route: route)
+            return
+        }
+        if separateEngines {
+            try startSeparate(route: route)
             return
         }
         var useVoiceProcessing = voiceProcessingEnabled
@@ -198,7 +225,8 @@ public final class AudioIO: @unchecked Sendable {
         }
     }
 
-    private func startOutputOnly(reason: String, route: (input: AudioRoute.Device?, output: AudioRoute.Device?)) throws {
+    private func startOutputOnly(reason: String, route: (input: AudioRoute.Device?, output: AudioRoute.Device?),
+                                 announce: Bool = true) throws {
         pin(route, input: false)
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
         engine.connect(player, to: engine.mainMixerNode, format: AudioIO.playbackFormat)
@@ -217,11 +245,121 @@ public final class AudioIO: @unchecked Sendable {
         installOutputTap()
         startStatsTimer()
         startSignature = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        startOutputSignature = AudioRoute.outputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        guard announce else { return }
         var fields: [String: LogValue] = ["captureAvailable": false, "reason": .string(reason),
                                           "pinnedOut": .string(route.output?.name ?? "-")]
         fields.merge(AudioRoute.fields()) { a, _ in a }
         log.log(.warning, .audio, "engine.started.outputOnly", fields)
         onCaptureAvailabilityChange?(false)
+    }
+
+    /// Playback on its own output-only engine, capture on its own AVCaptureSession.
+    private func startSeparate(route: (input: AudioRoute.Device?, output: AudioRoute.Device?)) throws {
+        try startOutputOnly(reason: "separate engines", route: route, announce: false)
+        separateActive = true
+        voiceProcessingSkipReason = "separate engines"
+        let ok = startCapture(route: route)
+        var fields: [String: LogValue] = ["captureAvailable": .bool(ok), "pinnedOut": .string(route.output?.name ?? "-"),
+                                          "captureDevice": .string(route.input?.name ?? "-")]
+        fields.merge(AudioRoute.fields()) { a, _ in a }
+        log.log(.info, .audio, "engine.started.separate", fields)
+        onCaptureAvailabilityChange?(ok)
+    }
+
+    @discardableResult
+    private func startCapture(route: (input: AudioRoute.Device?, output: AudioRoute.Device?)) -> Bool {
+        capture?.stop()
+        capture = nil
+        captureConverter = nil
+        captureSourceFormat = nil
+        pending.removeAll()
+        let mic = MicrophoneCapture()
+        mic.onBuffer = { [weak self] buffer in self?.handleCaptured(buffer) }
+        mic.onFailure = { [weak self] message in self?.captureFailed(message) }
+        do {
+            try mic.start(deviceUID: route.input?.uid)
+            capture = mic
+            captureAvailable = true
+            captureInputSignature = AudioRoute.inputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+            return true
+        } catch {
+            captureAvailable = false
+            log.log(.error, .audio, "capture.start.failed", ["device": .string(route.input?.name ?? "-"),
+                                                             "error": .string(error.localizedDescription)])
+            return false
+        }
+    }
+
+    /// The microphone side failed or changed. Restart only capture, after the route has settled; playback
+    /// keeps running.
+    private func captureFailed(_ message: String) {
+        log.log(.warning, .audio, "capture.failed", ["message": .string(message)])
+        restartCapture()
+    }
+
+    private func restartCapture() {
+        lock.lock()
+        let active = separateActive && isRunning
+        let already = captureRestartPending
+        if active, !already { captureRestartPending = true }
+        lock.unlock()
+        guard active, !already else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let waited = self.waitForRouteToSettle(quiet: 1.0, maxWait: 6.0)
+            DispatchQueue.main.async {
+                self.lock.lock()
+                self.captureRestartPending = false
+                let stillActive = self.separateActive && self.isRunning
+                self.lock.unlock()
+                guard stillActive else { return }
+                let route = AudioRoute.resolve(inputUID: self.inputDeviceUID, outputUID: self.outputDeviceUID)
+                guard route.input != nil else {
+                    self.lock.lock(); self.captureAvailable = false; self.lock.unlock()
+                    self.log.log(.info, .audio, "capture.restart.noInput")
+                    self.onCaptureAvailabilityChange?(false)
+                    return
+                }
+                let ok = self.startCapture(route: route)
+                self.log.log(ok ? .info : .error, .audio, "capture.restarted",
+                             ["ok": .bool(ok), "settleMs": .int(Int(waited * 1000)), "device": .string(route.input?.name ?? "-")])
+                self.onCaptureAvailabilityChange?(ok)
+            }
+        }
+    }
+
+    /// A buffer from the capture session, in the device's own format: convert to 16 kHz mono and emit frames.
+    private func handleCaptured(_ buffer: AVAudioPCMBuffer) {
+        if captureSourceFormat != buffer.format {
+            captureConverter = AVAudioConverter(from: buffer.format, to: targetFormat)
+            captureSourceFormat = buffer.format
+            log.log(.info, .audio, "capture.format",
+                    ["rate": .int(Int(buffer.format.sampleRate)), "channels": .int(Int(buffer.format.channelCount))])
+        }
+        guard let converter = captureConverter else { return }
+        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
+        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
+        let once = ConvertOnce()
+        var error: NSError?
+        _ = converter.convert(to: out, error: &error) { _, status in
+            guard once.claim() else {
+                status.pointee = .noDataNow
+                return nil
+            }
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, let data = out.floatChannelData else { return }
+        let count = Int(out.frameLength)
+        pending.append(contentsOf: UnsafeBufferPointer(start: data[0], count: count))
+        noteCaptured(UnsafeBufferPointer(start: data[0], count: count))
+        while pending.count >= AudioIO.frameSize {
+            let frame = Array(pending.prefix(AudioIO.frameSize))
+            pending.removeFirst(AudioIO.frameSize)
+            onFrame?(frame)
+        }
     }
 
     private func startLocked(voiceProcessing: Bool, route: (input: AudioRoute.Device?, output: AudioRoute.Device?),
@@ -297,9 +435,14 @@ public final class AudioIO: @unchecked Sendable {
         guard isRunning else { lock.unlock(); return }
         isRunning = false
         let hadCapture = captureAvailable
+        let wasSeparate = separateActive
         captureAvailable = false
+        separateActive = false
         lock.unlock()
-        if hadCapture { engine.inputNode.removeTap(onBus: 0) }
+        capture?.stop()
+        capture = nil
+        // In separate mode the engine's input node was never touched, and touching it now would create it.
+        if hadCapture, !wasSeparate { engine.inputNode.removeTap(onBus: 0) }
         engine.mainMixerNode.removeTap(onBus: 0)
         statsTimer?.cancel()
         statsTimer = nil
@@ -310,13 +453,17 @@ public final class AudioIO: @unchecked Sendable {
     }
 
     private func restartAfterConfigurationChange() {
-        let signature = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        let outputOnlyView = separateActive
+        let signature = outputOnlyView ? AudioRoute.outputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+                                       : AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
+        let reference = outputOnlyView ? startOutputSignature : startSignature
         var fields = AudioRoute.fields()
-        fields["signatureChanged"] = .bool(signature != startSignature)
+        fields["signatureChanged"] = .bool(signature != reference)
         fields["engineRunning"] = .bool(engine.isRunning)
+        fields["separate"] = .bool(outputOnlyView)
         // The engine only needs rebuilding when it stopped or the devices it uses changed. macOS also posts
         // this notification when it just moves its default device elsewhere.
-        if engine.isRunning, signature == startSignature {
+        if engine.isRunning, signature == reference {
             log.log(.info, .audio, "engine.configChange.ignored", fields)
             return
         }

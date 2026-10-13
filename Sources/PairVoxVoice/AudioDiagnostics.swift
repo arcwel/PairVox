@@ -40,6 +40,18 @@ public enum AudioRoute {
     /// Identifies the devices PairVox would use and their current sample rates. It changes when a pinned
     /// device appears, disappears or renegotiates (a headset switching profile), and NOT when macOS merely
     /// moves its default output somewhere else.
+    /// The input half and the output half of `signature`, for the separate-engines mode where each side
+    /// restarts on its own.
+    public static func inputSignature(inputUID: String?, outputUID: String?) -> String {
+        let r = resolve(inputUID: inputUID, outputUID: outputUID)
+        return r.input.map { "\($0.uid)@\(Int(nominalRate($0.id) ?? 0))" } ?? "-"
+    }
+
+    public static func outputSignature(inputUID: String?, outputUID: String?) -> String {
+        let r = resolve(inputUID: inputUID, outputUID: outputUID)
+        return r.output.map { "\($0.uid)@\(Int(nominalRate($0.id) ?? 0))" } ?? "-"
+    }
+
     public static func signature(inputUID: String?, outputUID: String?) -> String {
         let route = resolve(inputUID: inputUID, outputUID: outputUID)
         func part(_ d: Device?) -> String { d.map { "\($0.uid)@\(Int(nominalRate($0.id) ?? 0))" } ?? "-" }
