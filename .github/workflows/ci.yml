@@ -28,7 +28,9 @@ jobs:
         with:
           xcode-version: latest-stable
       - name: Unit tests
-        run: swift test
+        # The default SwiftPM build system rejects the KokoroSwift/MisakiSwift dynamic products
+        # that both embed MLX; Xcode handles it. See docs/HANDOFF.md §4.
+        run: swift test --build-system native
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Build app (unsigned)

@@ -45,7 +45,7 @@ Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-an
 
 ```bash
 git clone https://github.com/OWNER/pairvox.git && cd pairvox
-make test        # engine unit tests (also run on Linux)
+make test        # engine unit tests (uses --build-system native on macOS; also runs on Linux)
 make app         # builds dist/PairVox.app (ad-hoc signed)
 open dist/PairVox.app
 ```

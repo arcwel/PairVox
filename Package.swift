@@ -50,12 +50,13 @@ var targets: [Target] = [
 dependencies += [
     // Speech-to-text (MIT)
     .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.1.0"),
-    // Kokoro text-to-speech for Apple platforms (MIT; MisakiSwift G2P is Apache-2.0, no espeak-ng)
-    .package(url: "https://github.com/mlalma/kokoro-ios.git", from: "1.0.9"),
+    // Kokoro text-to-speech (MIT; MisakiSwift G2P is Apache-2.0, no espeak-ng).
+    // Pinned exactly: 1.0.11 pins mlx-swift 0.30.2 / MLXUtilsLibrary 0.0.6; newer mlx breaks Kokoro.
+    .package(url: "https://github.com/mlalma/kokoro-ios.git", exact: "1.0.11"),
     // MLX array types used to hold Kokoro voice styles (MIT)
-    .package(url: "https://github.com/ml-explore/mlx-swift", from: "0.29.1"),
+    .package(url: "https://github.com/ml-explore/mlx-swift", exact: "0.30.2"),
     // .npz voice-file reader (Apache-2.0)
-    .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", from: "0.0.6"),
+    .package(url: "https://github.com/mlalma/MLXUtilsLibrary.git", exact: "0.0.6"),
 ]
 
 products += [
