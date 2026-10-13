@@ -36,7 +36,7 @@ PairVox lets you steer an agent that can edit files and run commands, by voice. 
 - PairVox does not sandbox Claude Code. Use Claude Code's own settings (permission rules, sandboxing) for defence in depth.
 - “Auto-approve read-only tools” is off by default and answers only plain read-only tools (never shell commands, never `ExitPlanMode`, never a file that looks sensitive). Reading files can still pull sensitive content into the conversation.
 - Hands-free mode in a shared space is inherently riskier. Prefer push-to-talk there.
-- The risk classifier is heuristic (regular expressions). It errs toward asking for a click, but it is not a security boundary on its own.
+- The risk classifier is heuristic. Since audit run 2 it reads the program and subcommand as well as the text (long flags, `git -p push`, `/usr/bin/sudo`, pipe into an interpreter), but shell grammar is open-ended: it errs toward asking, and a folder shell grant refuses braces, backslashes, quote tricks, `cd` without a target and anything it cannot place. It is still not a security boundary on its own. See `docs/security/2026-10-13-audit-run-2.md`.
 
 ## Reporting
 

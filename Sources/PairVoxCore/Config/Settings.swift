@@ -61,6 +61,14 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var spokenHighRiskConfirmation = false
     /// Explain each permission request in plain words with a small separate Claude call.
     public var explainRequests = true
+    /// Folders the user has let Claude work in without asking. Only PairVox itself writes this list.
+    public var folderGrants: [FolderGrant] = []
+    /// Folders where the user said no to the one-time offer, so it is not repeated.
+    public var declinedGrantFolders: [String] = []
+    /// Projects that were open when PairVox last quit, in order, so they come back.
+    public var openProjects: [String] = []
+    /// Hide the Dock icon and window; PairVox lives in the menu bar (and the small floating window).
+    public var menuBarOnly = false
 
     // Voice
     public var transcriber: TranscriberChoice = .automatic
@@ -150,6 +158,10 @@ public struct AppSettings: Sendable, Codable, Equatable {
         trustProjectConfiguration = (try? c.decode(Bool.self, forKey: .trustProjectConfiguration)) ?? d.trustProjectConfiguration
         spokenHighRiskConfirmation = (try? c.decode(Bool.self, forKey: .spokenHighRiskConfirmation)) ?? d.spokenHighRiskConfirmation
         explainRequests = (try? c.decode(Bool.self, forKey: .explainRequests)) ?? d.explainRequests
+        folderGrants = (try? c.decode([FolderGrant].self, forKey: .folderGrants)) ?? d.folderGrants
+        declinedGrantFolders = (try? c.decode([String].self, forKey: .declinedGrantFolders)) ?? d.declinedGrantFolders
+        openProjects = (try? c.decode([String].self, forKey: .openProjects)) ?? d.openProjects
+        menuBarOnly = (try? c.decode(Bool.self, forKey: .menuBarOnly)) ?? d.menuBarOnly
         transcriber = (try? c.decode(TranscriberChoice.self, forKey: .transcriber)) ?? d.transcriber
         let decodedWhisper = (try? c.decode(String.self, forKey: .whisperModel)) ?? d.whisperModel
         whisperModel = VoiceCatalog.whisperModelIDs.contains(decodedWhisper) ? decodedWhisper : VoiceCatalog.defaultWhisperModel
@@ -172,6 +184,12 @@ public struct AppSettings: Sendable, Codable, Equatable {
 }
 
 /// Loads and saves `AppSettings` as JSON in Application Support.
+extension AppSettings {
+    /// Settings keys whose values name a folder, a project or a person. Kept out of diagnostics and logs.
+    public static let pathBearingKeys: Set<String> = ["recentProjects", "lastProject", "projectPreferences", "pronunciation",
+                                                      "claudePathOverride", "folderGrants", "declinedGrantFolders", "openProjects"]
+}
+
 public struct SettingsStore: Sendable {
     public let url: URL
 
@@ -190,7 +208,14 @@ public struct SettingsStore: Sendable {
               var s = try? JSONDecoder().decode(AppSettings.self, from: data) else { return AppSettings() }
         // A settings file that other users or groups can write, or that another user owns, is not trusted to name
         // the program that receives the API key.
-        if !isPrivateToUser(url) { s.claudePathOverride = nil }
+        // The same goes for every standing consent: a file someone else could write cannot grant access.
+        if !isPrivateToUser(url) {
+            s.claudePathOverride = nil
+            s.folderGrants = []
+            s.trustProjectConfiguration = false
+            s.autoApproveLowRisk = false
+            s.spokenHighRiskConfirmation = false
+        }
         return s
     }
 

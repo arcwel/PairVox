@@ -125,13 +125,14 @@ enum Term {
 
     static func format(_ u: Utterance, elapsed: TimeInterval) -> String {
         let t = String(format: "%6.2fs", elapsed)
+        let text = safe(u.text)   // model- and repository-chosen text never reaches the terminal with control bytes
         switch u.kind {
-        case .prose: return color("2", t) + " 🔊 " + u.text
-        case .code: return color("2", t) + " 🔊 " + color("36", u.text)
-        case .narration: return color("2", t) + " ⚙️  " + color("33", u.text)
-        case .prompt: return color("2", t) + " ❓ " + color("1;35", u.text)
-        case .notice: return color("2", t) + " ℹ️  " + color("34", u.text)
-        case .ack: return color("2", t) + " 💬 " + color("2", u.text)
+        case .prose: return color("2", t) + " 🔊 " + text
+        case .code: return color("2", t) + " 🔊 " + color("36", text)
+        case .narration: return color("2", t) + " ⚙️  " + color("33", text)
+        case .prompt: return color("2", t) + " ❓ " + color("1;35", text)
+        case .notice: return color("2", t) + " ℹ️  " + color("34", text)
+        case .ack: return color("2", t) + " 💬 " + color("2", text)
         }
     }
 }

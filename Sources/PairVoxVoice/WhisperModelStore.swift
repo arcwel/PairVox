@@ -35,7 +35,9 @@ public final class WhisperModelStore: @unchecked Sendable {
         let total = Double(jobs.reduce(0) { $0 + $1.1.bytes })
         var done = 0.0
         for (pin, file, base) in jobs {
-            let dest = base.appendingPathComponent(file.path)
+            guard let dest = Self.destination(for: file.path, under: base) else {
+                throw WhisperModelError.checksumMismatch(file.path)
+            }
             if size(of: dest) == file.bytes, (try? Self.sha256(of: dest)) == file.sha256 {
                 done += Double(file.bytes)
                 continue
@@ -55,6 +57,16 @@ public final class WhisperModelStore: @unchecked Sendable {
         }
         return Folders(model: modelRoot,
                        tokenizer: tokenizerRoot)
+    }
+
+    /// Where a pinned file goes, or nil when its path is absolute, empty, or climbs out of the model folder.
+    static func destination(for path: String, under base: URL) -> URL? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !path.hasPrefix("/"), !parts.isEmpty,
+              !parts.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return nil }
+        let dest = base.appendingPathComponent(path).standardizedFileURL
+        guard dest.path.hasPrefix(base.standardizedFileURL.path + "/") else { return nil }
+        return dest
     }
 
     static func url(_ pin: WhisperPins.Pin, _ file: WhisperPins.File) -> URL {

@@ -10,6 +10,9 @@
 import Foundation
 import PairVoxCore
 
+// One line at a time even when output is piped or redirected, so scripts (and `tee`) see it as it happens.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 struct Options {
     var cwd = FileManager.default.currentDirectoryPath
     var model: String?
@@ -136,7 +139,8 @@ Term.dim("Project: \(opts.cwd) · speech: \(opts.speechMode.spokenName) · mode:
 
 let rawLogHandle: FileHandle? = opts.rawLog.flatMap { path in
     if !FileManager.default.fileExists(atPath: path) {
-        _ = FileManager.default.createFile(atPath: path, contents: nil)
+        // The raw stream holds commands and file contents, so it is private to the user.
+        _ = FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
     }
     let h = FileHandle(forWritingAtPath: path)
     h?.seekToEndOfFile()
@@ -193,7 +197,7 @@ let observer = Task {
             Term.dim("         ⏱  first token \(f(l.firstToken)) · first utterance \(f(l.firstUtterance)) · first audio \(f(l.firstAudio))")
         }
         if let problem = snap.authProblem, snap.phase == .needsSetup {
-            Term.dim("         ⚠️  \(problem.prefix(200))")
+            Term.dim("         ⚠️  \(Term.safe(String(problem.prefix(200))))")
         }
     }
 }

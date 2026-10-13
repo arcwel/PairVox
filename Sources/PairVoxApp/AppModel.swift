@@ -24,8 +24,11 @@ final class AppModel: ObservableObject {
     @Published var settings: AppSettings {
         didSet { settingsChanged(from: oldValue) }
     }
+    /// The snapshot of the project the user is in.
     @Published private(set) var snapshot = EngineSnapshot()
-    @Published private(set) var project: URL?
+    /// Every open project, in the order they were opened.
+    @Published private(set) var sessions: [SessionSummary] = []
+    @Published private(set) var activeSessionID: UUID?
     @Published private(set) var setup = SetupState()
     @Published private(set) var whisperState: TranscriberState = .notLoaded
     @Published private(set) var kokoroStatus: ModelStore.Status = .missing
@@ -46,18 +49,23 @@ final class AppModel: ObservableObject {
 
     let voice: VoiceStack
     private let store = SettingsStore()
-    private var engine: ConversationEngine?
-    private var input: VoiceInputController?
-    private var output: VoiceSpeechOutput?
-    private var snapshotTask: Task<Void, Never>?
+    static let maxOpenProjects = 8
+    private var liveSessions: [UUID: ProjectSession] = [:]
+    private var sessionOrder: [UUID] = []
+    private let inputBox = InputBox()
+    private var input: VoiceInputController? {
+        get { inputBox.input }
+        set { inputBox.input = newValue }
+    }
+    private var activeSession: ProjectSession? { activeSessionID.flatMap { liveSessions[$0] } }
+    private var engine: ConversationEngine? { activeSession?.engine }
+    /// The folder of the project the user is in.
+    var project: URL? { activeSession?.url }
     private var loginEnvironment: [String: String] = ProcessInfo.processInfo.environment
     private let hotKeys = HotKeyCenter()
     private let log = DiagnosticLog.shared
     private var audioTestOutput: VoiceSpeechOutput?
     private let notifier = Notifier()
-    private var notifiedPermissionID: String?
-    private var turnsAtDeactivation = 0
-    private var receivedFirstSnapshot = false
     /// True while copying engine-originated values into settings (don't echo them back).
     private var syncingFromEngine = false
 
@@ -75,6 +83,8 @@ final class AppModel: ObservableObject {
         voice.onWhisperState = { [weak self] s in Task { @MainActor in self?.whisperState = s } }
         voice.onKokoroStatus = { [weak self] s in Task { @MainActor in self?.kokoroStatus = s } }
         Task { await bootstrap() }
+        watchMainWindowClosing()
+        if loaded.menuBarOnly { DispatchQueue.main.async { [weak self] in self?.applyActivationPolicy() } }
     }
 
     // MARK: Startup
@@ -105,8 +115,12 @@ final class AppModel: ObservableObject {
 
         if !setup.claudeFound || setup.microphone != .granted {
             showSetup = true
-        } else if let last = settings.lastProject, FileManager.default.fileExists(atPath: last) {
-            openProject(URL(fileURLWithPath: last))
+        } else {
+            // Bring back the projects that were open, with the one the user was in last.
+            let last = settings.lastProject
+            let others = settings.openProjects.filter { $0 != last && FileManager.default.fileExists(atPath: $0) }
+            for path in others.prefix(Self.maxOpenProjects - 1) { openProject(URL(fileURLWithPath: path)) }
+            if let last, FileManager.default.fileExists(atPath: last) { openProject(URL(fileURLWithPath: last)) }
         }
     }
 
@@ -140,12 +154,19 @@ final class AppModel: ObservableObject {
     }
 
     func openProject(_ url: URL) {
-        closeSession()
+        let resolved = FolderScope.resolved(url.path)
+        if let existing = sessionOrder.compactMap({ liveSessions[$0] }).first(where: { FolderScope.resolved($0.url.path) == resolved }) {
+            switchTo(existing.id)
+            return
+        }
+        guard sessionOrder.count < Self.maxOpenProjects else {
+            errorMessage = "Eight projects are open. Close one from the project list before opening another."
+            return
+        }
         guard let path = setup.claudePath else {
             showSetup = true
             return
         }
-        project = url
         settings.noteProjectOpened(url.path)
 
         let auth: AuthMode
@@ -170,25 +191,74 @@ final class AppModel: ObservableObject {
         let advisor = ClaudeAdvisor(executable: URL(fileURLWithPath: path), workingDirectory: url, auth: auth,
                                     baseEnvironment: loginEnvironment)
         advisorAvailable = true
-        let output = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
+        let voiceOutput = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
+        // Silent until the user is in this project: only the active project may use the speakers.
+        let gate = GatedSpeechOutput(inner: voiceOutput, active: false)
         let engine = ConversationEngine(configuration: EngineConfiguration(settings: settings, project: projectPath),
-                                        authKind: auth.kind, output: output, advisor: advisor) { resume in
+                                        authKind: auth.kind, output: gate, advisor: advisor) { resume in
             var cfg = launch
             cfg.resumeSessionID = resume
             return ClaudeCLISession(configuration: cfg)
         }
-        let input = VoiceInputController(audio: voice.audio, transcriber: voice.transcriber, engine: engine,
-                                         endSilence: settings.endOfTurnSilence)
-        input.setBargeInEnabled(settings.bargeInEnabled)
-        input.setMode(listeningMode)
-        input.onLevel = { [weak self] level in Task { @MainActor in self?.inputLevel = level } }
-        input.onError = { [weak self] msg in Task { @MainActor in self?.errorMessage = msg } }
-        output.onPlaybackActiveChange = { [weak input] active in input?.setPlaybackActive(active) }
+        let session = ProjectSession(url: url, engine: engine, gate: gate)
+        let box = inputBox
+        voiceOutput.onPlaybackActiveChange = { [weak gate] active in
+            if gate?.isActive == true || !active { box.input?.setPlaybackActive(active) }
+        }
 
-        self.output = output
-        self.engine = engine
-        self.input = input
+        if input == nil {
+            let input = VoiceInputController(audio: voice.audio, transcriber: voice.transcriber, engine: engine,
+                                             endSilence: settings.endOfTurnSilence)
+            input.setBargeInEnabled(settings.bargeInEnabled)
+            input.setMode(listeningMode)
+            input.onLevel = { [weak self] level in Task { @MainActor in self?.inputLevel = level } }
+            input.onError = { [weak self] msg in Task { @MainActor in self?.errorMessage = msg } }
+            self.input = input
+            configureAudioCallbacks()
+        } else if sessionOrder.isEmpty {
+            input?.setMode(listeningMode)   // it was muted when the last project closed
+        }
 
+        liveSessions[session.id] = session
+        sessionOrder.append(session.id)
+        if !voice.audio.isRunning { startAudio() }
+
+        session.snapshotTask = Task { [weak self] in
+            for await snap in engine.snapshots {
+                self?.receive(snap, from: session)
+            }
+        }
+        Task {
+            await engine.setGrantHandler { [weak self] change in Task { @MainActor in self?.applyGrantChange(change) } }
+            await engine.setProjectSwitchHandler { [weak self] name in
+                await MainActor.run { self?.switchToProject(named: name) ?? false }
+            }
+            await engine.start()
+            // Offer standing access once per project, after the greeting has had time to play.
+            let folder = FolderScope.resolved(projectPath)
+            let alreadyDecided = await MainActor.run {
+                self.settings.folderGrants.contains { $0.path == folder } || self.settings.declinedGrantFolders.contains(folder)
+            }
+            if !alreadyDecided {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                await engine.offerFolderGrant()
+            }
+        }
+
+        // Bias speech recognition toward this project's names.
+        let extra = settings.preferences(for: projectPath).vocabulary
+        Task.detached(priority: .utility) { [weak self] in
+            let words = extra + RepoVocabulary.scan(root: url)
+            await MainActor.run {
+                session.vocabulary = words
+                if self?.activeSessionID == session.id { self?.input?.setVocabulary(words) }
+            }
+        }
+
+        switchTo(session.id)
+    }
+
+    private func configureAudioCallbacks() {
         voice.audio.onCaptureAvailabilityChange = { [weak self] captured in
             Task { @MainActor in
                 guard let self else { return }
@@ -211,22 +281,86 @@ final class AppModel: ObservableObject {
                 self.errorMessage = "PairVox can't play sound: the audio engine isn't running. Check the output device, then reopen the project."
             }
         }
-        startAudio()
+    }
 
-        snapshotTask = Task { [weak self] in
-            for await snap in engine.snapshots {
-                self?.receive(snap)
+    // MARK: Switching between projects
+
+    /// Moves the conversation to another open project. The one left goes quiet and keeps a list of what Claude says;
+    /// the one entered offers to catch the user up on anything missed.
+    func switchTo(_ id: UUID) {
+        guard id != activeSessionID, let next = liveSessions[id] else { return }
+        if let previous = activeSession {
+            previous.gate.setActive(false)
+            let engine = previous.engine
+            Task { await engine.setActive(false) }
+        }
+        activeSessionID = id
+        snapshot = next.snapshot
+        input?.setEngine(next.engine)
+        input?.setVocabulary(next.vocabulary)
+        next.gate.setActive(true)
+        let engine = next.engine
+        Task { await engine.setActive(true) }
+        settings.noteProjectOpened(next.url.path)
+        refreshSessions()
+        log.log(.info, .app, "project.switched", ["open": .int(sessionOrder.count)])
+    }
+
+    /// "Switch to <name>": true if the name picked out exactly one open project.
+    func switchToProject(named name: String) -> Bool {
+        let ordered = sessionOrder.compactMap { liveSessions[$0] }
+        guard let i = ProjectMatcher.match(name, in: ordered.map(\.name)) else { return false }
+        switchTo(ordered[i].id)
+        return true
+    }
+
+    func switchToProject(at index: Int) {
+        guard sessionOrder.indices.contains(index) else { return }
+        switchTo(sessionOrder[index])
+    }
+
+    func switchToNextProject(_ step: Int = 1) {
+        guard sessionOrder.count > 1, let active = activeSessionID, let i = sessionOrder.firstIndex(of: active) else { return }
+        switchTo(sessionOrder[(i + step + sessionOrder.count) % sessionOrder.count])
+    }
+
+    func closeProject(_ id: UUID) {
+        guard let session = liveSessions[id] else { return }
+        let wasActive = id == activeSessionID
+        session.snapshotTask?.cancel()
+        session.gate.setActive(false)
+        let engine = session.engine
+        Task { await engine.shutdown() }
+        liveSessions.removeValue(forKey: id)
+        sessionOrder.removeAll { $0 == id }
+        if wasActive {
+            activeSessionID = nil
+            snapshot = EngineSnapshot()
+            if let next = sessionOrder.last {
+                switchTo(next)
+            } else {
+                input?.setMode(.muted)
             }
         }
-        Task { await engine.start() }
+        refreshSessions()
+    }
 
-        // Bias speech recognition toward this project's names.
-        let extra = settings.preferences(for: projectPath).vocabulary
-        Task.detached(priority: .utility) { [weak input] in
-            let words = extra + RepoVocabulary.scan(root: url)
-            input?.setVocabulary(words)
+    private func refreshSessions() {
+        let open = sessionOrder.compactMap { liveSessions[$0]?.url.path }
+        if settings.openProjects != open { settings.openProjects = open }
+        sessions = sessionOrder.compactMap { id in
+            guard let s = liveSessions[id] else { return nil }
+            let snap = id == activeSessionID ? snapshot : s.snapshot
+            return SessionSummary(id: id, name: s.name, path: s.url.path, phase: snap.phase,
+                                  needsAttention: snap.pendingPermission != nil || snap.grantOffer != nil,
+                                  missedCount: snap.missedMessages.count, isActive: id == activeSessionID)
         }
     }
+
+    // MARK: Catch-up after switching
+
+    /// "Play from the first missed message", "Play the last message" or "Skip".
+    func catchUp(_ choice: CatchUpChoice) { Task { await engine?.resolveCatchUp(choice) } }
 
     /// Starts audio. Playback always starts so replies are spoken; capture starts only with microphone
     /// permission and a microphone. Without permission the engine's own error (a bare CoreAudio code)
@@ -292,6 +426,39 @@ final class AppModel: ObservableObject {
 
     func focusInputField() { focusInputTick += 1 }
 
+    // MARK: Menu bar only
+
+    /// Shows the main window. In menu-bar-only mode the Dock icon comes back for as long as the window is open.
+    func showMainWindow(open: () -> Void) {
+        if settings.menuBarOnly { NSApp.setActivationPolicy(.regular) }
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain && $0.identifier?.rawValue.contains("main") == true })
+            ?? NSApp.windows.first(where: { $0.canBecomeMain && $0.title == "PairVox" }) {
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            open()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func applyActivationPolicy() {
+        NSApp.setActivationPolicy(settings.menuBarOnly ? .accessory : .regular)
+        if settings.menuBarOnly {
+            for window in NSApp.windows where window.canBecomeMain { window.close() }
+        }
+    }
+
+    private func watchMainWindowClosing() {
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] note in
+            guard let self, let closing = note.object as? NSWindow, closing.canBecomeMain else { return }
+            Task { @MainActor in
+                // Back to a menu-bar app once the last full window is gone.
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                let anyMain = NSApp.windows.contains { $0.canBecomeMain && $0.isVisible && $0 !== closing }
+                if self.settings.menuBarOnly, !anyMain { NSApp.setActivationPolicy(.accessory) }
+            }
+        }
+    }
+
     /// Keyboard approval is never offered for high-risk requests: those need a click on the card.
     var canApproveWithKeyboard: Bool {
         guard let pending = snapshot.pendingPermission else { return false }
@@ -319,7 +486,7 @@ final class AppModel: ObservableObject {
 
     /// Setting names and values, minus anything that names a place or a person.
     private func logSettingChanges(from old: AppSettings) {
-        let skip: Set<String> = ["recentProjects", "lastProject", "projectPreferences", "pronunciation", "claudePathOverride"]
+        let skip = AppSettings.pathBearingKeys
         func dict(_ s: AppSettings) -> [String: Any] {
             (try? JSONEncoder().encode(s)).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] } ?? [:]
         }
@@ -389,23 +556,25 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Closes the project the user is in.
     func closeSession() {
-        snapshotTask?.cancel()
-        snapshotTask = nil
-        // Stop this session's audio now, not later from a background task that
-        // could cut off the next session's speech on the shared audio engine.
-        output?.stopAll()
-        if let engine { Task { await engine.shutdown() } }
-        input?.setMode(.muted)
-        engine = nil
-        input = nil
-        output = nil
-        snapshot = EngineSnapshot()
-        receivedFirstSnapshot = false
+        if let id = activeSessionID { closeProject(id) }
     }
 
+    /// Starts the current project over with a fresh Claude Code process (after a change that needs one).
     func restartSession() {
-        if let project { openProject(project) }
+        guard let url = project else { return }
+        closeSession()
+        openProject(url)
+    }
+
+    /// Starts every open project over, for a change that affects all of them (account, trusted project config).
+    private func restartAllSessions() {
+        let urls = sessionOrder.compactMap { liveSessions[$0]?.url }
+        let active = project
+        for id in sessionOrder { closeProject(id) }
+        for url in urls where url != active { openProject(url) }
+        if let active { openProject(active) }
     }
 
     // MARK: Conversation actions
@@ -421,16 +590,62 @@ final class AppModel: ObservableObject {
     }
 
     /// Approves the request that was on screen when the button was pressed; if it has changed since, nothing happens.
+    // MARK: Folder access
+
+    private func applyGrantChange(_ change: FolderGrantChange) {
+        switch change {
+        case .granted(let path, let shell):
+            if let i = settings.folderGrants.firstIndex(where: { $0.path == path }) {
+                if shell { settings.folderGrants[i].allowShell = true }
+            } else {
+                settings.folderGrants.append(FolderGrant(path: path, allowShell: false))
+            }
+            settings.declinedGrantFolders.removeAll { $0 == path }
+        case .declined(let path):
+            if !settings.declinedGrantFolders.contains(path) { settings.declinedGrantFolders.append(path) }
+        }
+    }
+
+    func answerGrantOffer(yes: Bool) { Task { await engine?.answerGrantOffer(yes: yes) } }
+    func dismissGrantOffer() { Task { await engine?.dismissGrantOffer() } }
+
+    /// Takes access back at once; the running session stops skipping prompts immediately.
+    func removeGrant(_ path: String) {
+        settings.folderGrants.removeAll { $0.path == path }
+        settings.declinedGrantFolders.removeAll { $0 == path }
+    }
+
+    func removeAllGrants() { settings.folderGrants.removeAll() }
+
+    func turnOffShell(for path: String) {
+        if let i = settings.folderGrants.firstIndex(where: { $0.path == path }) { settings.folderGrants[i].allowShell = false }
+    }
+
+    /// Shell access is turned on only through the spoken-or-clicked double confirmation, never by a plain switch.
+    func requestShellGrant(for path: String) {
+        guard let project, FolderScope.resolved(project.path) == path else {
+            errorMessage = "Open that project first, then turn on shell commands for it."
+            return
+        }
+        Task { await engine?.offerFolderGrant(shell: true) }
+    }
+
     func ask(_ question: String) { Task { await engine?.askAboutPending(question) } }
 
     /// Requests waiting behind the one shown (plus the one shown) that can be allowed together.
     var approvableWaitingCount: Int {
-        ([snapshot.pendingPermission].compactMap { $0 } + snapshot.queuedPermissions).filter(\.assessment.voiceApprovable).count
+        waitingForBulkApproval.count
+    }
+
+    /// Only requests whose whole text and reasons fit the list are approved together; the rest are reviewed one by one.
+    private var waitingForBulkApproval: [PendingPermission] {
+        ([snapshot.pendingPermission].compactMap { $0 } + snapshot.queuedPermissions)
+            .filter { $0.assessment.voiceApprovable && $0.assessment.fitsCompactSurface }
     }
 
     /// Allows exactly the requests listed on screen right now, skipping high-risk ones.
     func approveAllWaiting() {
-        let ids = ([snapshot.pendingPermission].compactMap { $0 } + snapshot.queuedPermissions).map(\.request.requestID)
+        let ids = waitingForBulkApproval.map(\.request.requestID)
         Task { await engine?.approveAllWaiting(requestIDs: ids) }
     }
 
@@ -494,7 +709,7 @@ final class AppModel: ObservableObject {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         hasAPIKey = KeychainStore.saveAPIKey(trimmed)
-        if settings.authKind == .apiKey { restartSession() }
+        if settings.authKind == .apiKey, !sessionOrder.isEmpty { restartAllSessions() }
     }
 
     func removeAPIKey() {
@@ -555,34 +770,48 @@ final class AppModel: ObservableObject {
 
     // MARK: Internals
 
-    private func receive(_ snap: EngineSnapshot) {
-        let previous = snapshot
-        snapshot = snap
-        // Voice commands ("faster", "summary mode") change these inside the engine;
-        // mirror them into settings (but not the engine's initial per-project values).
-        if receivedFirstSnapshot {
-            syncingFromEngine = true
-            if abs(snap.speechRate - settings.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
-            if snap.speechMode != settings.speechMode { settings.speechMode = snap.speechMode }
-            if snap.conversationMode != settings.conversationMode { settings.conversationMode = snap.conversationMode }
-            syncingFromEngine = false
-        }
-        receivedFirstSnapshot = true
-        if snap.phase == .needsSetup && previous.phase != .needsSetup { showSetup = true }
-
-        // Background notifications.
-        if !NSApp.isActive {
-            if let p = snap.pendingPermission, p.request.requestID != notifiedPermissionID {
-                notifiedPermissionID = p.request.requestID
-                notifier.post(title: "Claude needs your OK", body: p.assessment.summary, id: p.request.requestID)
+    private func receive(_ snap: EngineSnapshot, from session: ProjectSession) {
+        guard liveSessions[session.id] != nil else { return }
+        let previous = session.snapshot
+        session.snapshot = snap
+        let isActive = session.id == activeSessionID
+        if isActive {
+            snapshot = snap
+            // Voice commands ("faster", "summary mode") change these inside the engine;
+            // mirror them into settings (but not the engine's initial per-project values).
+            if session.receivedFirstSnapshot {
+                syncingFromEngine = true
+                if abs(snap.speechRate - settings.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
+                if snap.speechMode != settings.speechMode { settings.speechMode = snap.speechMode }
+                if snap.conversationMode != settings.conversationMode { settings.conversationMode = snap.conversationMode }
+                syncingFromEngine = false
             }
-            if previous.isClaudeWorking && !snap.isClaudeWorking && snap.usage.turns > turnsAtDeactivation {
+            session.receivedFirstSnapshot = true
+            if snap.phase == .needsSetup && previous.phase != .needsSetup { showSetup = true }
+        }
+
+        // Notifications: anything in a project the user is not looking at, and everything while PairVox is in the background.
+        let watching = isActive && NSApp.isActive
+        if !watching {
+            let prefix = sessionOrder.count > 1 ? "\(session.name): " : ""
+            if let p = snap.pendingPermission, p.request.requestID != session.notifiedPermissionID {
+                session.notifiedPermissionID = p.request.requestID
+                notifier.post(title: "\(prefix)Claude needs your OK", body: p.assessment.summary, id: p.request.requestID)
+            }
+            if previous.isClaudeWorking && !snap.isClaudeWorking && snap.usage.turns > session.turnsAtLastNotification {
                 let last = snap.transcript.last { $0.role == .assistant }?.text ?? "Done."
-                notifier.post(title: "Claude finished", body: String(last.prefix(140)))
+                notifier.post(title: "\(prefix)Claude finished", body: String(last.prefix(140)))
             }
         } else {
-            turnsAtDeactivation = snap.usage.turns
+            session.turnsAtLastNotification = snap.usage.turns
         }
+        refreshSessions()
+    }
+
+    /// Applies a setting to every open project's engine, not just the one the user is in.
+    private func broadcast(_ body: @escaping @Sendable (ConversationEngine) async -> Void) {
+        let engines = sessionOrder.compactMap { liveSessions[$0]?.engine }
+        Task { for engine in engines { await body(engine) } }
     }
 
     private func settingsChanged(from old: AppSettings) {
@@ -612,34 +841,39 @@ final class AppModel: ObservableObject {
         input?.setEndSilence(settings.endOfTurnSilence)
         if !syncingFromEngine, old.speechRate != settings.speechRate {
             let rate = settings.speechRate
-            Task { await engine?.setSpeechRate(rate) }
+            broadcast { await $0.setSpeechRate(rate) }
         }
         if !syncingFromEngine, old.speechMode != settings.speechMode {
             let mode = settings.speechMode
-            Task { await engine?.setSpeechMode(mode) }
+            broadcast { await $0.setSpeechMode(mode) }
+        }
+        if old.folderGrants != settings.folderGrants {
+            let grants = settings.folderGrants
+            broadcast { await $0.setFolderGrants(grants) }
         }
         if old.explainRequests != settings.explainRequests {
             let on = settings.explainRequests
-            Task { await engine?.setExplainRequests(on) }
+            broadcast { await $0.setExplainRequests(on) }
         }
         if old.spokenHighRiskConfirmation != settings.spokenHighRiskConfirmation {
             let on = settings.spokenHighRiskConfirmation
-            Task { await engine?.setSpokenHighRiskConfirmation(on) }
+            broadcast { await $0.setSpokenHighRiskConfirmation(on) }
         }
         if old.autoApproveLowRisk != settings.autoApproveLowRisk {
             let on = settings.autoApproveLowRisk
-            Task { await engine?.setAutoApproveLowRisk(on) }
+            broadcast { await $0.setAutoApproveLowRisk(on) }
         }
-        if old.trustProjectConfiguration != settings.trustProjectConfiguration, project != nil {
-            restartSession()
+        if old.trustProjectConfiguration != settings.trustProjectConfiguration, !sessionOrder.isEmpty {
+            restartAllSessions()
         }
+        if old.menuBarOnly != settings.menuBarOnly { applyActivationPolicy() }
         if old.verbosity != settings.verbosity {
             let v = settings.verbosity
-            Task { await engine?.setVerbosity(v) }
+            broadcast { await $0.setVerbosity(v) }
         }
         if old.pronunciation != settings.pronunciation {
             let dict = settings.pronunciation
-            Task { await engine?.setPronunciation(dict) }
+            broadcast { await $0.setPronunciation(dict) }
         }
         if old.whisperModel != settings.whisperModel || (old.transcriber == .apple && settings.transcriber != .apple) {
             reloadWhisper()
@@ -649,7 +883,7 @@ final class AppModel: ObservableObject {
             Task { await refreshSetup() }
         }
         // Auth changes need a fresh process.
-        if old.authKind != settings.authKind { restartSession() }
+        if old.authKind != settings.authKind, !sessionOrder.isEmpty { restartAllSessions() }
     }
 
     var statusLine: String {

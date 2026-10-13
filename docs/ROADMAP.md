@@ -43,12 +43,12 @@ Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13
 
 ### Mini mode and menu bar
 
-- [ ] A small always-on-top mini window that shows only that voice is active (listening, thinking, speaking) and offers mute and stop.
-- [ ] A menu-bar-only mode with the same status and controls, no main window. The v0.3 companion reuses it.
+- [x] A small always-on-top mini window that shows only that voice is active (listening, thinking, speaking) and offers mute and stop.
+- [x] A menu-bar-only mode with the same status and controls, no main window. The v0.3 companion reuses it.
 
 ### Approvals you can understand and question
 
-- [x] **Approve all** for the prompts currently waiting, in one action, with the list shown first. (Card button; skips high-risk and screen-only requests; voice version still to do.)
+- [x] **Approve all** for the prompts currently waiting, in one action, with the list shown first. (Card button, and by voice: "allow all" reads the list and the high-risk count first, a second "allow all" allows only what was read; skips high-risk and screen-only requests.)
 - [x] **Plain-language summary** of every request ("Claude wants to rename 3 files in `src/`") shown and spoken in place of the raw command. The exact command stays one tap away.
   - The summary must be derived from the normalized tool input, never from Claude's own `description` field (audit lead: spoken prompt uses model description).
   - The card must show the full command, not a 6-line cut-off.
@@ -60,24 +60,26 @@ Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13
 
 ### Folder-level approvals
 
-- [ ] Prompt once per project: "This project works in `~/Documents/project/x`. Allow Claude to edit all files within it?" Granting skips the per-request prompt for edits inside that folder and passes them straight to Claude.
-- [ ] **Double confirmation** to grant, with the exact folder path and what is and is not covered. The first time a grant is approved by voice, PairVox asks twice, and the second ask repeats the path and scope back.
-- [ ] **Shell commands are a separate toggle**, off by default, per folder grant. Turning it on needs its own double confirmation, and the user can switch it on or off at any time without removing the file-edit grant.
+- [x] Prompt once per project: "This project works in `~/Documents/project/x`. Allow Claude to edit all files within it?" Granting skips the per-request prompt for edits inside that folder and passes them straight to Claude.
+- [x] **Double confirmation** to grant, with the exact folder path and what is and is not covered. The first time a grant is approved by voice, PairVox asks twice, and the second ask repeats the path and scope back.
+- [x] **Shell commands are a separate toggle**, off by default, per folder grant. Turning it on needs its own double confirmation, and the user can switch it on or off at any time without removing the file-edit grant.
   - With it on, shell commands run with that folder as the working directory skip the per-request prompt.
   - Commands that reach outside the folder (absolute paths elsewhere, `cd ..`, network downloads piped to a shell) are not covered and still prompt. This relies on a stricter command check than the current denylist (audit lead: risk classifier defaults to low), so that check ships first.
-- [ ] Grants listed in Settings, each removable, with when it was granted and whether shell commands are on.
-- [ ] Scope limits, decided with the audit in mind:
+- [x] Grants listed in Settings, each removable, with when it was granted and whether shell commands are on.
+- [x] Scope limits, decided with the audit in mind:
   - file-edit grants cover the resolved folder only (symlinks resolved), not other folders
   - high-risk requests still need an explicit confirmation, even inside a granted folder. A confirmation can be a click or a deliberate spoken one: PairVox reads the plain-language summary back and requires a specific confirm phrase, not a casual "yes". Today high-risk requests cannot be approved by voice at all, so this changes the policy.
   - **Spoken confirmation is a settings toggle.** On: the user may confirm high-risk requests by voice. Off (the safer default): the user must click the button when prompted, and voice cannot approve them. The toggle applies to high-risk requests only; the lower-risk voice approvals keep their own behavior. The toggle is off by default. When it is on, the user has accepted that PairVox's own speech picked up by the microphone can satisfy the confirmation (audit lead: own TTS echo accepted as approval), so no echo filtering is required on that path. The setting's description must say this plainly, and the click path stays available either way.
   - grants are stored by resolved path, are not shared across projects, and never come from repo-supplied config (audit lead: repo config bypass)
+  - Built: `FolderGrant` list in settings only; two-step offer by voice or banner; shell is a separate per-folder switch that asks twice; Settings shows when each was granted and removes it live. Edits are checked on fully resolved paths (a link inside the folder that leads elsewhere does not count). The shell check is a deliberately narrow heuristic: variables, command substitution, inline code, network, installs, absolute or `..` paths outside the folder, and sensitive files all still ask. Covered by `FolderGrantTests`.
 
 ### Multiple projects at once
 
-- [ ] Several projects open in one window, with a side menu of projects instead of one project per window.
-- [ ] Each project keeps its own session, mode, permission state and transcript.
-- [ ] **Switching with updates waiting.** If Claude has output in another project, the side menu marks it, and on switching the user gets audio controls: play from the first missed message, play the last message only, or skip. Choosing one makes that project the active conversation, and voice input goes to it.
-- [ ] Background projects do not speak on their own. They queue and notify.
+- [x] Several projects open in one window, with a side menu of projects instead of one project per window.
+- [x] Each project keeps its own session, mode, permission state and transcript.
+- [x] **Switching with updates waiting.** If Claude has output in another project, the side menu marks it, and on switching the user gets audio controls: play from the first missed message, play the last message only, or skip. Choosing one makes that project the active conversation, and voice input goes to it.
+- [x] Background projects do not speak on their own. They queue and notify.
+  - Built: one `claude` process and engine per project (up to 8), a project list that appears with the second project and shows NEEDS OK / N NEW / WORKING, ⌘⌥1–9 and ⌘⌥[ ⌘⌥] to switch, "switch to project <name>" by voice (unambiguous matches only), open projects restored at launch. A `GatedSpeechOutput` per project keeps background projects silent. The one you left stops speaking at once and its replies are listed; on return a bar offers *Play from the first*, *Play the last one* or *Skip* (or say "catch me up", "play the last one", "skip"), then re-asks any request still waiting. Background projects raise notifications for requests and finished turns. Covered by `CatchUpTests` and `GatedSpeechOutputTests`.
 
 ## v0.3: iPhone client
 

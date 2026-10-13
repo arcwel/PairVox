@@ -68,6 +68,39 @@ private struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Windows") {
+                Toggle("Menu bar only (no Dock icon or main window)", isOn: $model.settings.menuBarOnly)
+                Text("PairVox lives in the menu bar. Use “Show Mini Window” for a small always-on-top status window, or “Show PairVox” to bring the full window back while you need it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Folder access") {
+                if model.settings.folderGrants.isEmpty {
+                    Text("No folders yet. When you open a project, PairVox asks once whether Claude may edit its files without asking each time. Nothing a repository contains can add to this list.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(model.settings.folderGrants) { grant in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(grant.path).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Button("Remove", role: .destructive) { model.removeGrant(grant.path) }
+                        }
+                        Text("Edits allowed since \(grant.grantedAt.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Toggle("Also run shell commands in this folder without asking", isOn: Binding(
+                            get: { grant.allowShell },
+                            set: { on in on ? model.requestShellGrant(for: grant.path) : model.turnOffShell(for: grant.path) }))
+                        .font(.callout)
+                    }
+                }
+                if !model.settings.folderGrants.isEmpty {
+                    Button("Remove all folder access", role: .destructive) { model.removeAllGrants() }
+                }
+                Text("Edits are limited to files inside the folder (links that lead outside don't count). Shell commands are a separate switch: turning it on asks you to confirm twice, and commands that reach outside the folder, use the network, install things or run inline code still ask. High-risk requests always ask.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Permissions") {
                 Toggle("Auto-approve read-only tools (Read, Grep, Glob, search)", isOn: $model.settings.autoApproveLowRisk)
                 Text("High-risk actions (deleting files, pushing, sudo, edits outside the project) always need a click, never just a spoken “yes”.")

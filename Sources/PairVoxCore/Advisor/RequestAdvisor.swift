@@ -51,14 +51,21 @@ public enum AdvisorPrompt {
 
     static let maxInputCharacters = 6_000
 
+    /// The text with the fence markers broken, so data cannot close the fence early and speak as the instructions.
+    static func fenceSafe(_ text: String) -> String {
+        text.replacingOccurrences(of: "<<<", with: "< < <").replacingOccurrences(of: ">>>", with: "> > >")
+    }
+
     static func requestBlock(_ request: PermissionRequest, assessment: PermissionAssessment, project: String?) -> String {
         let input = (try? request.input.serialized()).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        let clipped = input.count > maxInputCharacters ? String(input.prefix(maxInputCharacters)) + " …(cut)" : input
+        let clipped = fenceSafe(input.count > maxInputCharacters ? String(input.prefix(maxInputCharacters)) + " …(cut)" : input)
+        // Everything a repository can influence (the tool name, the reasons Claude Code gave, the path) sits inside the fence.
+        let reasons = assessment.reasons.isEmpty ? "" : " (" + fenceSafe(assessment.reasons.joined(separator: "; ")) + ")"
         return """
-            Project folder: \(project ?? "unknown")
-            Tool: \(request.toolName)
-            PairVox risk rating: \(assessment.risk) \(assessment.reasons.isEmpty ? "" : "(" + assessment.reasons.joined(separator: "; ") + ")")
             <<<ACTION DATA
+            Project folder: \(fenceSafe(project ?? "unknown"))
+            Tool: \(fenceSafe(request.toolName))
+            PairVox risk rating: \(assessment.risk)\(reasons)
             \(clipped)
             ACTION DATA>>>
             """

@@ -60,3 +60,13 @@ final class WhisperPinTests: XCTestCase {
         _ = try await kit.transcribe(audioArray: silence)
     }
 }
+
+final class WhisperDestinationTests: XCTestCase {
+    func testPinnedPathsCannotLeaveTheModelFolder() {
+        let base = URL(fileURLWithPath: "/tmp/models/base/model")
+        XCTAssertNotNil(WhisperModelStore.destination(for: "AudioEncoder.mlmodelc/weights/weight.bin", under: base))
+        for bad in ["../x", "a/../../x", "/etc/passwd", "", "a//b", "./a", "a/."] {
+            XCTAssertNil(WhisperModelStore.destination(for: bad, under: base), bad)
+        }
+    }
+}

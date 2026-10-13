@@ -31,6 +31,12 @@ public enum VoiceCommand: Sendable, Equatable {
     case confirmHighRisk
     /// "explain": hear the plain-words explanation of the request on screen.
     case explain
+    /// "Catch me up", "play the last one", "skip" after coming back to a project with missed replies.
+    case catchUp(CatchUpChoice)
+    /// "switch to project <name>": move the conversation to another open project.
+    case switchProject(String)
+    /// "allow all" with several requests waiting: read them out first, then allow on a second "allow all".
+    case approveAllWaiting
     case deny
     case newSession
     case faster
@@ -45,9 +51,14 @@ public enum VoiceCommand: Sendable, Equatable {
         public var hasHeldBack: Bool
         /// A high-risk request is waiting and the user allows confirming those by voice.
         public var awaitingHighRiskConfirmation: Bool
+        public var awaitingCatchUpChoice: Bool
+        public var hasQueuedRequests: Bool
 
         public init(awaitingPermission: Bool = false, claudeIsWorking: Bool = false, hasHeldBack: Bool = false,
-                    awaitingHighRiskConfirmation: Bool = false) {
+                    awaitingHighRiskConfirmation: Bool = false, awaitingCatchUpChoice: Bool = false,
+                    hasQueuedRequests: Bool = false) {
+            self.awaitingCatchUpChoice = awaitingCatchUpChoice
+            self.hasQueuedRequests = hasQueuedRequests
             self.awaitingPermission = awaitingPermission
             self.claudeIsWorking = claudeIsWorking
             self.hasHeldBack = hasHeldBack
@@ -65,6 +76,20 @@ public enum VoiceCommand: Sendable, Equatable {
         let core = strip(phrase, prefixes: ["hey pairvox ", "pairvox ", "okay ", "ok ", "please ", "um ", "uh "],
                          suffixes: [" please", " thanks", " thank you"])
 
+        if context.awaitingCatchUpChoice {
+            if ["catch me up", "play from the first", "play from the start", "play from the beginning", "play them all", "play all",
+                "from the first", "play from the first one", "play everything"].contains(core) { return .catchUp(.fromFirstMissed) }
+            if ["play the last one", "play the last message", "last message", "play last", "play the latest", "play the last",
+                "the last one", "latest"].contains(core) { return .catchUp(.lastMessage) }
+            if ["skip", "skip it", "skip them", "skip all", "no", "no thanks", "not now", "never mind", "ignore"].contains(core) {
+                return .catchUp(.skip)
+            }
+        }
+        if context.awaitingPermission, context.hasQueuedRequests,
+           ["allow all", "approve all", "allow them all", "approve them all", "allow everything", "yes to all", "allow all of them",
+            "approve all of them", "yes allow all", "yes approve all"].contains(core) {
+            return .approveAllWaiting
+        }
         if context.awaitingPermission, context.awaitingHighRiskConfirmation, isHighRiskConfirmation(core) {
             return .confirmHighRisk
         }
@@ -113,6 +138,10 @@ public enum VoiceCommand: Sendable, Equatable {
         case "slower", "speak slower", "talk slower", "slow down":
             return .slower
         default:
+            for prefix in ["switch to project ", "switch project to ", "go to project ", "switch to "] where core.hasPrefix(prefix) {
+                let name = String(core.dropFirst(prefix.count))
+                if !name.isEmpty { return .switchProject(name) }
+            }
             return nil
         }
     }
@@ -127,12 +156,18 @@ public enum VoiceCommand: Sendable, Equatable {
     static let approvePhrases: Set<String> = ["go ahead", "do it", "go for it", "sounds good", "looks good", "ship it",
                                               "allow it", "allow once", "make it so", "please do"]
     static let denyWords: Set<String> = ["no", "nope", "nah", "deny", "denied", "don't", "dont", "not", "reject",
-                                         "cancel", "stop", "never"]
+                                         "cancel", "stop", "never", "cannot", "decline", "declined", "refuse", "negative",
+                                         "wait", "hold"]
+
+    /// A refusal word, including any negating contraction ("can't", "wouldn't", "won't").
+    static func isRefusal(_ word: String) -> Bool {
+        denyWords.contains(word) || word.hasSuffix("n't") || word == "won't" || word == "cant" || word == "wont"
+    }
 
     /// The phrase PairVox asks for. It is deliberately not a casual "yes", and any refusal word cancels it.
     static func isHighRiskConfirmation(_ core: String) -> Bool {
         let words = core.split(separator: " ").map(String.init)
-        guard core.contains("confirm high risk"), !words.contains(where: denyWords.contains) else { return false }
+        guard core.contains("confirm high risk"), !words.contains(where: isRefusal) else { return false }
         return words.count <= 5
     }
 
@@ -140,19 +175,19 @@ public enum VoiceCommand: Sendable, Equatable {
     static func permissionAnswer(_ core: String) -> VoiceCommand? {
         let words = core.split(separator: " ").map(String.init)
         guard !words.isEmpty, words.count <= 5 else { return nil }
-        if words.contains(where: denyWords.contains) {
+        if words.contains(where: isRefusal) {
             // "no" and friends win over any approving word, including "always allow" and "ask again":
             // "don't always allow" and "never ask again" are refusals, and a misheard refusal fails safe.
             return words.count <= 4 ? .deny : nil
         }
-        if core.contains("ask again") || core.contains("always allow") || core.contains("allow always")
+        if core.contains("always allow") || core.contains("allow always")
             || core == "always" || core == "yes always" {
             return .approveAlways
         }
         let approving = words.contains(where: approveWords.contains)
             || approvePhrases.contains { core.contains($0) }
         guard approving else { return nil }
-        if words.contains("always") || core.contains("ask again") { return .approveAlways }
+        if words.contains("always") { return .approveAlways }
         return .approve
     }
 

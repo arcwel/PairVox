@@ -6,7 +6,25 @@ and refuses anything that does not hash to the pinned value.
   scripts/pin-whisper-models.py            rewrite the file at the repository's current upstream commits
   scripts/pin-whisper-models.py --check    exit 1 if upstream has moved past the pinned commits (informational)
 """
-import hashlib, json, sys, urllib.request, pathlib
+import hashlib, json, re, sys, urllib.request, pathlib
+
+# Everything that comes back from the network is checked against these before it is written into Swift source.
+SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+def safe_path(p):
+    parts = p.split("/")
+    if not all(SEGMENT.match(x) and x not in (".", "..") for x in parts):
+        sys.exit(f"refusing unexpected path from upstream: {p!r}")
+    return p
+
+
+def safe_commit(c):
+    if not isinstance(c, str) or not COMMIT.match(c):
+        sys.exit(f"refusing unexpected commit from upstream: {c!r}")
+    return c
 
 MODEL_REPO = "argmaxinc/whisperkit-coreml"
 VARIANTS = {  # variant folder -> tokenizer repo WhisperKit would otherwise fetch
@@ -35,22 +53,24 @@ def entries(repo, commit, prefix, only=None):
     tree = api(f"models/{repo}/tree/{commit}" + (f"/{prefix}" if prefix else "") + "?recursive=true")
     out = []
     for item in sorted((t for t in tree if t["type"] == "file"), key=lambda t: t["path"]):
-        rel = item["path"][len(prefix) + 1:] if prefix else item["path"]
+        rel = safe_path(item["path"][len(prefix) + 1:] if prefix else item["path"])
         if only and rel not in only:
             continue
         if "lfs" in item:
             digest, size = item["lfs"]["oid"], item["size"]
         else:
             digest, size = sha256_of(repo, commit, item["path"])
+        if not DIGEST.match(str(digest)) or not isinstance(size, int):
+            sys.exit(f"refusing unexpected digest or size for {rel!r}")
         out.append((rel, size, digest))
     return out
 
 
 def main():
     check = "--check" in sys.argv
-    commits = {MODEL_REPO: api(f"models/{MODEL_REPO}")["sha"]}
+    commits = {MODEL_REPO: safe_commit(api(f"models/{MODEL_REPO}")["sha"])}
     for tok in set(VARIANTS.values()):
-        commits[tok] = api(f"models/{tok}")["sha"]
+        commits[tok] = safe_commit(api(f"models/{tok}")["sha"])
     if check:
         text = OUT.read_text()
         stale = [r for r, c in commits.items() if c not in text]

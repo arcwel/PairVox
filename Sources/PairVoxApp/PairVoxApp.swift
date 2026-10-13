@@ -16,7 +16,7 @@ struct PairVoxApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("PairVox") {
+        WindowGroup("PairVox", id: "main") {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 640, minHeight: 520)
@@ -27,6 +27,17 @@ struct PairVoxApp: App {
                 Button(Shortcuts.of(.openProject).title) { model.chooseProject() }.shortcut(.openProject)
                 Button(Shortcuts.of(.newSession).title) { model.newSession() }.shortcut(.newSession)
                 Button(Shortcuts.of(.focusInput).title) { model.focusInputField() }.shortcut(.focusInput)
+                Divider()
+                Button(Shortcuts.of(.nextProject).title) { model.switchToNextProject(1) }.shortcut(.nextProject)
+                    .disabled(model.sessions.count < 2)
+                Button(Shortcuts.of(.previousProject).title) { model.switchToNextProject(-1) }.shortcut(.previousProject)
+                    .disabled(model.sessions.count < 2)
+                Button(Shortcuts.of(.closeProject).title) { model.closeSession() }.shortcut(.closeProject)
+                    .disabled(model.sessions.isEmpty)
+                ForEach(Array(model.sessions.prefix(9).enumerated()), id: \.element.id) { index, session in
+                    Button("Go to \(session.name)") { model.switchToProject(at: index) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command, .option])
+                }
             }
             CommandMenu("Conversation") {
                 Button(Shortcuts.of(.stopSpeaking).title) { model.stopSpeaking() }.shortcut(.stopSpeaking)
@@ -52,12 +63,23 @@ struct PairVoxApp: App {
                     .disabled(!model.canApproveWithKeyboard)
                 Button("Deny") { model.deny() }.shortcut(.deny).disabled(model.snapshot.pendingPermission == nil)
             }
+            CommandGroup(after: .windowArrangement) {
+                MiniWindowCommand()
+            }
             CommandGroup(replacing: .help) {
                 Button(Shortcuts.of(.exportDiagnostics).title) { model.exportDiagnostics() }.shortcut(.exportDiagnostics)
                 Button("Show Log Folder in Finder") { model.revealLogs() }
                 Button("Play Audio Test") { model.playAudioTest() }
             }
         }
+
+        Window("PairVox Mini", id: "mini") {
+            MiniView()
+                .environmentObject(model)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowLevel(.floating)
 
         Settings {
             SettingsView()
@@ -73,8 +95,17 @@ struct PairVoxApp: App {
     }
 }
 
+private struct MiniWindowCommand: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("Show Mini Window") { openWindow(id: "mini") }.keyboardShortcut("m", modifiers: [.command, .option])
+    }
+}
+
 extension AppModel {
     var menuBarSymbol: String {
+        // A project in the background that is waiting on a decision shows in the menu bar too.
+        if sessions.contains(where: { $0.needsAttention && !$0.isActive }) { return "exclamationmark.bubble" }
         switch snapshot.phase {
         case .speaking: return "waveform"
         case .listening, .transcribing: return "mic.fill"

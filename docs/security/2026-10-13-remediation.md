@@ -46,3 +46,5 @@ WhisperKit model and tokenizer pinning, exact WhisperKit version, `ExitPlanMode`
 
 - Run the Keychain check on the signed release build with a saved key (`scripts/check-keychain-access.sh --probe`). On this Mac with a dummy item created like the app's, the item trusted exactly one program and a second program (`security`) was held at an approval prompt.
 - Hunter notes not acted on: notification bodies include commands, log and diagnostics file modes, the `.gitignore` guard entries, `KeychainStore` delete-then-add ordering.
+
+Run 2 (v0.2b) results and fixes: `2026-10-13-audit-run-2.md`.

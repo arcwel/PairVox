@@ -21,7 +21,9 @@ public final class VoiceInputController: @unchecked Sendable {
 
     private let audio: AudioIO
     private let transcriber: any UtteranceTranscriber
-    private let engine: ConversationEngine
+    private var _engine: ConversationEngine
+    /// The project engine that hears the user. Changes when the user switches projects.
+    private var engine: ConversationEngine { lock.withLock { _engine } }
     private let lock = NSLock()
     private let log = DiagnosticLog.shared
     private let workQueue = DispatchQueue(label: "app.pairvox.vad")
@@ -42,7 +44,7 @@ public final class VoiceInputController: @unchecked Sendable {
                 endSilence: TimeInterval) {
         self.audio = audio
         self.transcriber = transcriber
-        self.engine = engine
+        self._engine = engine
         var config = VoiceActivityDetector.Config()
         config.endSilence = endSilence
         self.vad = VoiceActivityDetector(config: config)
@@ -50,6 +52,16 @@ public final class VoiceInputController: @unchecked Sendable {
     }
 
     // MARK: Configuration
+
+    /// Sends what the user says to a different project from now on. Anything half-captured is dropped so it
+    /// cannot land in the wrong project.
+    public func setEngine(_ newEngine: ConversationEngine) {
+        lock.lock()
+        _engine = newEngine
+        capturing = false
+        utterance = []
+        lock.unlock()
+    }
 
     public func setMode(_ newMode: ListeningMode) {
         lock.lock()
@@ -163,6 +175,7 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.lock()
         let words = vocabulary
         lock.unlock()
+        let engine = self.engine
         Task { [engine, transcriber] in
             await engine.userStoppedSpeaking()
             // Ignore blips shorter than 0.3 s.

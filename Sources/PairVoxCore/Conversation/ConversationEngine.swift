@@ -22,6 +22,15 @@ public actor ConversationEngine {
     private var advisorTasks: [String: [Task<Void, Never>]] = [:]
     private var speakExplanationFor: String?
     static let maxQuestionsPerRequest = 5
+    private var isActive = true
+    private var attendedThrough = 0
+    private var catchUpOpen = false
+    /// The words of the utterance being handled, for the checks that need more than the parsed command.
+    private var lastUtteranceWords: [String] = []
+    /// Ids read out to the user after a first "allow all"; only these can be allowed by the second.
+    private var approveAllArmed: Set<String>?
+    private var grantHandler: (@Sendable (FolderGrantChange) -> Void)?
+    private var projectSwitchHandler: (@Sendable (String) async -> Bool)?
     /// The conversation mode the backend factory launches with; a later change is re-applied to new sessions.
     private var launchedConversationMode: ConversationMode
     private var backend: (any SessionBackend)?
@@ -68,7 +77,8 @@ public actor ConversationEngine {
         self.output = output
         self.makeBackend = backendFactory
         self.pronunciation = Pronunciation(dictionary: configuration.pronunciation)
-        self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation)
+        self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation,
+                                       grants: configuration.folderGrants)
         self.planner = SpeechPlanner(mode: configuration.speechMode, verbosity: configuration.verbosity,
                                      pronunciation: pronunciation, ids: ids)
         var cont: AsyncStream<EngineSnapshot>.Continuation!
@@ -166,6 +176,10 @@ public actor ConversationEngine {
 
     /// A final transcript (or typed text) from the user.
     public func submit(_ rawText: String) {
+        process(rawText, allowProjectSwitch: true)
+    }
+
+    private func process(_ rawText: String, allowProjectSwitch: Bool) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         userIsSpeaking = false
         transcribing = false
@@ -174,19 +188,40 @@ public actor ConversationEngine {
             recomputePhase()
             return
         }
-        let context = VoiceCommand.Context(awaitingPermission: snapshot.pendingPermission != nil,
+        lastUtteranceWords = VoiceCommand.normalize(text)
+        // While the catch-up question is open, the waiting request has not been announced yet, so a bare "okay" cannot answer it.
+        let context = VoiceCommand.Context(awaitingPermission: (snapshot.pendingPermission != nil || snapshot.grantOffer != nil) && !catchUpOpen,
                                            claudeIsWorking: !sendTimes.isEmpty,
                                            hasHeldBack: !(lastPlanner?.heldBack.isEmpty ?? true),
-                                           awaitingHighRiskConfirmation: snapshot.pendingPermission.map(canConfirmHighRiskByVoice) ?? false)
-        let parsed = VoiceCommand.parse(text, context: context)
+                                           awaitingHighRiskConfirmation: snapshot.pendingPermission.map(canConfirmHighRiskByVoice) ?? false,
+                                           awaitingCatchUpChoice: catchUpOpen,
+                                           hasQueuedRequests: !permissionQueue.isEmpty)
+        var parsed = VoiceCommand.parse(text, context: context)
+        if parsed != .approveAllWaiting { approveAllArmed = nil }
+        // "switch to X" is only a command when X is one of the open projects; otherwise it is an instruction for Claude.
+        if case .switchProject(let name)? = parsed {
+            if allowProjectSwitch, let handler = projectSwitchHandler {
+                Task { [weak self] in
+                    let matched = await handler(name)
+                    await self?.finishProjectSwitch(text: text, matched: matched)
+                }
+                return
+            }
+            parsed = nil
+        }
         log.log(.info, .engine, "user.submit",
                 ["text": log.content(text), "command": parsed.map { "\($0)" } ?? "none",
                  "awaitingPermission": .bool(context.awaitingPermission), "claudeWorking": .bool(context.claudeIsWorking)])
+        if parsed != .approveAllWaiting { approveAllArmed = nil }
         if let command = parsed {
             appendEntry(.user, text, status: .done)
             perform(command)
             return
         }
+        // Carrying on with something else means the user does not want the catch-up.
+        if catchUpOpen { resolveCatchUp(.skip, speakReprompt: false) }
+        // Anything else said while a folder offer is open is not an answer: drop the offer without recording a no.
+        if snapshot.grantOffer != nil, snapshot.pendingPermission == nil { snapshot.grantOffer = nil }
         // A question about the request on screen is asked of the advisor, never taken as a refusal.
         if snapshot.pendingPermission != nil, advisor != nil, text.hasSuffix("?") {
             appendEntry(.user, text, status: .done)
@@ -237,6 +272,165 @@ public actor ConversationEngine {
         config.spokenHighRiskConfirmation = on
     }
 
+    // MARK: - Working in several projects
+
+    /// The user left this project (`false`) or came back to it (`true`). While away it stays silent and keeps
+    /// listing what Claude said; on return the user chooses what to hear.
+    public func setActive(_ active: Bool) {
+        guard active != isActive else { return }
+        if !active {
+            // A reply still streaming when the user left counts as missed from its start.
+            if let id = assistantEntryID, snapshot.transcript.last(where: { $0.id == id })?.status == .streaming {
+                attendedThrough = min(attendedThrough, id - 1)
+            } else {
+                attendedThrough = snapshot.transcript.last?.id ?? attendedThrough
+            }
+            isActive = false
+            output.stopAll()
+            publish()
+            return
+        }
+        isActive = true
+        let missed = snapshot.transcript.contains { $0.role == .assistant && $0.id > attendedThrough && !$0.spoken.isEmpty }
+        if missed {
+            catchUpOpen = true
+            publish()
+        } else {
+            attendedThrough = snapshot.transcript.last?.id ?? attendedThrough
+            publish()
+            repromptWaitingQuestion()
+        }
+    }
+
+    /// Plays the replies the user missed (all of them from the first, or only the last), or none, and returns the
+    /// project to normal.
+    public func resolveCatchUp(_ choice: CatchUpChoice, speakReprompt: Bool = true) {
+        guard catchUpOpen else { return }
+        let missed = snapshot.missedMessages
+        catchUpOpen = false
+        attendedThrough = snapshot.transcript.last?.id ?? attendedThrough
+        var sentences: [String] = []
+        switch choice {
+        case .fromFirstMissed: sentences = missed.flatMap(\.sentences)
+        case .lastMessage: sentences = missed.last?.sentences ?? []
+        case .skip: break
+        }
+        log.log(.info, .engine, "catchUp", ["choice": "\(choice)", "messages": .int(missed.count), "sentences": .int(sentences.count)])
+        publish()
+        if !sentences.isEmpty { speak(sentences.map { make($0, .prose) }, record: false, force: true) }
+        if speakReprompt { repromptWaitingQuestion() }
+    }
+
+    /// Says again what is waiting for the user's decision, because it was swallowed while they were away.
+    private func repromptWaitingQuestion() {
+        if let p = snapshot.pendingPermission {
+            speak([make(permissionPrompt(for: p), .prompt)], record: false, force: true)
+        } else if let offer = snapshot.grantOffer {
+            speak([make(offer.text, .prompt)], record: false, force: true)
+        }
+    }
+
+    // MARK: - Folder access
+
+    private func finishProjectSwitch(text: String, matched: Bool) {
+        if matched {
+            appendEntry(.user, text, status: .done)
+            publish()
+        } else {
+            process(text, allowProjectSwitch: false)
+        }
+    }
+
+    /// Called with the name the user spoke; returns true if it matched an open project and the app switched to it.
+    public func setProjectSwitchHandler(_ handler: (@Sendable (String) async -> Bool)?) {
+        projectSwitchHandler = handler
+    }
+
+    public func setGrantHandler(_ handler: (@Sendable (FolderGrantChange) -> Void)?) {
+        grantHandler = handler
+    }
+
+    /// Replaces the folder grants in force, for example after the user removed one in Settings.
+    public func setFolderGrants(_ grants: [FolderGrant]) {
+        config.folderGrants = grants
+        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: grants)
+    }
+
+    /// Asks whether Claude may work in the project folder without asking each time. Edits and shell commands are
+    /// separate questions; each takes two yes answers.
+    public func offerFolderGrant(shell: Bool = false) {
+        guard let root = config.projectRoot, snapshot.pendingPermission == nil, snapshot.grantOffer == nil else { return }
+        let folder = FolderScope.resolved(root)
+        // Never offer standing access to the whole disk, the home folder, or a folder that holds PairVox's own
+        // settings or Claude Code's configuration: those would let a model-driven edit rewrite the consent store.
+        if folder == "/" || folder == FolderScope.resolved(NSHomeDirectory())
+            || PermissionPolicy.protectedFolders.contains(where: { FolderScope.contains(folder: folder, path: $0) }) { return }
+        let existing = config.folderGrants.first { $0.path == folder }
+        if shell ? (existing?.allowShell ?? false) : existing != nil { return }
+        if shell && existing == nil { return }   // shell access builds on the edit grant
+        setOffer(GrantOffer(folder: folder, kind: shell ? .shell : .edit, stage: .asking, text: ""), stage: .asking)
+    }
+
+    /// Answers the open folder question. Called by voice and by the buttons, so both follow the same two steps.
+    public func answerGrantOffer(yes: Bool) {
+        guard var offer = snapshot.grantOffer else { return }
+        guard yes else {
+            snapshot.grantOffer = nil
+            if offer.kind == .edit { grantHandler?(.declined(path: offer.folder)) }
+            log.log(.info, .policy, "folderGrant.declined", ["kind": "\(offer.kind)", "stage": "\(offer.stage)"])
+            speak([make("Okay, I'll keep asking.", .notice)], record: false, force: true)
+            publish()
+            return
+        }
+        switch offer.stage {
+        case .asking:
+            setOffer(offer, stage: .confirming)
+        case .confirming:
+            offer.stage = .confirming
+            snapshot.grantOffer = nil
+            let shell = offer.kind == .shell
+            if let i = config.folderGrants.firstIndex(where: { $0.path == offer.folder }) {
+                if shell { config.folderGrants[i].allowShell = true }
+            } else {
+                config.folderGrants.append(FolderGrant(path: offer.folder, allowShell: false))
+            }
+            policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants)
+            grantHandler?(.granted(path: offer.folder, shell: shell))
+            log.log(.info, .policy, "folderGrant.granted", ["kind": "\(offer.kind)"])
+            appendEntry(.system, shell ? "Shell commands in \(offer.folder) are now allowed without asking."
+                                       : "Edits inside \(offer.folder) are now allowed without asking.", status: .done)
+            speak([make(shell ? "Done. Commands inside the folder will run without asking. You can turn this off in Settings."
+                              : "Done. I'll stop asking about edits in this folder. You can remove this in Settings.", .notice)],
+                  record: false, force: true)
+            publish()
+        }
+    }
+
+    public func dismissGrantOffer() {
+        guard snapshot.grantOffer != nil else { return }
+        snapshot.grantOffer = nil
+        publish()
+    }
+
+    private func setOffer(_ offer: GrantOffer, stage: GrantOffer.Stage) {
+        var o = offer
+        o.stage = stage
+        let spokenPath = pronunciation.speak(o.folder)
+        switch (o.kind, stage) {
+        case (.edit, .asking):
+            o.text = "This project works in \(spokenPath). Do you want to allow Claude to edit all files inside it without asking each time? Say yes or no."
+        case (.edit, .confirming):
+            o.text = "To confirm: Claude will be able to edit every file inside \(spokenPath), with no further questions, until you remove this in Settings. Shell commands are not included. Say confirm to allow it, or no."
+        case (.shell, .asking):
+            o.text = "Do you also want Claude to run shell commands inside \(spokenPath) without asking? Commands that reach outside the folder, use the network or install things will still ask. Say yes or no."
+        case (.shell, .confirming):
+            o.text = "To confirm: Claude will be able to run commands inside \(spokenPath) with no further questions, until you turn this off in Settings. Say confirm to allow it, or no."
+        }
+        snapshot.grantOffer = o
+        speak([make(o.text, .prompt)], record: false, force: true)
+        publish()
+    }
+
     /// Asks the advisor a question about the request on screen. The answer is advice only: it never approves
     /// or denies anything.
     public func askAboutPending(_ question: String, spoken: Bool = false) {
@@ -270,7 +464,7 @@ public actor ConversationEngine {
         case .success(let text):
             pending.questions[i].answer = text
             log.log(.info, .policy, "advisor.answer", ["ok": .bool(true)])
-            if spoken { speak([make(text, .notice)], record: false, force: true) }
+            if spoken { speak([make(Self.speakableAdvice(text), .notice)], record: false, force: true) }
         case .failure:
             pending.questions[i].failed = true
             pending.questions[i].answer = "I couldn't get an answer to that."
@@ -279,6 +473,22 @@ public actor ConversationEngine {
         }
         snapshot.pendingPermission = pending
         publish()
+    }
+
+    /// Advice text comes from a model that read the request, so it may be steered. A sentence that would itself
+    /// work as a spoken approval ("Allow.", "Yes, always allow", "Confirm high risk") is dropped before it is read
+    /// aloud, so PairVox cannot end up answering its own question when the microphone hears it back.
+    static func speakableAdvice(_ text: String) -> String {
+        let context = VoiceCommand.Context(awaitingPermission: true, awaitingHighRiskConfirmation: true)
+        let sentences = text.split(whereSeparator: { ".!?\n".contains($0) }).map { String($0).trimmingCharacters(in: .whitespaces) }
+        let kept = sentences.filter { sentence in
+            guard !sentence.isEmpty else { return false }
+            switch VoiceCommand.parse(sentence, context: context) {
+            case .approve?, .approveAlways?, .confirmHighRisk?, .approveAllWaiting?: return false
+            default: return true
+            }
+        }
+        return kept.isEmpty ? "There is nothing more to add. Please decide on screen." : kept.joined(separator: ". ") + "."
     }
 
     private func startExplanation(_ pending: PendingPermission) {
@@ -305,7 +515,7 @@ public actor ConversationEngine {
             log.log(.info, .policy, "advisor.summary", ["ok": .bool(true)])
             if speakExplanationFor == requestID {
                 speakExplanationFor = nil
-                speak([make(text, .notice)], record: false, force: true)
+                speak([make(Self.speakableAdvice(text), .notice)], record: false, force: true)
             }
         case .failure:
             pending.explanation = .unavailable
@@ -384,7 +594,7 @@ public actor ConversationEngine {
     public func setPronunciation(_ dictionary: [String: String]) {
         config.pronunciation = dictionary
         pronunciation = Pronunciation(dictionary: dictionary)
-        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation)
+        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants)
         planner.pronunciation = pronunciation
     }
 
@@ -479,6 +689,19 @@ public actor ConversationEngine {
             dropRemainder()
             speak([make(msg, .notice)], record: false)
         case .approve, .approveAlways:
+            guard !catchUpOpen else { break }   // never approve what has not been announced yet
+            if snapshot.pendingPermission == nil, let offer = snapshot.grantOffer {
+                // Standing access takes a deliberate answer: one word to open it, the word "confirm" to finish it.
+                // A longer sentence, or one that begins "say", could be PairVox's own prompt heard back.
+                let w = lastUtteranceWords
+                let deliberate = w.first != "say"
+                    && (offer.stage == .asking ? w.count <= 2 : (w.contains("confirm") && w.count <= 3))
+                if deliberate { answerGrantOffer(yes: true) } else {
+                    speak([make(offer.stage == .asking ? "Please answer yes or no." : "To grant it, say confirm. Or say no.", .notice)],
+                          record: false, force: true)
+                }
+                break
+            }
             // Spoken approvals only count for requests the policy rates as voice-approvable.
             guard let pending = snapshot.pendingPermission else { break }
             if pending.assessment.voiceApprovable {
@@ -489,10 +712,35 @@ public actor ConversationEngine {
             } else {
                 speak([make("That one needs a click. Please confirm it on screen.", .notice)], record: false, force: true)
             }
+        case .catchUp(let choice):
+            resolveCatchUp(choice)
+        case .switchProject:
+            break   // handled in submit, where the open projects are known
+        case .approveAllWaiting:
+            guard let head = snapshot.pendingPermission else { break }
+            let waiting = [head] + permissionQueue
+            let eligible = waiting.filter { $0.assessment.voiceApprovable }
+            guard !eligible.isEmpty else {
+                speak([make("None of these can be allowed by voice. Please use the buttons.", .notice)], record: false, force: true)
+                break
+            }
+            if let armed = approveAllArmed {
+                approveAllArmed = nil
+                approveAllWaiting(requestIDs: Array(armed))
+            } else {
+                // Read what would be allowed first; a second \"allow all\" does it.
+                approveAllArmed = Set(eligible.map(\.request.requestID))
+                let items = eligible.map { $0.assessment.spokenPrompt.replacingOccurrences(of: " Allow?", with: "") }
+                let skipped = waiting.count - eligible.count
+                var text = "\(eligible.count) \(eligible.count == 1 ? "request" : "requests") can be allowed together. " + items.joined(separator: ". Then, ") + ". "
+                if skipped > 0 { text += "\(skipped) high-risk \(skipped == 1 ? "one" : "ones") will still ask. " }
+                text += "Say allow all again to allow them."
+                speak([make(text, .prompt)], record: false, force: true)
+            }
         case .explain:
             guard let pending = snapshot.pendingPermission else { break }
             switch pending.explanation {
-            case .ready(let text): speak([make(text, .notice)], record: false, force: true)
+            case .ready(let text): speak([make(Self.speakableAdvice(text), .notice)], record: false, force: true)
             case .loading: speakExplanationFor = pending.request.requestID
             default: speak([make("I don't have an explanation for this one. Say yes or no, or ask me a question.", .notice)], record: false, force: true)
             }
@@ -501,6 +749,7 @@ public actor ConversationEngine {
             log.log(.info, .policy, "permission.spokenHighRisk", ["tool": .string(pending.request.toolName)])
             approvePending(requestID: pending.request.requestID)
         case .deny:
+            if snapshot.pendingPermission == nil, snapshot.grantOffer != nil { answerGrantOffer(yes: false); break }
             denyPending()
         case .newSession:
             newSession()
@@ -561,6 +810,12 @@ public actor ConversationEngine {
 
         case .permissionRequested(let request):
             let assessment = policy.assess(request)
+            if assessment.coveredByFolderGrant {
+                log.log(.info, .policy, "permission.folderGrant", ["tool": .string(request.toolName)])
+                try? backend?.respond(to: request, decision: .allow)
+                appendEntry(.system, "Allowed by your folder access: \(assessment.summary)", status: .done)
+                break
+            }
             let auto = config.autoApproveLowRisk && assessment.autoApprovable
             log.log(.info, .policy, "permission.requested",
                     ["tool": .string(request.toolName), "risk": "\(assessment.risk)", "autoApproved": .bool(auto),
@@ -772,15 +1027,20 @@ public actor ConversationEngine {
     }
 
     private func showPermission(_ pending: PendingPermission) {
+        snapshot.grantOffer = nil   // a real request outranks the standing-access question
         snapshot.pendingPermission = pending
         ackTask?.cancel()
+        speak([make(permissionPrompt(for: pending), .prompt)], record: false, force: true)
+        startExplanation(pending)
+    }
+
+    private func permissionPrompt(for pending: PendingPermission) -> String {
         var prompt = pending.assessment.spokenPrompt
         if canConfirmHighRiskByVoice(pending) {
             prompt = prompt.replacingOccurrences(of: " Please confirm on screen.",
                                                  with: " This is high risk. Say confirm high risk to allow it, or use the button.")
         }
-        speak([make(prompt, .prompt)], record: false, force: true)
-        startExplanation(pending)
+        return prompt
     }
 
     private func promoteNextPermission() {
@@ -914,6 +1174,14 @@ public actor ConversationEngine {
     }
 
     private func publish() {
+        // Everything that happens while the user is here counts as heard; only what arrives while away is missed.
+        if isActive, !catchUpOpen { attendedThrough = snapshot.transcript.last?.id ?? attendedThrough }
+        snapshot.isActive = isActive
+        snapshot.awaitingCatchUpChoice = catchUpOpen
+        snapshot.missedMessages = (isActive && !catchUpOpen) ? [] : snapshot.transcript.compactMap { e in
+            guard e.role == .assistant, e.id > attendedThrough, !e.spoken.isEmpty else { return nil }
+            return MissedMessage(entryID: e.id, sentences: e.spoken, date: e.date)
+        }
         snapshotContinuation.yield(snapshot)
     }
 }

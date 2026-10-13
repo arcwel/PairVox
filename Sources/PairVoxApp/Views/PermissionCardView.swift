@@ -61,9 +61,15 @@ struct PermissionCardView: View {
                 if offersAlwaysAllow {
                     Button("Always Allow (this session)") { model.approve(always: true, requestID: pending.request.requestID) }
                 }
-                Button("Allow") { model.approve(requestID: pending.request.requestID) }
-                    .keyboardShortcut(.return, modifiers: [.command])
-                    .buttonStyle(.borderedProminent)
+                // High-risk requests need a deliberate click, so only lower-risk ones answer to the keyboard.
+                if pending.assessment.risk == .high {
+                    Button("Allow") { model.approve(requestID: pending.request.requestID) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button("Allow") { model.approve(requestID: pending.request.requestID) }
+                        .keyboardShortcut(.return, modifiers: [.command])
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .padding(14)
@@ -131,7 +137,7 @@ struct PermissionCardView: View {
                 ForEach(waiting, id: \.request.requestID) { p in
                     HStack(spacing: 6) {
                         Circle().fill(color(for: p.assessment.risk)).frame(width: 6, height: 6)
-                        Text(p.assessment.summary).font(.system(.caption, design: .monospaced)).lineLimit(1)
+                        Text(p.assessment.summary).font(.system(.caption, design: .monospaced)).lineLimit(2)
                     }
                 }
                 let count = model.approvableWaitingCount

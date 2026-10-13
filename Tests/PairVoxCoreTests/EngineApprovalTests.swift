@@ -201,3 +201,78 @@ private final class Counter: @unchecked Sendable {
     private var n = -1
     func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
 }
+
+final class AllowAllByVoiceTests: XCTestCase {
+    var backend: FakeBackend!
+    var output: FakeOutput!
+    var engine: ConversationEngine!
+
+    override func setUp() async throws {
+        backend = FakeBackend(); output = FakeOutput()
+        let b = backend!
+        engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", acknowledgementDelay: 5),
+                                    output: output, backendFactory: { _ in b })
+        await engine.start()
+    }
+
+    override func tearDown() async throws { await engine.shutdown() }
+
+    func settle(_ ms: UInt64 = 70) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+
+    func edit(_ id: String, _ f: String) -> SessionEvent {
+        .permissionRequested(PermissionRequest(requestID: id, toolName: "Edit", input: ["file_path": .string("/Users/dev/app/\(f)")]))
+    }
+
+    func testAllowAllReadsTheListFirstAndNeedsASecondAllowAll() async {
+        await engine.submit("Do the work")
+        backend.emit(edit("A", "a.swift")); backend.emit(edit("B", "b.swift"))
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "H", toolName: "Bash", input: ["command": "rm -rf build"])))
+        await settle()
+        await engine.submit("allow all")
+        XCTAssertTrue(backend.responses.isEmpty, "the first one only reads the list")
+        let reading = output.allTexts.last ?? ""
+        XCTAssertTrue(reading.contains("2 requests can be allowed together"), reading)
+        XCTAssertTrue(reading.contains("edit a dot swift") && reading.contains("edit b dot swift"))
+        XCTAssertTrue(reading.contains("1 high-risk one will still ask"))
+        await engine.submit("allow all")
+        await settle()
+        XCTAssertEqual(Set(backend.responses.map(\.0)), ["A", "B"])
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "H", "the high-risk one is still waiting for its own decision")
+    }
+
+    func testARequestThatArrivesAfterTheListWasReadIsNotAllowed() async {
+        await engine.submit("Do the work")
+        backend.emit(edit("A", "a.swift")); backend.emit(edit("B", "b.swift"))
+        await settle()
+        await engine.submit("allow all")
+        backend.emit(edit("C", "c.swift"))      // new, never read out
+        await settle()
+        await engine.submit("allow all")
+        await settle()
+        XCTAssertEqual(Set(backend.responses.map(\.0)), ["A", "B"])
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "C")
+    }
+
+    func testAnythingElseInBetweenDisarmsIt() async {
+        await engine.submit("Do the work")
+        backend.emit(edit("A", "a.swift")); backend.emit(edit("B", "b.swift"))
+        await settle()
+        await engine.submit("allow all")           // reads the list and arms
+        await engine.submit("repeat that")         // something else in between
+        await engine.submit("allow all")           // so this reads the list again instead of allowing
+        XCTAssertTrue(backend.responses.isEmpty, "a stale arming must not carry over")
+        await engine.submit("allow all")
+        await settle()
+        XCTAssertEqual(Set(backend.responses.map(\.0)), ["A", "B"])
+    }
+
+    func testAllowAllWithNothingQueuedIsAnOrdinaryYes() async {
+        await engine.submit("Do the work")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        await engine.submit("allow all")
+        XCTAssertEqual(backend.responses.map(\.0), ["A"])
+    }
+}

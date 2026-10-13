@@ -7,12 +7,38 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
 
+    @State private var columns: NavigationSplitViewVisibility = .detailOnly
+
     var body: some View {
+        NavigationSplitView(columnVisibility: $columns) {
+            ProjectSidebar()
+                .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 320)
+        } detail: {
+            detail
+        }
+        .onChange(of: model.sessions.count) { old, new in
+            // The list appears by itself once there is something to switch between.
+            if new >= 2, old < 2 { columns = .all }
+            if new == 0 { columns = .detailOnly }
+        }
+    }
+
+    private var detail: some View {
         VStack(spacing: 0) {
             if model.project == nil {
                 WelcomeView()
             } else {
                 TranscriptView(entries: model.snapshot.transcript)
+                if model.snapshot.awaitingCatchUpChoice {
+                    CatchUpBar()
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
+                if let offer = model.snapshot.grantOffer, model.snapshot.pendingPermission == nil {
+                    GrantOfferBanner(offer: offer)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                }
                 if let pending = model.snapshot.pendingPermission {
                     PermissionCardView(pending: pending)
                         .padding(.horizontal, 16)

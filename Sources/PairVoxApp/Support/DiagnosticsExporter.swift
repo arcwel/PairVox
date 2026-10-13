@@ -121,7 +121,7 @@ enum DiagnosticsExporter {
         ]
         report["logging"] = ["verbose": s.settings.verboseLogging, "conversationTextIncluded": s.settings.logConversationText,
                              "playbackAudioRecorded": s.settings.recordPlaybackAudio]
-        guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
+        guard let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
               let text = String(data: data, encoding: .utf8) else { return "{}" }
         return LogRedactor().scrub(text)
     }
@@ -130,7 +130,7 @@ enum DiagnosticsExporter {
     private static func sanitizedSettings(_ settings: AppSettings) -> [String: Any] {
         guard let data = try? JSONEncoder().encode(settings),
               var dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
-        for key in ["recentProjects", "lastProject", "projectPreferences", "pronunciation", "claudePathOverride"] {
+        for key in AppSettings.pathBearingKeys {
             dict.removeValue(forKey: key)
         }
         return dict

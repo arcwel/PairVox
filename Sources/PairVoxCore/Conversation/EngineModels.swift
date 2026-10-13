@@ -70,6 +70,39 @@ public enum Explanation: Sendable, Equatable {
     case unavailable
 }
 
+/// One assistant reply that arrived while the user was in another project.
+public struct MissedMessage: Sendable, Equatable, Identifiable {
+    public let entryID: Int
+    public var id: Int { entryID }
+    /// What was (or would have been) spoken, as sentences.
+    public var sentences: [String]
+    public var date: Date
+}
+
+/// What to do about replies that arrived while the user was in another project.
+public enum CatchUpChoice: Sendable, Equatable {
+    case fromFirstMissed
+    case lastMessage
+    case skip
+}
+
+/// A question to the user about giving Claude standing access to the project folder.
+public struct GrantOffer: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable { case edit, shell }
+    public enum Stage: Sendable, Equatable { case asking, confirming }
+    public var folder: String
+    public var kind: Kind
+    public var stage: Stage
+    /// The words PairVox says (and the banner shows) at this stage.
+    public var text: String
+}
+
+/// What the engine reports back so the app can save or forget a grant.
+public enum FolderGrantChange: Sendable, Equatable {
+    case granted(path: String, shell: Bool)
+    case declined(path: String)
+}
+
 public struct PendingPermission: Sendable, Equatable {
     public var request: PermissionRequest
     public var assessment: PermissionAssessment
@@ -104,6 +137,13 @@ public struct EngineSnapshot: Sendable, Equatable {
     public var phase: EnginePhase = .starting
     public var transcript: [TranscriptEntry] = []
     public var pendingPermission: PendingPermission?
+    public var grantOffer: GrantOffer?
+    /// False while the user is working in a different project: this one stays silent.
+    public var isActive = true
+    /// Replies spoken-or-not that the user has not heard because they were elsewhere.
+    public var missedMessages: [MissedMessage] = []
+    /// The user has come back to a project with missed replies and has not yet chosen what to hear.
+    public var awaitingCatchUpChoice = false
     /// Requests waiting behind the one shown; each is shown and spoken in turn once the current one is answered.
     public var queuedPermissions: [PendingPermission] = []
     public var queuedPermissionCount: Int { queuedPermissions.count }
@@ -133,6 +173,7 @@ public struct EngineConfiguration: Sendable {
     public var spokenHighRiskConfirmation: Bool
     /// Ask a separate read-only Claude call to explain each request in plain words (uses a small amount of usage).
     public var explainRequests: Bool
+    public var folderGrants: [FolderGrant]
     public var pronunciation: [String: String]
     public var speechRate: Double
     /// Delay before a filler acknowledgement if nothing has been said yet.
@@ -141,7 +182,8 @@ public struct EngineConfiguration: Sendable {
     public init(projectRoot: String? = nil, speechMode: SpeechMode = .skipCode,
                 conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
                 acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
-                spokenHighRiskConfirmation: Bool = false, explainRequests: Bool = true, pronunciation: [String: String] = [:],
+                spokenHighRiskConfirmation: Bool = false, explainRequests: Bool = true,
+                folderGrants: [FolderGrant] = [], pronunciation: [String: String] = [:],
                 speechRate: Double = 1.0, acknowledgementDelay: TimeInterval = 1.2) {
         self.projectRoot = projectRoot
         self.speechMode = speechMode
@@ -151,6 +193,7 @@ public struct EngineConfiguration: Sendable {
         self.autoApproveLowRisk = autoApproveLowRisk
         self.spokenHighRiskConfirmation = spokenHighRiskConfirmation
         self.explainRequests = explainRequests
+        self.folderGrants = folderGrants
         self.pronunciation = pronunciation
         self.speechRate = speechRate
         self.acknowledgementDelay = acknowledgementDelay
@@ -165,6 +208,7 @@ public struct EngineConfiguration: Sendable {
                   autoApproveLowRisk: settings.autoApproveLowRisk,
                   spokenHighRiskConfirmation: settings.spokenHighRiskConfirmation,
                   explainRequests: settings.explainRequests,
+                  folderGrants: settings.folderGrants,
                   pronunciation: settings.pronunciation,
                   speechRate: settings.speechRate)
     }

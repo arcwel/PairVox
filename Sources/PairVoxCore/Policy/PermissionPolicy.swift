@@ -21,6 +21,14 @@ public struct PermissionAssessment: Sendable, Equatable {
     /// Whether the opt-in "auto-approve read-only tools" setting may answer this without asking.
     /// Only plain read-only tools qualify, never an unrecognized shell command.
     public var autoApprovable: Bool = false
+    /// A folder grant the user gave covers this request, so it is allowed without asking.
+    public var coveredByFolderGrant: Bool = false
+
+    /// Whether a small surface (menu bar, mini window, "allow together" list) shows enough to approve from:
+    /// one short line and at most one reason. Anything longer is reviewed on the full card.
+    public var fitsCompactSurface: Bool {
+        risk < .high && reasons.count <= 1 && !summary.contains("\n") && summary.count <= 90
+    }
 }
 
 /// Classifies tool-permission requests so misheard voice approvals can't do
@@ -29,10 +37,12 @@ public struct PermissionAssessment: Sendable, Equatable {
 public struct PermissionPolicy: Sendable {
     public var projectRoot: String?
     public var pronunciation: Pronunciation
+    public var grants: [FolderGrant]
 
-    public init(projectRoot: String?, pronunciation: Pronunciation = Pronunciation()) {
+    public init(projectRoot: String?, pronunciation: Pronunciation = Pronunciation(), grants: [FolderGrant] = []) {
         self.projectRoot = projectRoot.map { ($0 as NSString).standardizingPath }
         self.pronunciation = pronunciation
+        self.grants = grants
     }
 
     static let readOnlyTools: Set<String> = ["Read", "Glob", "Grep", "LS", "WebSearch", "TodoWrite", "TaskCreate",
@@ -46,17 +56,22 @@ public struct PermissionPolicy: Sendable {
         var reasons: [String] = []
         var spoken: String
         var summary: String
+        var screenOnly = false
 
         switch r.toolName {
         case let t where PermissionPolicy.readOnlyTools.contains(t):
             risk = .low
             summary = "\(r.displayName ?? t)"
             spoken = "Claude wants to use \(Pronunciation.splitIdentifier(t)). Allow?"
-            let target = r.input["file_path"]?.stringValue ?? r.input["path"]?.stringValue ?? ""
-            if PermissionPolicy.isSensitivePath(target) {
+            let targets = PermissionPolicy.readTargets(r)
+            if let target = targets.first(where: PermissionPolicy.isSensitivePath) {
                 risk = .medium
                 summary = "\(r.displayName ?? t) \(target)"
                 reasons.append("It would read a file that looks sensitive (credentials, keys, shell or git config).")
+            }
+            if projectRoot != nil, targets.contains(where: { !isInsideProject($0) }) {
+                risk = max(risk, .medium)
+                reasons.append("It would read outside the project folder.")
             }
 
         case "WebFetch":
@@ -89,8 +104,11 @@ public struct PermissionPolicy: Sendable {
             summary = "Run: \(command)"
             // Spoken from the command itself. Claude's own `description` field is free text the model
             // (or a prompt-injected repo) chooses, so it never stands in for what will run.
-            let what = ToolNarrator.commandSummary(command, pronunciation: pronunciation)
-            spoken = "Claude wants to run \(pronunciation.speak(what)). Allow?"
+            let narration = BashRisk.narration(command, pronunciation: pronunciation)
+            spoken = "Claude wants to run \(narration.text). Allow?"
+            // A spoken yes must cover exactly what was heard: whatever the short readout leaves out goes to the screen.
+            screenOnly = narration.partial
+                || bash.reasons.contains { BashRisk.networkReasons.contains($0) }
 
         default:
             risk = .medium
@@ -104,7 +122,10 @@ public struct PermissionPolicy: Sendable {
             risk = .high
             reasons.append(r.decisionReason ?? "Claude Code flagged this as needing explicit approval.")
         }
-        var voiceOK = risk < .high
+        var voiceOK = risk < .high && !screenOnly
+        if screenOnly, risk < .high {
+            reasons.append("The command is too long or complex to read out, or reaches the network. Check it on screen.")
+        }
         if r.requiresUserInteraction {
             voiceOK = false
             reasons.append("This request needs you at the screen.")
@@ -114,24 +135,59 @@ public struct PermissionPolicy: Sendable {
         }
         let auto = risk == .low && voiceOK && !r.requiresUserInteraction
             && PermissionPolicy.readOnlyTools.contains(r.toolName) && !PermissionPolicy.neverAutoApprove.contains(r.toolName)
+        // A folder grant only ever covers requests that are otherwise ordinary (never high risk, never flagged).
+        var covered = false
+        if risk <= .medium, !r.requiresUserInteraction, !r.defaultToNo, r.decisionReasonType != "safetyCheck" {
+            if PermissionPolicy.fileWriteTools.contains(r.toolName) {
+                covered = FolderScope.editGrant(for: r, in: grants, projectRoot: projectRoot) != nil
+            } else if r.toolName == "Bash" {
+                covered = FolderScope.shellGrant(for: r, risk: risk, reasons: reasons, in: grants, projectRoot: projectRoot) != nil
+            }
+        }
         return PermissionAssessment(risk: risk, voiceApprovable: voiceOK, spokenPrompt: spoken, summary: summary,
-                                    reasons: reasons, autoApprovable: auto)
+                                    reasons: reasons, autoApprovable: auto, coveredByFolderGrant: covered)
     }
 
+    /// Whether `path` is inside the project folder. Both sides are symlink-resolved, so /tmp vs /private/tmp (which
+    /// Claude Code reports) does not make a project's own files look foreign, and a link inside the project that
+    /// leads elsewhere does not look like it belongs to it.
     func isInsideProject(_ path: String) -> Bool {
         guard let root = projectRoot, !path.isEmpty else { return false }
-        let p = (path as NSString).standardizingPath
-        let absolute = p.hasPrefix("/") ? p : (root as NSString).appendingPathComponent(p)
-        let normalized = (absolute as NSString).standardizingPath
-        return normalized == root || normalized.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        return FolderScope.contains(folder: root, path: path, relativeTo: root)
+    }
+
+    /// Every path a read-only tool would look at: `file_path`, `path`, and an absolute or home-relative Glob `pattern`.
+    static func readTargets(_ r: PermissionRequest) -> [String] {
+        var out: [String] = []
+        for key in ["file_path", "path"] {
+            if let v = r.input[key]?.stringValue, !v.isEmpty { out.append(v) }
+        }
+        if let pattern = r.input["pattern"]?.stringValue, r.toolName == "Glob",
+           pattern.hasPrefix("/") || pattern.hasPrefix("~") || pattern.contains("..") {
+            // Keep only the part before the first wildcard, which is the folder the glob starts in.
+            let cut = pattern.firstIndex(where: { "*?[{".contains($0) }) ?? pattern.endIndex
+            out.append(String(pattern[..<cut]))
+        }
+        return out
+    }
+
+    /// PairVox's own settings (the consent store) and the Claude Code configuration folder.
+    static var protectedFolders: [String] {
+        [SettingsStore.defaultURL().deletingLastPathComponent().path, NSHomeDirectory() + "/.claude"]
+            .map { FolderScope.resolved($0) }
     }
 
     static func isSensitivePath(_ path: String) -> Bool {
         let p = path.lowercased()
-        let needles = ["/.ssh/", "/.aws/", "/.gnupg/", ".env", "id_rsa", "id_ed25519", ".pem", ".p12", "/.git/config",
-                       ".zshrc", ".bashrc", ".bash_profile", ".zprofile", ".npmrc", ".netrc", "credentials",
+        let needles = ["/.ssh", "/.aws", "/.gnupg", "/.docker", "/.kube", "/.config/gh", "/.config/gcloud",
+                       "/library/keychains", "/.claude", "application support/pairvox", ".git-credentials",
+                       ".env", "id_rsa", "id_ed25519", ".pem", ".p12", "/.git/config",
+                       ".zshrc", ".bashrc", ".bash_profile", ".zprofile", ".zshenv", ".npmrc", ".netrc", "credentials",
                        "/library/launchagents/", "/etc/"]
-        return needles.contains { p.contains($0) }
+        if needles.contains(where: { p.contains($0) }) { return true }
+        guard path.hasPrefix("/") || path.hasPrefix("~") else { return false }
+        let resolved = FolderScope.resolved(path)
+        return protectedFolders.contains { resolved == $0 || resolved.hasPrefix($0 + "/") }
     }
 }
 
@@ -171,7 +227,9 @@ public enum BashRisk {
         Rule(pattern: #"\bdocker\s+(system\s+prune|rm|rmi|volume\s+rm)\b"#, level: .high, reason: "Removes Docker resources."),
         Rule(pattern: #"(?i)\b(drop\s+(table|database)|truncate\s+table)\b"#, level: .high, reason: "Destroys database data."),
         Rule(pattern: #"\bgh\s+(pr\s+merge|release\s+create|repo\s+delete)\b"#, level: .high, reason: "Changes a GitHub repository."),
-        Rule(pattern: #"\b(ssh|scp|rsync)\s"#, level: .medium, reason: "Connects to another machine."),
+        Rule(pattern: #"\b(ssh|scp|rsync|nc|ncat|netcat|telnet|ftp|sftp|tftp|socat)\s"#, level: .medium, reason: "Connects to another machine."),
+        Rule(pattern: #"\bgit\s+(fetch|pull|clone|remote|ls-remote|submodule)\b"#, level: .medium, reason: "Accesses the network."),
+        Rule(pattern: #"\b(gh|docker|podman|kubectl|aws|gcloud|az|terraform|heroku|vercel|fly|flyctl)\s"#, level: .medium, reason: "Uses a tool that acts on outside services."),
         Rule(pattern: #"\b(curl|wget)\s"#, level: .medium, reason: "Accesses the network."),
         Rule(pattern: #"\b(npm|yarn|pnpm)\s+(i|install|add)\b|\bpip3?\s+install\b|\bbrew\s+(install|upgrade|uninstall)\b|\bcargo\s+install\b"#, level: .medium, reason: "Installs packages."),
         Rule(pattern: #"\bmv\s"#, level: .medium, reason: "Moves or renames files."),
@@ -181,6 +239,151 @@ public enum BashRisk {
         Rule(pattern: #"(^|[\s;&|(])(ba|z)?sh\s|\beval\b|\bxargs\b|\bexec\b|\bsource\s|<\("#, level: .medium, reason: "Runs a nested shell or evaluates text as code."),
         Rule(pattern: #"\bopen\s"#, level: .medium, reason: "Opens a file or URL with another app."),
     ]
+
+
+    /// Reasons that mean the command reaches another machine or service.
+    static let networkReasons: Set<String> = ["Connects to another machine.", "Accesses the network.",
+                                              "Uses a tool that acts on outside services.", "Pipes a download into a shell."]
+
+    static let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "python", "python3",
+                                          "node", "deno", "bun", "ruby", "perl", "php", "lua"]
+    static let wrapperNames: Set<String> = ["env", "command", "nohup", "time", "nice", "exec", "builtin", "caffeinate", "stdbuf"]
+
+    struct Segment {
+        var separator: String
+        var words: [String]
+        /// Program name without its directory, with leading `VAR=value` words and wrappers like `env` skipped.
+        var program: String
+        var args: [String]
+    }
+
+    /// Splits a command at `&&`, `||`, `;`, `|`, `&` and newlines (quotes are not honored, which only errs toward more segments).
+    static func segments(_ command: String) -> [Segment] {
+        var out: [Segment] = []
+        var current = ""
+        var separator = ""
+        let chars = Array(command)
+        var i = 0
+        func flush(next: String) {
+            let words = current.split(whereSeparator: { $0 == " " || $0 == "\t" }).map { w -> String in
+                var t = String(w)
+                while let f = t.first, f == "'" || f == "\"" || f == "\\" || f == "(" || f == "{" { t.removeFirst() }
+                while let l = t.last, l == "'" || l == "\"" || l == ")" || l == "}" { t.removeLast() }
+                return t
+            }.filter { !$0.isEmpty }
+            if !words.isEmpty {
+                var rest = words[...]
+                while let w = rest.first, (w.contains("=") && !w.hasPrefix("-") && !w.contains("/") ) || wrapperNames.contains((w as NSString).lastPathComponent) {
+                    rest = rest.dropFirst()
+                }
+                let program = rest.first.map { ($0 as NSString).lastPathComponent } ?? ""
+                out.append(Segment(separator: separator, words: words, program: program, args: Array(rest.dropFirst())))
+            }
+            current = ""
+            separator = next
+        }
+        while i < chars.count {
+            let c = chars[i]
+            if c == "&" || c == "|" {
+                if i + 1 < chars.count, chars[i + 1] == c { flush(next: String([c, c])); i += 2; continue }
+                flush(next: String(c)); i += 1; continue
+            }
+            if c == ";" || c == "\n" { flush(next: ";"); i += 1; continue }
+            current.append(c); i += 1
+        }
+        flush(next: "")
+        return out
+    }
+
+    /// Classifies by program and subcommand instead of by spelling, so `--recursive`, `git -p push`,
+    /// `/usr/bin/sudo` and `| /bin/sh` rate the same as their common forms.
+    static func structuralFindings(_ command: String) -> [(RiskLevel, String)] {
+        var found: [(RiskLevel, String)] = []
+        let segs = segments(command)
+        var sawDownloader = false
+        for seg in segs {
+            let p = seg.program, a = seg.args
+            let flags = a.filter { $0.hasPrefix("-") }
+            func shortHas(_ letters: String) -> Bool {
+                flags.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains(where: { letters.contains($0) }) }
+            }
+            if ["sudo", "doas", "su", "pkexec"].contains(p) { found.append((.high, "Runs as administrator (sudo).")) }
+            if p == "rm" {
+                if shortHas("rRf") || flags.contains(where: { ["--recursive", "--force", "--no-preserve-root"].contains($0) }) {
+                    found.append((.high, "Deletes files recursively or forcefully."))
+                }
+            }
+            if ["chmod", "chown", "chgrp"].contains(p), shortHas("R") || flags.contains("--recursive") {
+                found.append((.high, "Changes permissions recursively."))
+            }
+            if p == "git" {
+                var rest = a[...]
+                while let w = rest.first, w.hasPrefix("-") {
+                    rest = rest.dropFirst()
+                    if ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"].contains(w) { rest = rest.dropFirst() }
+                }
+                let sub = rest.first ?? ""
+                if a.contains("-c") || sub == "config" || sub == "alias" {
+                    found.append((.medium, "Runs a nested shell or evaluates text as code."))
+                }
+                let subArgs = Array(rest.dropFirst())
+                let subFlags = subArgs.filter { $0.hasPrefix("-") }
+                switch sub {
+                case "push":
+                    found.append((.high, subFlags.contains(where: { $0.hasPrefix("--force") || $0 == "-f" })
+                        ? "Force-pushes to a remote." : "Pushes to a remote."))
+                case "reset" where subFlags.contains("--hard"):
+                    found.append((.high, "Discards local changes."))
+                case "clean" where subFlags.contains(where: { $0 == "--force" || ($0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains("f")) }):
+                    found.append((.high, "Deletes untracked files."))
+                case "checkout" where subArgs.contains("."), "restore" where subArgs.contains("."):
+                    found.append((.high, "Discards local changes."))
+                case "branch" where subFlags.contains(where: { $0 == "-D" || $0 == "--delete" || $0 == "-d" }):
+                    found.append((.high, "Deletes a branch."))
+                default: break
+                }
+            }
+            if p == "find", a.contains(where: { ["-delete", "-exec", "-execdir", "-ok", "-okdir"].contains($0) }) {
+                found.append((.medium, "Runs a nested shell or evaluates text as code."))
+            }
+            if ["awk", "gawk", "mawk"].contains(p), command.contains("system(") || command.contains("| getline") {
+                found.append((.medium, "Runs a nested shell or evaluates text as code."))
+            }
+            if ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh"].contains(p) {
+                found.append((.medium, "Runs a nested shell or evaluates text as code."))
+            }
+            if shellNames.contains(p), seg.separator == "|" {
+                found.append((.medium, "Runs a nested shell or evaluates text as code."))
+            }
+            if ["docker", "podman"].contains(p), a.contains(where: { ["rm", "rmi", "prune"].contains($0) }) {
+                found.append((.high, "Removes Docker resources."))
+            }
+            if ["npm", "yarn", "pnpm", "cargo", "gem", "twine"].contains(p), a.contains("publish") {
+                found.append((.high, "Publishes a package."))
+            }
+            if ["curl", "wget", "fetch"].contains(p) { sawDownloader = true }
+            if shellNames.contains(p), seg.separator == "|", sawDownloader {
+                found.append((.high, "Pipes a download into a shell."))
+            }
+            if shellNames.contains(p), a.contains("-c"), command.contains("curl") || command.contains("wget") {
+                found.append((.high, "Pipes a download into a shell."))
+            }
+        }
+        return found
+    }
+
+    /// What is said aloud for a Bash request. `partial` is true when the readout cannot stand for the whole command,
+    /// so a spoken yes would approve something the person did not hear.
+    static func narration(_ command: String, pronunciation: Pronunciation) -> (text: String, partial: Bool) {
+        let segs = segments(command)
+        let hidden = command.contains("$(") || command.contains("`") || command.contains("<<") || command.contains(">")
+            || command.contains("<(")
+        let parts = segs.map { ToolNarrator.commandSummary(([$0.program] + $0.args).joined(separator: " "), pronunciation: pronunciation) }
+        let text = parts.count <= 1 ? (parts.first ?? "a command")
+            : "a command with \(parts.count) steps: " + parts.joined(separator: ", then ")
+        let partial = segs.count > 3 || hidden || text.count > 160 || parts.contains("a command")
+        return (text, partial)
+    }
 
     /// Commands that only read and print, when they stand alone (no chaining, redirection or substitution).
     static let readOnlyCommands: Set<String> = ["ls", "pwd", "cat", "head", "tail", "wc", "echo", "grep", "rg", "which",
@@ -226,6 +429,10 @@ public enum BashRisk {
                 if !reasons.contains(rule.reason) { reasons.append(rule.reason) }
             }
         }
+        for (lvl, reason) in structuralFindings(original) {
+            if lvl > level { level = lvl }
+            if !reasons.contains(reason) { reasons.append(reason) }
+        }
         // Mentions of paths outside the project via absolute system locations.
         if command.contains("~/") || command.contains("$HOME") {
             level = max(level, .medium)
@@ -242,6 +449,9 @@ public enum BashRisk {
         }
         // A deletion rule implies the weaker "Deletes files." reason; keep the strongest only.
         if reasons.contains("Deletes files recursively or forcefully.") {
+            reasons.removeAll { $0 == "Deletes files." }
+        }
+        if reasons.contains("Deletes files.") && reasons.contains("Deletes files recursively or forcefully.") {
             reasons.removeAll { $0 == "Deletes files." }
         }
         if reasons.contains("Force-pushes to a remote.") {

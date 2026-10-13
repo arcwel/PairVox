@@ -9,13 +9,17 @@
 #   scripts/qa-smoke.sh              # run it
 #   scripts/qa-smoke.sh --json       # run it, print one JSON result line per check
 #
+#   scripts/qa-smoke.sh --only approve   # run one check (answer, approve, high-risk, brainstorm)
+#
 # Exit code: 0 all checks passed, 1 a check failed, 2 setup problem.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-DRY=0; JSON=0
-for a in "$@"; do
+DRY=0; JSON=0; ONLY=""
+while (( $# )); do
+  a="$1"; shift
   case "$a" in
+    --only) ONLY="${1:-}"; shift ;;
     --dry-run) DRY=1 ;;
     --json) JSON=1 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
@@ -25,7 +29,7 @@ done
 CHECKS=(
   "answer|Ask a question; expect a spoken reply and a first-audio time"
   "approve|Ask for a new file; expect a permission prompt, then a spoken yes creates it"
-  "high-risk|Ask for rm -rf; expect a spoken yes to be refused and the folder to survive"
+  "high-risk|Ask for launchctl (high risk, read-only); expect a spoken yes to be refused"
   "brainstorm|In brainstorm mode ask for an edit; expect the file to stay unchanged"
 )
 if (( DRY )); then
@@ -71,37 +75,60 @@ await() { # pattern timeout_seconds
 }
 stop() { send "/quit"; exec 3>&-; wait "$CLIPID" 2>/dev/null; CLIPID=""; }
 
-echo "qa-smoke: 4 Haiku turns in $WORK/repo"
+want() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
+dump() { echo "---- last lines of the CLI log ----" >&2; tail -25 "$WORK/log" >&2; }
+echo "qa-smoke: ${ONLY:+1 check, }Haiku turns in $WORK/repo"
 
+want answer && {
 fresh_repo; start
 send "What does this project do, in one sentence?"
 if await "first audio" 90; then report answer pass "$(grep -o 'first audio [0-9.]*s' "$WORK/log" | head -1)"
 else report answer fail "no spoken reply within 90 s"; fi
 stop
+}
 
+want approve && {
 fresh_repo; start
 send "Create a file named hello.txt containing the word hi."
 if await "Permission:" 90; then
-  send "yes"
-  await "first audio" 90 >/dev/null
-  sleep 2
+  # Claude sometimes asks twice (a harmless look first, then the write), so answer each prompt in turn.
+  for answered in 1 2 3 4; do
+    send "yes"
+    sleep 6
+    [[ -f "$WORK/repo/hello.txt" ]] && break
+    (( $(grep -c "Permission:" "$WORK/log") > answered )) || break
+  done
   if [[ -f "$WORK/repo/hello.txt" ]]; then report approve pass "prompt appeared, yes created hello.txt"
-  else report approve fail "prompt appeared but hello.txt was not created"; fi
+  else report approve fail "prompt appeared but hello.txt was not created"; dump; fi
 else report approve fail "no permission prompt within 90 s"; fi
 stop
+}
 
-fresh_repo; mkdir -p "$WORK/repo/build"; touch "$WORK/repo/build/artifact.o"
+want high-risk && {
+# `launchctl` is high risk in PairVox's policy even when read-only, so asking for it exercises the click-only rule with
+# nothing at stake. (rm -rf and git push are high risk too, but many people deny the first in their own Claude Code
+# settings and have global rules that make Claude ask about the second, so those never reach PairVox.)
+fresh_repo
 start
-send "Delete the build folder with rm -rf build."
-if await "risk: high" 90; then
+send "Run launchctl list and tell me how many services it shows."
+# Claude may look around first; answer those harmless prompts until the push itself is asked.
+seen=0
+for _ in 1 2 3 4; do
+  await "risk: high|Permission:" 90 >/dev/null || break
+  grep -q "risk: high" "$WORK/log" && break
+  (( $(grep -c "Permission:" "$WORK/log") > seen )) && { seen=$((seen + 1)); send "yes"; sleep 5; }
+done
+if grep -q "risk: high" "$WORK/log"; then
   send "yes"
   await "needs a click" 15 >/dev/null
-  if grep -q "needs a click" "$WORK/log" && [[ -d "$WORK/repo/build" ]]; then
-    report high-risk pass "spoken yes refused, build/ intact"
-  else report high-risk fail "spoken yes was not refused or build/ is gone"; fi
-else report high-risk fail "no high-risk prompt within 90 s (is the command classified high?)"; fi
+  if grep -q "needs a click" "$WORK/log"; then
+    report high-risk pass "spoken yes refused, the click-only rule held"
+  else report high-risk fail "spoken yes was not refused"; dump; fi
+else report high-risk fail "no high-risk prompt within 90 s (is the command classified high?)"; dump; fi
 stop
+}
 
+want brainstorm && {
 fresh_repo; start --brainstorm
 before="$(shasum "$WORK/repo/calc.py")"
 send "Change add so it also accepts a third argument c."
@@ -109,5 +136,6 @@ await "first audio" 90 >/dev/null; sleep 2
 if [[ "$(shasum "$WORK/repo/calc.py")" == "$before" ]]; then report brainstorm pass "calc.py unchanged in plan mode"
 else report brainstorm fail "calc.py was modified in brainstorm mode"; fi
 stop
+}
 
 exit "$FAILED"

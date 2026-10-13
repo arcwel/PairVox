@@ -7,7 +7,7 @@ import SwiftUI
 /// registration all read from here, so they can't disagree.
 struct AppShortcut: Identifiable {
     enum ID: String, CaseIterable {
-        case openProject, newSession, focusInput
+        case openProject, newSession, focusInput, nextProject, previousProject, closeProject
         case stopSpeaking, interrupt, toggleMute, repeatLast, readDetails, readCode, faster, slower
         case speechFull, speechSkipCode, speechSummary, modeBrainstorm, modeExecute
         case allow, allowAlways, deny
@@ -57,6 +57,9 @@ enum Shortcuts {
         s(.openProject, "Open Project…", "o", .command, "Project"),
         s(.newSession, "New Claude Session", "n", [.command, .shift], "Project"),
         s(.focusInput, "Type Instead of Talking", "l", .command, "Project"),
+        s(.nextProject, "Next Project", "]", [.command, .option], "Project"),
+        s(.previousProject, "Previous Project", "[", [.command, .option], "Project"),
+        s(.closeProject, "Close Project", "w", [.command, .shift], "Project"),
 
         s(.stopSpeaking, "Stop Speaking", ".", .command, "Conversation"),
         s(.interrupt, "Interrupt Claude", ".", [.command, .shift], "Conversation"),
