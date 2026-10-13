@@ -55,6 +55,12 @@ public struct AppSettings: Sendable, Codable, Equatable {
     /// Whether the child may load the opened project's own Claude Code settings, hooks and MCP servers.
     /// Off by default: those files come with the repository and can act outside PairVox's approval prompts.
     public var trustProjectConfiguration = false
+    /// Lets the user approve a high-risk request by saying "confirm high risk" instead of pressing the button.
+    /// Off by default. PairVox's own prompt contains that phrase, so speech it plays and the microphone hears can
+    /// satisfy it; turning this on accepts that.
+    public var spokenHighRiskConfirmation = false
+    /// Explain each permission request in plain words with a small separate Claude call.
+    public var explainRequests = true
 
     // Voice
     public var transcriber: TranscriberChoice = .automatic
@@ -142,6 +148,8 @@ public struct AppSettings: Sendable, Codable, Equatable {
         acknowledgements = (try? c.decode(Bool.self, forKey: .acknowledgements)) ?? d.acknowledgements
         autoApproveLowRisk = (try? c.decode(Bool.self, forKey: .autoApproveLowRisk)) ?? d.autoApproveLowRisk
         trustProjectConfiguration = (try? c.decode(Bool.self, forKey: .trustProjectConfiguration)) ?? d.trustProjectConfiguration
+        spokenHighRiskConfirmation = (try? c.decode(Bool.self, forKey: .spokenHighRiskConfirmation)) ?? d.spokenHighRiskConfirmation
+        explainRequests = (try? c.decode(Bool.self, forKey: .explainRequests)) ?? d.explainRequests
         transcriber = (try? c.decode(TranscriberChoice.self, forKey: .transcriber)) ?? d.transcriber
         let decodedWhisper = (try? c.decode(String.self, forKey: .whisperModel)) ?? d.whisperModel
         whisperModel = VoiceCatalog.whisperModelIDs.contains(decodedWhisper) ? decodedWhisper : VoiceCatalog.defaultWhisperModel

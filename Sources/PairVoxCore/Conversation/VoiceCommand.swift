@@ -27,6 +27,10 @@ public enum VoiceCommand: Sendable, Equatable {
     case setConversationMode(ConversationMode)
     case approve
     case approveAlways
+    /// The deliberate phrase that approves a high-risk request by voice (only when the user turned that on).
+    case confirmHighRisk
+    /// "explain": hear the plain-words explanation of the request on screen.
+    case explain
     case deny
     case newSession
     case faster
@@ -39,11 +43,15 @@ public enum VoiceCommand: Sendable, Equatable {
         public var awaitingPermission: Bool
         public var claudeIsWorking: Bool
         public var hasHeldBack: Bool
+        /// A high-risk request is waiting and the user allows confirming those by voice.
+        public var awaitingHighRiskConfirmation: Bool
 
-        public init(awaitingPermission: Bool = false, claudeIsWorking: Bool = false, hasHeldBack: Bool = false) {
+        public init(awaitingPermission: Bool = false, claudeIsWorking: Bool = false, hasHeldBack: Bool = false,
+                    awaitingHighRiskConfirmation: Bool = false) {
             self.awaitingPermission = awaitingPermission
             self.claudeIsWorking = claudeIsWorking
             self.hasHeldBack = hasHeldBack
+            self.awaitingHighRiskConfirmation = awaitingHighRiskConfirmation
         }
     }
 
@@ -57,6 +65,13 @@ public enum VoiceCommand: Sendable, Equatable {
         let core = strip(phrase, prefixes: ["hey pairvox ", "pairvox ", "okay ", "ok ", "please ", "um ", "uh "],
                          suffixes: [" please", " thanks", " thank you"])
 
+        if context.awaitingPermission, context.awaitingHighRiskConfirmation, isHighRiskConfirmation(core) {
+            return .confirmHighRisk
+        }
+        if context.awaitingPermission, ["explain", "explain that", "explain it", "explain this", "what does that do",
+                                        "what does it do", "what does this do", "what is that", "what is it"].contains(core) {
+            return .explain
+        }
         if context.awaitingPermission, let answer = permissionAnswer(core) {
             return answer
         }
@@ -113,6 +128,13 @@ public enum VoiceCommand: Sendable, Equatable {
                                               "allow it", "allow once", "make it so", "please do"]
     static let denyWords: Set<String> = ["no", "nope", "nah", "deny", "denied", "don't", "dont", "not", "reject",
                                          "cancel", "stop", "never"]
+
+    /// The phrase PairVox asks for. It is deliberately not a casual "yes", and any refusal word cancels it.
+    static func isHighRiskConfirmation(_ core: String) -> Bool {
+        let words = core.split(separator: " ").map(String.init)
+        guard core.contains("confirm high risk"), !words.contains(where: denyWords.contains) else { return false }
+        return words.count <= 5
+    }
 
     /// Short yes/no answers to a permission prompt. Longer replies go to Claude as feedback.
     static func permissionAnswer(_ core: String) -> VoiceCommand? {

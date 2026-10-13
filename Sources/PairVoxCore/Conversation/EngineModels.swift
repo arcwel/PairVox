@@ -62,9 +62,20 @@ public struct TranscriptEntry: Sendable, Equatable, Identifiable {
     }
 }
 
+/// A plain-words explanation of a pending request, written by a separate read-only Claude call.
+public enum Explanation: Sendable, Equatable {
+    case none
+    case loading
+    case ready(String)
+    case unavailable
+}
+
 public struct PendingPermission: Sendable, Equatable {
     public var request: PermissionRequest
     public var assessment: PermissionAssessment
+    public var explanation: Explanation = .none
+    /// Questions the user asked about this request before deciding, and the answers.
+    public var questions: [AdvisorTurn] = []
 }
 
 public struct UsageSnapshot: Sendable, Equatable {
@@ -94,7 +105,8 @@ public struct EngineSnapshot: Sendable, Equatable {
     public var transcript: [TranscriptEntry] = []
     public var pendingPermission: PendingPermission?
     /// Requests waiting behind the one shown; each is shown and spoken in turn once the current one is answered.
-    public var queuedPermissionCount = 0
+    public var queuedPermissions: [PendingPermission] = []
+    public var queuedPermissionCount: Int { queuedPermissions.count }
     public var session: SessionInfo?
     public var usage = UsageSnapshot()
     public var speechMode: SpeechMode = .skipCode
@@ -118,6 +130,9 @@ public struct EngineConfiguration: Sendable {
     public var verbosity: Verbosity
     public var acknowledgements: Bool
     public var autoApproveLowRisk: Bool
+    public var spokenHighRiskConfirmation: Bool
+    /// Ask a separate read-only Claude call to explain each request in plain words (uses a small amount of usage).
+    public var explainRequests: Bool
     public var pronunciation: [String: String]
     public var speechRate: Double
     /// Delay before a filler acknowledgement if nothing has been said yet.
@@ -125,7 +140,8 @@ public struct EngineConfiguration: Sendable {
 
     public init(projectRoot: String? = nil, speechMode: SpeechMode = .skipCode,
                 conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
-                acknowledgements: Bool = true, autoApproveLowRisk: Bool = false, pronunciation: [String: String] = [:],
+                acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
+                spokenHighRiskConfirmation: Bool = false, explainRequests: Bool = true, pronunciation: [String: String] = [:],
                 speechRate: Double = 1.0, acknowledgementDelay: TimeInterval = 1.2) {
         self.projectRoot = projectRoot
         self.speechMode = speechMode
@@ -133,6 +149,8 @@ public struct EngineConfiguration: Sendable {
         self.verbosity = verbosity
         self.acknowledgements = acknowledgements
         self.autoApproveLowRisk = autoApproveLowRisk
+        self.spokenHighRiskConfirmation = spokenHighRiskConfirmation
+        self.explainRequests = explainRequests
         self.pronunciation = pronunciation
         self.speechRate = speechRate
         self.acknowledgementDelay = acknowledgementDelay
@@ -145,6 +163,8 @@ public struct EngineConfiguration: Sendable {
                   verbosity: settings.verbosity,
                   acknowledgements: settings.acknowledgements,
                   autoApproveLowRisk: settings.autoApproveLowRisk,
+                  spokenHighRiskConfirmation: settings.spokenHighRiskConfirmation,
+                  explainRequests: settings.explainRequests,
                   pronunciation: settings.pronunciation,
                   speechRate: settings.speechRate)
     }

@@ -6,6 +6,7 @@ import SwiftUI
 struct PermissionCardView: View {
     @EnvironmentObject var model: AppModel
     let pending: PendingPermission
+    @State private var question = ""
 
     private var riskColor: Color {
         switch pending.assessment.risk {
@@ -43,10 +44,9 @@ struct PermissionCardView: View {
             }
             .frame(maxHeight: 160)
             .fixedSize(horizontal: false, vertical: true)
-            if model.snapshot.queuedPermissionCount > 0 {
-                Text("\(model.snapshot.queuedPermissionCount) more waiting after this one.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            explanationView
+            if model.advisorAvailable && model.settings.explainRequests { askView }
+            waitingView
             ForEach(pending.assessment.reasons, id: \.self) { reason in
                 Label(reason, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary)
             }
@@ -69,6 +69,88 @@ struct PermissionCardView: View {
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(riskColor.opacity(0.5)))
+    }
+
+    @ViewBuilder private var explanationView: some View {
+        switch pending.explanation {
+        case .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Writing a plain-words summary…").font(.caption).foregroundStyle(.secondary)
+            }
+        case .ready(let text):
+            VStack(alignment: .leading, spacing: 3) {
+                Text("IN PLAIN WORDS · AI SUMMARY, CHECK THE COMMAND ABOVE")
+                    .font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                Text(text).font(.callout).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .overlay(Rectangle().stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var askView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(pending.questions) { turn in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(turn.question).font(.caption.weight(.semibold))
+                    if let answer = turn.answer {
+                        Text(answer).font(.caption).foregroundStyle(turn.failed ? .secondary : .primary)
+                            .textSelection(.enabled)
+                    } else {
+                        HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Checking…").font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            HStack {
+                TextField("Ask about this request, or say it out loud…", text: $question)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(sendQuestion)
+                Button("Ask", action: sendQuestion)
+                    .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func sendQuestion() {
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        model.ask(q)
+        question = ""
+    }
+
+    @ViewBuilder private var waitingView: some View {
+        let waiting = model.snapshot.queuedPermissions
+        if !waiting.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(waiting.count) MORE WAITING AFTER THIS ONE")
+                    .font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                ForEach(waiting, id: \.request.requestID) { p in
+                    HStack(spacing: 6) {
+                        Circle().fill(color(for: p.assessment.risk)).frame(width: 6, height: 6)
+                        Text(p.assessment.summary).font(.system(.caption, design: .monospaced)).lineLimit(1)
+                    }
+                }
+                let count = model.approvableWaitingCount
+                Button(count == 0 ? "None of these can be allowed together" : "Allow \(count) together (skips high risk)") {
+                    model.approveAllWaiting()
+                }
+                .disabled(count == 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .overlay(Rectangle().stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+        }
+    }
+
+    private func color(for risk: RiskLevel) -> Color {
+        switch risk {
+        case .low: return .green
+        case .medium: return .orange
+        case .high: return .red
+        }
     }
 
     private var riskLabel: String {

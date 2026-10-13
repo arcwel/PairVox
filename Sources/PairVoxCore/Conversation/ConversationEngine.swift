@@ -18,6 +18,10 @@ public actor ConversationEngine {
     /// Requests that arrived while another was waiting. Answering the shown one promotes the next, so an
     /// approval can only ever apply to the request the user was shown and told about.
     private var permissionQueue: [PendingPermission] = []
+    private let advisor: (any RequestAdvisor)?
+    private var advisorTasks: [String: [Task<Void, Never>]] = [:]
+    private var speakExplanationFor: String?
+    static let maxQuestionsPerRequest = 5
     /// The conversation mode the backend factory launches with; a later change is re-applied to new sessions.
     private var launchedConversationMode: ConversationMode
     private var backend: (any SessionBackend)?
@@ -56,7 +60,8 @@ public actor ConversationEngine {
     private var readMoreWhenDone = false
 
     public init(configuration: EngineConfiguration, authKind: AuthKind = .subscription, output: any SpeechOutput,
-                backendFactory: @escaping SessionBackendFactory) {
+                advisor: (any RequestAdvisor)? = nil, backendFactory: @escaping SessionBackendFactory) {
+        self.advisor = advisor
         self.config = configuration
         self.launchedConversationMode = configuration.conversationMode
         self.authKind = authKind
@@ -171,7 +176,8 @@ public actor ConversationEngine {
         }
         let context = VoiceCommand.Context(awaitingPermission: snapshot.pendingPermission != nil,
                                            claudeIsWorking: !sendTimes.isEmpty,
-                                           hasHeldBack: !(lastPlanner?.heldBack.isEmpty ?? true))
+                                           hasHeldBack: !(lastPlanner?.heldBack.isEmpty ?? true),
+                                           awaitingHighRiskConfirmation: snapshot.pendingPermission.map(canConfirmHighRiskByVoice) ?? false)
         let parsed = VoiceCommand.parse(text, context: context)
         log.log(.info, .engine, "user.submit",
                 ["text": log.content(text), "command": parsed.map { "\($0)" } ?? "none",
@@ -179,6 +185,12 @@ public actor ConversationEngine {
         if let command = parsed {
             appendEntry(.user, text, status: .done)
             perform(command)
+            return
+        }
+        // A question about the request on screen is asked of the advisor, never taken as a refusal.
+        if snapshot.pendingPermission != nil, advisor != nil, text.hasSuffix("?") {
+            appendEntry(.user, text, status: .done)
+            askAboutPending(text, spoken: true)
             return
         }
         // Speaking over a permission prompt with something else = "no, do this instead".
@@ -214,6 +226,129 @@ public actor ConversationEngine {
     /// Turns the "auto-approve read-only tools" setting on or off for the running session.
     public func setAutoApproveLowRisk(_ on: Bool) {
         config.autoApproveLowRisk = on
+    }
+
+    public func setExplainRequests(_ on: Bool) {
+        config.explainRequests = on
+    }
+
+    /// Turns spoken confirmation of high-risk requests on or off for the running session.
+    public func setSpokenHighRiskConfirmation(_ on: Bool) {
+        config.spokenHighRiskConfirmation = on
+    }
+
+    /// Asks the advisor a question about the request on screen. The answer is advice only: it never approves
+    /// or denies anything.
+    public func askAboutPending(_ question: String, spoken: Bool = false) {
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let advisor, var pending = snapshot.pendingPermission, !q.isEmpty else { return }
+        guard pending.questions.count < Self.maxQuestionsPerRequest else {
+            speak([make("That is enough questions for this one. Please decide, or say no and tell Claude what to do instead.", .notice)],
+                  record: false, force: true)
+            return
+        }
+        let turn = AdvisorTurn(id: pending.questions.count + 1, question: q)
+        let earlier = pending.questions
+        pending.questions.append(turn)
+        snapshot.pendingPermission = pending
+        publish()
+        let id = pending.request.requestID, project = config.projectRoot
+        let (request, assessment) = (pending.request, pending.assessment)
+        let task = Task { [weak self] in
+            let result: Result<String, Error>
+            do { result = .success(try await advisor.answer(q, about: request, assessment: assessment, project: project, earlier: earlier)) }
+            catch { result = .failure(error) }
+            await self?.questionAnswered(requestID: id, turnID: turn.id, result: result, spoken: spoken)
+        }
+        advisorTasks[id, default: []].append(task)
+    }
+
+    private func questionAnswered(requestID: String, turnID: Int, result: Result<String, Error>, spoken: Bool) {
+        guard var pending = snapshot.pendingPermission, pending.request.requestID == requestID,
+              let i = pending.questions.firstIndex(where: { $0.id == turnID }) else { return }
+        switch result {
+        case .success(let text):
+            pending.questions[i].answer = text
+            log.log(.info, .policy, "advisor.answer", ["ok": .bool(true)])
+            if spoken { speak([make(text, .notice)], record: false, force: true) }
+        case .failure:
+            pending.questions[i].failed = true
+            pending.questions[i].answer = "I couldn't get an answer to that."
+            log.log(.info, .policy, "advisor.answer", ["ok": .bool(false)])
+            if spoken { speak([make("I couldn't get an answer to that.", .notice)], record: false, force: true) }
+        }
+        snapshot.pendingPermission = pending
+        publish()
+    }
+
+    private func startExplanation(_ pending: PendingPermission) {
+        guard let advisor, config.explainRequests else { return }
+        var p = pending
+        p.explanation = .loading
+        snapshot.pendingPermission = p
+        let id = pending.request.requestID, project = config.projectRoot
+        let (request, assessment) = (pending.request, pending.assessment)
+        let task = Task { [weak self] in
+            let result: Result<String, Error>
+            do { result = .success(try await advisor.summarize(request, assessment: assessment, project: project)) }
+            catch { result = .failure(error) }
+            await self?.explanationArrived(requestID: id, result: result)
+        }
+        advisorTasks[id, default: []].append(task)
+    }
+
+    private func explanationArrived(requestID: String, result: Result<String, Error>) {
+        guard var pending = snapshot.pendingPermission, pending.request.requestID == requestID else { return }
+        switch result {
+        case .success(let text):
+            pending.explanation = .ready(text)
+            log.log(.info, .policy, "advisor.summary", ["ok": .bool(true)])
+            if speakExplanationFor == requestID {
+                speakExplanationFor = nil
+                speak([make(text, .notice)], record: false, force: true)
+            }
+        case .failure:
+            pending.explanation = .unavailable
+            log.log(.info, .policy, "advisor.summary", ["ok": .bool(false)])
+            if speakExplanationFor == requestID {
+                speakExplanationFor = nil
+                speak([make("I couldn't get an explanation for this one.", .notice)], record: false, force: true)
+            }
+        }
+        snapshot.pendingPermission = pending
+        publish()
+    }
+
+    private func cancelAdvisorWork(for id: String? = nil) {
+        if let id {
+            advisorTasks.removeValue(forKey: id)?.forEach { $0.cancel() }
+        } else {
+            advisorTasks.values.joined().forEach { $0.cancel() }
+            advisorTasks.removeAll()
+        }
+        speakExplanationFor = nil
+    }
+
+    /// Allows the waiting requests the user was shown. High-risk requests and anything that needs the screen are
+    /// never included, whatever ids are passed.
+    public func approveAllWaiting(requestIDs: [String]) {
+        let ids = Set(requestIDs)
+        func eligible(_ p: PendingPermission) -> Bool { ids.contains(p.request.requestID) && p.assessment.voiceApprovable }
+        var kept: [PendingPermission] = []
+        for p in permissionQueue {
+            if eligible(p) { sendDecision(p.request, .allow) } else { kept.append(p) }
+        }
+        permissionQueue = kept
+        snapshot.queuedPermissions = kept
+        if let head = snapshot.pendingPermission, eligible(head) { respondToPermission(head.request, decision: .allow) }
+        publish()
+    }
+
+    /// A high-risk request the user may confirm by saying the phrase. Anything Claude Code says needs the user at
+    /// the screen stays a click.
+    private func canConfirmHighRiskByVoice(_ p: PendingPermission) -> Bool {
+        config.spokenHighRiskConfirmation && p.assessment.risk == .high && !p.assessment.voiceApprovable
+            && !p.request.requiresUserInteraction
     }
 
     public func interruptClaude() {
@@ -274,7 +409,8 @@ public actor ConversationEngine {
         sendTimes.removeAll()
         snapshot.pendingPermission = nil
         permissionQueue.removeAll()
-        snapshot.queuedPermissionCount = 0
+        snapshot.queuedPermissions = []
+        cancelAdvisorWork()
         snapshot.session = nil
         snapshot.isClaudeWorking = false
         appendEntry(.system, "New session started.", status: .done)
@@ -347,9 +483,23 @@ public actor ConversationEngine {
             guard let pending = snapshot.pendingPermission else { break }
             if pending.assessment.voiceApprovable {
                 approvePending(always: command == .approveAlways)
+            } else if canConfirmHighRiskByVoice(pending) {
+                speak([make("That one is high risk. Say confirm high risk to allow it, or use the button.", .notice)],
+                      record: false, force: true)
             } else {
                 speak([make("That one needs a click. Please confirm it on screen.", .notice)], record: false, force: true)
             }
+        case .explain:
+            guard let pending = snapshot.pendingPermission else { break }
+            switch pending.explanation {
+            case .ready(let text): speak([make(text, .notice)], record: false, force: true)
+            case .loading: speakExplanationFor = pending.request.requestID
+            default: speak([make("I don't have an explanation for this one. Say yes or no, or ask me a question.", .notice)], record: false, force: true)
+            }
+        case .confirmHighRisk:
+            guard let pending = snapshot.pendingPermission, canConfirmHighRiskByVoice(pending) else { break }
+            log.log(.info, .policy, "permission.spokenHighRisk", ["tool": .string(pending.request.toolName)])
+            approvePending(requestID: pending.request.requestID)
         case .deny:
             denyPending()
         case .newSession:
@@ -423,14 +573,14 @@ public actor ConversationEngine {
             if snapshot.pendingPermission != nil {
                 // Never replace the request the user is looking at or has just heard.
                 permissionQueue.append(pending)
-                snapshot.queuedPermissionCount = permissionQueue.count
+                snapshot.queuedPermissions = permissionQueue
             } else {
                 showPermission(pending)
             }
 
         case .permissionCancelled(let id):
             permissionQueue.removeAll { $0.request.requestID == id }
-            snapshot.queuedPermissionCount = permissionQueue.count
+            snapshot.queuedPermissions = permissionQueue
             if snapshot.pendingPermission?.request.requestID == id {
                 snapshot.pendingPermission = nil
                 promoteNextPermission()
@@ -467,7 +617,8 @@ public actor ConversationEngine {
             }
             snapshot.pendingPermission = nil
             permissionQueue.removeAll()
-            snapshot.queuedPermissionCount = 0
+            snapshot.queuedPermissions = []
+            cancelAdvisorWork()
             if code != 0, !stderr.isEmpty { snapshot.lastNotice = String(stderr.suffix(300)) }
         }
         recomputePhase()
@@ -591,6 +742,14 @@ public actor ConversationEngine {
     }
 
     private func respondToPermission(_ request: PermissionRequest, decision: PermissionDecision) {
+        cancelAdvisorWork(for: request.requestID)
+        sendDecision(request, decision)
+        snapshot.pendingPermission = nil
+        promoteNextPermission()
+        recomputePhase()
+    }
+
+    private func sendDecision(_ request: PermissionRequest, _ decision: PermissionDecision) {
         log.log(.info, .policy, "permission.decided", ["tool": .string(request.toolName), "decision": .string({
             switch decision {
             case .allow: return "allow"
@@ -603,7 +762,6 @@ public actor ConversationEngine {
         } catch {
             snapshot.lastNotice = "\(error)"
         }
-        snapshot.pendingPermission = nil
         appendEntry(.system, {
             switch decision {
             case .allow: return "Approved."
@@ -611,23 +769,27 @@ public actor ConversationEngine {
             case .deny: return "Denied."
             }
         }(), status: .done)
-        promoteNextPermission()
-        recomputePhase()
     }
 
     private func showPermission(_ pending: PendingPermission) {
         snapshot.pendingPermission = pending
         ackTask?.cancel()
-        speak([make(pending.assessment.spokenPrompt, .prompt)], record: false, force: true)
+        var prompt = pending.assessment.spokenPrompt
+        if canConfirmHighRiskByVoice(pending) {
+            prompt = prompt.replacingOccurrences(of: " Please confirm on screen.",
+                                                 with: " This is high risk. Say confirm high risk to allow it, or use the button.")
+        }
+        speak([make(prompt, .prompt)], record: false, force: true)
+        startExplanation(pending)
     }
 
     private func promoteNextPermission() {
         guard snapshot.pendingPermission == nil, !permissionQueue.isEmpty else {
-            snapshot.queuedPermissionCount = permissionQueue.count
+            snapshot.queuedPermissions = permissionQueue
             return
         }
         let next = permissionQueue.removeFirst()
-        snapshot.queuedPermissionCount = permissionQueue.count
+        snapshot.queuedPermissions = permissionQueue
         showPermission(next)
     }
 

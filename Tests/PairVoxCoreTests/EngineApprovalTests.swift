@@ -103,6 +103,84 @@ final class EngineApprovalTests: XCTestCase {
         XCTAssertTrue(backend.responses.isEmpty)
     }
 
+    func bash(_ id: String, _ command: String, _ extra: (inout PermissionRequest) -> Void = { _ in }) -> SessionEvent {
+        var r = PermissionRequest(requestID: id, toolName: "Bash", input: ["command": .string(command)])
+        extra(&r)
+        return .permissionRequested(r)
+    }
+
+    func testHighRiskCannotBeConfirmedByVoiceWhileTheToggleIsOff() async {
+        await engine.submit("Clean up")
+        backend.emit(bash("h1", "rm -rf build"))
+        await settle()
+        await engine.submit("confirm high risk")
+        await engine.submit("yes")
+        XCTAssertTrue(backend.responses.isEmpty, "off by default: only the button approves a high-risk request")
+        XCTAssertTrue(output.allTexts.last?.contains("needs a click") ?? false)
+        XCTAssertFalse(output.allTexts.contains { $0.contains("confirm high risk") && $0.hasPrefix("Claude wants") })
+    }
+
+    func testHighRiskCanBeConfirmedByTheDeliberatePhraseWhenTheToggleIsOn() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.submit("Clean up")
+        backend.emit(bash("h1", "rm -rf build"))
+        await settle()
+        XCTAssertTrue(output.allTexts.contains { $0.hasPrefix("Claude wants to run") && $0.hasSuffix("Say confirm high risk to allow it, or use the button.") },
+                      "the prompt tells the user the phrase")
+        await engine.submit("yes")
+        await engine.submit("allow")
+        XCTAssertTrue(backend.responses.isEmpty, "a casual yes never approves a high-risk request")
+        XCTAssertTrue(output.allTexts.contains("That one is high risk. Say confirm high risk to allow it, or use the button."))
+        await engine.submit("don't confirm high risk")
+        XCTAssertEqual(backend.responses.map(\.0), ["h1"], "a refusal wins and denies")
+        guard case .deny? = backend.responses.first?.1 else { return XCTFail("expected a denial") }
+    }
+
+    func testTheSpokenPhraseApproves() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.submit("Clean up")
+        backend.emit(bash("h2", "git push --force origin main"))
+        await settle()
+        await engine.submit("Confirm high risk.")
+        XCTAssertEqual(backend.responses.map(\.0), ["h2"])
+        XCTAssertEqual(backend.responses.first?.1, .allow)
+    }
+
+    func testSpeechFromTheSpeakersCanSatisfyItWhenTheToggleIsOn() async {
+        // Accepted tradeoff, stated in Settings: the engine does not tell PairVox's own voice from the user's.
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.submit("Clean up")
+        backend.emit(bash("h3", "rm -rf build"))
+        await settle()
+        output.playNext(finish: false)         // PairVox is speaking
+        await engine.submit("confirm high risk")  // and the microphone hears the phrase
+        XCTAssertEqual(backend.responses.map(\.0), ["h3"])
+    }
+
+    func testRequestsThatNeedTheScreenStayAClickEvenWhenTheToggleIsOn() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.submit("Fix it")
+        backend.emit(bash("h4", "rm -rf build") { $0.requiresUserInteraction = true })
+        await settle()
+        await engine.submit("confirm high risk")
+        XCTAssertTrue(backend.responses.isEmpty)
+        backend.emit(bash("h5", "ls") { $0.decisionReasonType = "safetyCheck"; $0.requiresUserInteraction = true })
+        await settle()
+        await engine.denyPending()
+        await engine.submit("confirm high risk")
+        XCTAssertEqual(backend.responses.count, 1, "only the first denial")
+    }
+
+    func testTheToggleAppliesToARunningSession() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.setSpokenHighRiskConfirmation(false)
+        await engine.submit("Clean up")
+        backend.emit(bash("h6", "rm -rf build"))
+        await settle()
+        await engine.submit("confirm high risk")
+        XCTAssertTrue(backend.responses.isEmpty)
+    }
+
     func testNewSessionKeepsTheModeTheUserSwitchedTo() async {
         let first = FakeBackend(), second = FakeBackend()
         let sessions = [first, second]

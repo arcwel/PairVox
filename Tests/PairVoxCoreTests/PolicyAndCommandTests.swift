@@ -121,6 +121,19 @@ final class VoiceCommandTests: XCTestCase {
         }
     }
 
+    func testHighRiskPhraseIsOnlyHeardWhenAskedFor() {
+        let on = VoiceCommand.Context(awaitingPermission: true, awaitingHighRiskConfirmation: true)
+        XCTAssertEqual(VoiceCommand.parse("confirm high risk", context: on), .confirmHighRisk)
+        XCTAssertEqual(VoiceCommand.parse("okay confirm high risk please", context: on), .confirmHighRisk)
+        XCTAssertEqual(VoiceCommand.parse("yes", context: on), .approve, "a casual yes parses as approve and is then refused for high risk")
+        XCTAssertEqual(VoiceCommand.parse("don't confirm high risk", context: on), .deny)
+        XCTAssertEqual(VoiceCommand.parse("never confirm high risk", context: on), .deny)
+        let off = VoiceCommand.Context(awaitingPermission: true)
+        XCTAssertNotEqual(VoiceCommand.parse("confirm high risk", context: off), .confirmHighRisk)
+        XCTAssertNil(VoiceCommand.parse("confirm high risk", context: VoiceCommand.Context(awaitingHighRiskConfirmation: true)),
+                     "nothing is pending")
+    }
+
     func testBackchannelOnlyWhileWorking() {
         XCTAssertEqual(VoiceCommand.parse("okay", context: .init(claudeIsWorking: true)), .backchannel)
         XCTAssertNil(VoiceCommand.parse("okay"), "when idle, 'okay' may answer Claude's question")

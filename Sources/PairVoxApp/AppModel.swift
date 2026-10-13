@@ -32,6 +32,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var inputLevel: Float = -90
     @Published private(set) var listeningMode: VoiceInputController.ListeningMode = .handsFree
     @Published private(set) var pushToTalkActive = false
+    /// A request explainer exists for the open project (questions about a request can be asked).
+    @Published private(set) var advisorAvailable = false
     @Published private(set) var hasAPIKey = KeychainStore.readAPIKey() != nil
     @Published private(set) var previewingVoice: String?
     /// False when no microphone is being captured (none plugged in, or permission not granted yet).
@@ -165,9 +167,12 @@ final class AppModel: ObservableObject {
             appendSystemPrompt: SystemPrompts.voice, baseEnvironment: loginEnvironment,
             trustProjectConfiguration: settings.trustProjectConfiguration)
 
+        let advisor = ClaudeAdvisor(executable: URL(fileURLWithPath: path), workingDirectory: url, auth: auth,
+                                    baseEnvironment: loginEnvironment)
+        advisorAvailable = true
         let output = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
         let engine = ConversationEngine(configuration: EngineConfiguration(settings: settings, project: projectPath),
-                                        authKind: auth.kind, output: output) { resume in
+                                        authKind: auth.kind, output: output, advisor: advisor) { resume in
             var cfg = launch
             cfg.resumeSessionID = resume
             return ClaudeCLISession(configuration: cfg)
@@ -416,6 +421,19 @@ final class AppModel: ObservableObject {
     }
 
     /// Approves the request that was on screen when the button was pressed; if it has changed since, nothing happens.
+    func ask(_ question: String) { Task { await engine?.askAboutPending(question) } }
+
+    /// Requests waiting behind the one shown (plus the one shown) that can be allowed together.
+    var approvableWaitingCount: Int {
+        ([snapshot.pendingPermission].compactMap { $0 } + snapshot.queuedPermissions).filter(\.assessment.voiceApprovable).count
+    }
+
+    /// Allows exactly the requests listed on screen right now, skipping high-risk ones.
+    func approveAllWaiting() {
+        let ids = ([snapshot.pendingPermission].compactMap { $0 } + snapshot.queuedPermissions).map(\.request.requestID)
+        Task { await engine?.approveAllWaiting(requestIDs: ids) }
+    }
+
     func approve(always: Bool = false, requestID: String? = nil) {
         let id = requestID ?? snapshot.pendingPermission?.request.requestID
         Task { await engine?.approvePending(always: always, requestID: id) }
@@ -599,6 +617,14 @@ final class AppModel: ObservableObject {
         if !syncingFromEngine, old.speechMode != settings.speechMode {
             let mode = settings.speechMode
             Task { await engine?.setSpeechMode(mode) }
+        }
+        if old.explainRequests != settings.explainRequests {
+            let on = settings.explainRequests
+            Task { await engine?.setExplainRequests(on) }
+        }
+        if old.spokenHighRiskConfirmation != settings.spokenHighRiskConfirmation {
+            let on = settings.spokenHighRiskConfirmation
+            Task { await engine?.setSpokenHighRiskConfirmation(on) }
         }
         if old.autoApproveLowRisk != settings.autoApproveLowRisk {
             let on = settings.autoApproveLowRisk
