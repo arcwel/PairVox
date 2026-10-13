@@ -12,6 +12,8 @@ struct SettingsView: View {
             VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }
             AccountSettings().tabItem { Label("Account", systemImage: "person.badge.key") }
             PronunciationSettings().tabItem { Label("Pronunciation", systemImage: "character.bubble") }
+            ShortcutSettings().tabItem { Label("Shortcuts", systemImage: "keyboard") }
+            DiagnosticsSettings().tabItem { Label("Diagnostics", systemImage: "stethoscope") }
             AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
         }
         .frame(width: 560, height: 470)
@@ -47,6 +49,12 @@ private struct GeneralSettings: View {
                     Text("Push to talk (hold ⌃⌥Space)").tag(false)
                 }
                 Toggle("Let me interrupt by talking (barge-in)", isOn: $model.settings.bargeInEnabled)
+                Toggle("Use the microphone", isOn: $model.settings.microphoneEnabled)
+                Text("Turn off to play only. A Bluetooth headset then stays in its high-quality music mode instead of the narrower call mode that an open microphone forces. You can still type to Claude.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Echo cancellation and noise suppression", isOn: $model.settings.echoCancellation)
+                Text("Lets you talk over PairVox on laptop speakers. If replies sound distorted or crackly, turn this off and use headphones or push to talk.")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("End of turn after") {
                     HStack {
                         Slider(value: $model.settings.endOfTurnSilence, in: 0.4...2.0, step: 0.05)
@@ -89,6 +97,14 @@ private struct VoiceSettings: View {
                     Text("Kokoro").tag(SynthesizerChoice.kokoro)
                     Text("macOS system voice").tag(SynthesizerChoice.system)
                 }
+                Picker("Play through", selection: $model.settings.outputDeviceUID) {
+                    Text("Automatic").tag(String?.none)
+                    ForEach(AudioRoute.devices().filter(\.hasOutput)) { device in
+                        Text("\(device.name)\(device.isBluetooth ? " (Bluetooth)" : "")").tag(String?.some(device.uid))
+                    }
+                }
+                Text("Automatic uses your headset when it is also the microphone, so the speaker and microphone stay together. Choose a device here if macOS keeps switching between your headset and speakers.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("System voice", selection: $model.settings.systemVoiceIdentifier) {
                     Text("Best available").tag(String?.none)
                     ForEach(SystemSynthesizer.englishVoices(), id: \.identifier) { v in
@@ -184,6 +200,59 @@ private struct VoiceSettings: View {
         case .failed(let e): return "Failed: \(e)"
         case .notLoaded: return "Not loaded"
         }
+    }
+}
+
+private struct ShortcutSettings: View {
+    private var groups: [(String, [AppShortcut])] {
+        var order: [String] = []
+        for s in Shortcuts.all where !order.contains(s.group) { order.append(s.group) }
+        return order.map { g in (g, Shortcuts.all.filter { $0.group == g }) }
+    }
+
+    var body: some View {
+        Form {
+            Section("Anywhere on your Mac") {
+                ForEach(Shortcuts.global) { key in row(key.title, key.display) }
+            }
+            ForEach(groups, id: \.0) { group, items in
+                Section(group) {
+                    ForEach(items) { item in row(item.title, item.display) }
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func row(_ title: String, _ keys: String) -> some View {
+        LabeledContent(title) { Text(keys).monospaced().foregroundStyle(.secondary) }
+    }
+}
+
+private struct DiagnosticsSettings: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section("Logs") {
+                Toggle("Detailed logging", isOn: $model.settings.verboseLogging)
+                Toggle("Include conversation text", isOn: $model.settings.logConversationText)
+                Text("Logs record timings, audio events and decisions. They never include what you or Claude say unless the second switch is on. API keys, tokens, e-mail addresses and your home folder are always removed.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Record the audio PairVox plays", isOn: $model.settings.recordPlaybackAudio)
+                Text("For tracking down crackle or static: saves what PairVox itself plays (not your microphone) to the log folder, up to 15 minutes per launch. It is audio of Claude's replies, so leave it off unless you are investigating a sound problem.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Share with someone reviewing a problem") {
+                HStack {
+                    Button("Export Diagnostics…") { model.exportDiagnostics() }
+                    Button("Show Log Folder") { model.revealLogs() }
+                }
+                Text("Creates one zip on your Desktop with the logs and a snapshot of this Mac's audio setup. Nothing is uploaded; you choose where it goes. Shortcut: \(Shortcuts.of(.exportDiagnostics).display).")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 

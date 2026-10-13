@@ -7,6 +7,7 @@ import SwiftUI
 struct ControlBarView: View {
     @EnvironmentObject var model: AppModel
     @State private var typed = ""
+    @FocusState private var typingFocused: Bool
 
     var body: some View {
         VStack(spacing: 8) {
@@ -28,7 +29,7 @@ struct ControlBarView: View {
                 } label: {
                     Image(systemName: model.listeningMode == .muted ? "mic.slash.fill" : "mic.fill")
                 }
-                .help(model.listeningMode == .muted ? "Unmute microphone" : "Mute microphone")
+                .accessibilityHint("\(model.listeningMode == .muted ? "Unmute" : "Mute") microphone (\(Shortcuts.of(.toggleMute).display), anywhere: ⌃⌥M)")
 
                 Button {
                     model.stopSpeaking()
@@ -36,7 +37,7 @@ struct ControlBarView: View {
                     Image(systemName: "speaker.slash.fill")
                 }
                 .disabled(!model.snapshot.isSpeaking)
-                .help("Stop speaking (⌘.)")
+                .accessibilityHint("Stop speaking (\(Shortcuts.of(.stopSpeaking).display), anywhere: ⌃⌥S)")
 
                 Button {
                     model.interrupt()
@@ -44,13 +45,15 @@ struct ControlBarView: View {
                     Image(systemName: "stop.fill")
                 }
                 .disabled(!model.snapshot.isClaudeWorking)
-                .help("Interrupt Claude (⇧⌘.)")
+                .accessibilityHint("Interrupt Claude (\(Shortcuts.of(.interrupt).display), anywhere: ⌃⌥I)")
             }
             .controlSize(.large)
 
             HStack {
-                TextField("Type instead of talking…", text: $typed)
+                TextField("Type instead of talking… (\(Shortcuts.of(.focusInput).display))", text: $typed)
                     .textFieldStyle(.roundedBorder)
+                    .focused($typingFocused)
+                    .onChange(of: model.focusInputTick) { typingFocused = true }
                     .onSubmit {
                         model.sendTyped(typed)
                         typed = ""
@@ -96,7 +99,7 @@ private struct PushToTalkButton: View {
             .onChange(of: pressing) { _, isPressing in
                 model.pushToTalk(down: isPressing)
             }
-            .help("Hold to talk. Global shortcut: hold ⌃⌥Space")
+            .accessibilityHint("Hold to talk. Works in any app: hold \(Shortcuts.global[0].display)")
             .disabled(model.project == nil)
     }
 }

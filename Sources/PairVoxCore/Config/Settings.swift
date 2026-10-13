@@ -64,6 +64,22 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var handsFree = true
     public var endOfTurnSilence: Double = 0.65
     public var pronunciation: [String: String] = [:]
+    /// Voice processing (echo cancellation and noise suppression). Turn off to compare audio quality,
+    /// or if a headset sounds distorted; barge-in on speakers then needs headphones or push to talk.
+    public var echoCancellation = true
+    /// Where PairVox plays. nil = automatic: the system's output, or the same headset as the microphone
+    /// when that is a Bluetooth headset. Otherwise a Core Audio device UID.
+    public var outputDeviceUID: String? = nil
+    /// Off = playback only. A Bluetooth headset then stays in its high-quality music mode (an open
+    /// microphone forces the narrow, fragile call mode). You can still type to Claude.
+    public var microphoneEnabled = true
+
+    // Diagnostics (logs stay on this Mac until the user exports them)
+    public var verboseLogging = false
+    /// Put what you say and what Claude says into the log. Off by default: logs record lengths only.
+    public var logConversationText = false
+    /// Record the audio PairVox plays into the log folder, to diagnose crackle. Off by default.
+    public var recordPlaybackAudio = false
 
     public init() {}
 
@@ -129,6 +145,12 @@ public struct AppSettings: Sendable, Codable, Equatable {
         handsFree = (try? c.decode(Bool.self, forKey: .handsFree)) ?? d.handsFree
         endOfTurnSilence = (try? c.decode(Double.self, forKey: .endOfTurnSilence)) ?? d.endOfTurnSilence
         pronunciation = (try? c.decode([String: String].self, forKey: .pronunciation)) ?? [:]
+        echoCancellation = (try? c.decode(Bool.self, forKey: .echoCancellation)) ?? d.echoCancellation
+        outputDeviceUID = try? c.decode(String.self, forKey: .outputDeviceUID)
+        microphoneEnabled = (try? c.decode(Bool.self, forKey: .microphoneEnabled)) ?? d.microphoneEnabled
+        verboseLogging = (try? c.decode(Bool.self, forKey: .verboseLogging)) ?? d.verboseLogging
+        logConversationText = (try? c.decode(Bool.self, forKey: .logConversationText)) ?? d.logConversationText
+        recordPlaybackAudio = (try? c.decode(Bool.self, forKey: .recordPlaybackAudio)) ?? d.recordPlaybackAudio
     }
 }
 

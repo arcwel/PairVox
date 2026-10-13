@@ -34,7 +34,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var pushToTalkActive = false
     @Published private(set) var hasAPIKey = KeychainStore.readAPIKey() != nil
     @Published private(set) var previewingVoice: String?
+    /// False when no microphone is being captured (none plugged in, or permission not granted yet).
+    /// PairVox still speaks, and typed messages still work.
+    @Published private(set) var microphoneAvailable = true
     @Published var showSetup = false
+    /// Bumped by the "Type Instead of Talking" shortcut; the control bar focuses its text field.
+    @Published private(set) var focusInputTick = 0
     @Published var errorMessage: String?
 
     let voice: VoiceStack
@@ -45,6 +50,8 @@ final class AppModel: ObservableObject {
     private var snapshotTask: Task<Void, Never>?
     private var loginEnvironment: [String: String] = ProcessInfo.processInfo.environment
     private let hotKeys = HotKeyCenter()
+    private let log = DiagnosticLog.shared
+    private var audioTestOutput: VoiceSpeechOutput?
     private let notifier = Notifier()
     private var notifiedPermissionID: String?
     private var turnsAtDeactivation = 0
@@ -55,7 +62,12 @@ final class AppModel: ObservableObject {
     init() {
         let loaded = store.load()
         settings = loaded
-        voice = VoiceStack(settings: loaded)
+        let stack = VoiceStack(settings: loaded)
+        stack.audio.outputDeviceUID = loaded.outputDeviceUID
+        stack.audio.voiceProcessingEnabled = loaded.echoCancellation
+        stack.audio.recordPlayback = loaded.recordPlaybackAudio
+        voice = stack
+        Self.configureDiagnostics(loaded)
         listeningMode = loaded.handsFree ? .handsFree : .pushToTalk
         voice.onWhisperState = { [weak self] s in Task { @MainActor in self?.whisperState = s } }
         voice.onKokoroStatus = { [weak self] s in Task { @MainActor in self?.kokoroStatus = s } }
@@ -65,6 +77,7 @@ final class AppModel: ObservableObject {
     // MARK: Startup
 
     private func bootstrap() async {
+        logLaunch()
         // Model loads don't need any permission, so they must not wait behind the prompts below.
         let whisperModel = settings.whisperModel
         let stack = voice
@@ -80,9 +93,12 @@ final class AppModel: ObservableObject {
         setup.speechRecognition = VoicePermissions.speechRecognition
         notifier.requestAuthorization()
 
-        hotKeys.onPress = { [weak self] in self?.pushToTalk(down: true) }
-        hotKeys.onRelease = { [weak self] in self?.pushToTalk(down: false) }
-        hotKeys.register()
+        hotKeys.onPress = { [weak self] id in self?.globalHotKey(id, down: true) }
+        hotKeys.onRelease = { [weak self] id in self?.globalHotKey(id, down: false) }
+        for key in Shortcuts.global {
+            let ok = hotKeys.register(id: key.id.rawValue, keyCode: UInt32(key.keyCode), modifiers: key.carbonModifiers)
+            log.log(ok ? .info : .warning, .hotkey, "register", ["key": .string(key.display), "action": .string(key.title), "ok": .bool(ok)])
+        }
 
         if !setup.claudeFound || setup.microphone != .granted {
             showSetup = true
@@ -162,13 +178,29 @@ final class AppModel: ObservableObject {
         self.engine = engine
         self.input = input
 
-        do {
-            try voice.audio.start()
-            setup.audioError = nil
-        } catch {
-            setup.audioError = error.localizedDescription
-            errorMessage = "Microphone unavailable: \(error.localizedDescription)"
+        voice.audio.onCaptureAvailabilityChange = { [weak self] captured in
+            Task { @MainActor in
+                guard let self else { return }
+                self.microphoneAvailable = captured
+                if captured {
+                    self.setup.audioError = nil
+                } else if VoicePermissions.microphone == .granted, self.settings.microphoneEnabled {
+                    self.setup.audioError = "No microphone found. Plug in a microphone or headset to talk; typing and spoken replies still work."
+                }
+            }
         }
+        voice.audio.onVoiceProcessingAutoDisabled = { [weak self] in
+            Task { @MainActor in
+                self?.errorMessage = "This audio device kept restarting, so PairVox turned echo cancellation off for this session. Use headphones, or push to talk."
+            }
+        }
+        voice.audio.onPlaybackDropped = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.errorMessage == nil else { return }
+                self.errorMessage = "PairVox can't play sound: the audio engine isn't running. Check the output device, then reopen the project."
+            }
+        }
+        startAudio()
 
         snapshotTask = Task { [weak self] in
             for await snap in engine.snapshots {
@@ -182,6 +214,166 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) { [weak input] in
             let words = extra + RepoVocabulary.scan(root: url)
             input?.setVocabulary(words)
+        }
+    }
+
+    /// Starts audio. Playback always starts so replies are spoken; capture starts only with microphone
+    /// permission and a microphone. Without permission the engine's own error (a bare CoreAudio code)
+    /// says nothing useful, so ask or explain first.
+    private func startAudio() {
+        switch VoicePermissions.microphone {
+        case .denied:
+            let msg = "Microphone access is off for PairVox. Turn it on in System Settings → Privacy & Security → Microphone, then reopen the project."
+            setup.microphone = .denied
+            setup.audioError = msg
+            errorMessage = msg
+            showSetup = true
+            startAudioEngine(capture: false)
+        case .notDetermined:
+            startAudioEngine(capture: false)
+            Task {
+                _ = await VoicePermissions.requestMicrophone()
+                await refreshSetup()
+                startAudio()
+            }
+        case .granted:
+            startAudioEngine(capture: settings.microphoneEnabled)
+        }
+    }
+
+    private func startAudioEngine(capture: Bool) {
+        let audio = voice.audio
+        audio.voiceProcessingEnabled = settings.echoCancellation
+        audio.outputDeviceUID = settings.outputDeviceUID
+        do {
+            if audio.isRunning, capture != audio.captureAvailable {
+                try audio.restart(captureWanted: capture)   // keeps any speech queued meanwhile
+            } else {
+                try audio.start(captureWanted: capture)
+            }
+            if capture, audio.captureAvailable {
+                setup.audioError = nil
+                // A headset needs no echo cancellation, so only a real failure is worth a message.
+                if settings.echoCancellation, !audio.echoCancellationActive, audio.voiceProcessingSkipReason == nil {
+                    errorMessage = "Echo cancellation is unavailable on this audio route, so PairVox can hear itself on speakers. Use headphones, or turn off barge-in in Settings."
+                }
+            }
+        } catch {
+            setup.audioError = error.localizedDescription
+            errorMessage = "Audio unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: Shortcuts
+
+    /// Global hotkeys (⌃⌥ + key) work while another app is in front.
+    private func globalHotKey(_ raw: UInt32, down: Bool) {
+        guard let id = GlobalHotKey.ID(rawValue: raw) else { return }
+        log.log(.info, .hotkey, "global", ["id": "\(id)", "down": .bool(down)])
+        switch id {
+        case .pushToTalk: pushToTalk(down: down)
+        case .stopSpeaking: if down { stopSpeaking() }
+        case .toggleMute: if down { toggleMute() }
+        case .interrupt: if down { interrupt() }
+        }
+    }
+
+    func focusInputField() { focusInputTick += 1 }
+
+    /// Keyboard approval is never offered for high-risk requests: those need a click on the card.
+    var canApproveWithKeyboard: Bool {
+        guard let pending = snapshot.pendingPermission else { return false }
+        return pending.assessment.risk != .high
+    }
+
+    func changeSpeechRate(faster: Bool) { perform(faster ? .faster : .slower) }
+
+    // MARK: Diagnostics
+
+    private static func configureDiagnostics(_ settings: AppSettings) {
+        DiagnosticLog.shared.configure(.init(directory: DiagnosticsExporter.logDirectory,
+                                             minLevel: settings.verboseLogging ? .debug : .info,
+                                             includeContent: settings.logConversationText))
+    }
+
+    private func logLaunch() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        log.log(.info, .app, "app.launch",
+                ["version": .string("\(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))"),
+                 "macOS": .string(ProcessInfo.processInfo.operatingSystemVersionString),
+                 "verbose": .bool(settings.verboseLogging), "conversationText": .bool(settings.logConversationText),
+                 "recordPlayback": .bool(settings.recordPlaybackAudio), "echoCancellation": .bool(settings.echoCancellation)])
+    }
+
+    /// Setting names and values, minus anything that names a place or a person.
+    private func logSettingChanges(from old: AppSettings) {
+        let skip: Set<String> = ["recentProjects", "lastProject", "projectPreferences", "pronunciation", "claudePathOverride"]
+        func dict(_ s: AppSettings) -> [String: Any] {
+            (try? JSONEncoder().encode(s)).flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] } ?? [:]
+        }
+        let a = dict(old), b = dict(settings)
+        var changed: [String: LogValue] = [:]
+        for (key, value) in b where !skip.contains(key) && "\(a[key] ?? "")" != "\(value)" {
+            changed[key] = .string("\(value)")
+        }
+        if !changed.isEmpty { log.log(.info, .app, "settings.changed", changed) }
+    }
+
+    func exportDiagnostics() {
+        let s = DiagnosticsExporter.Snapshot(
+            settings: settings, claudePath: setup.claudePath, claudeVersion: setup.cliVersion,
+            microphone: "\(setup.microphone)", speechRecognition: "\(setup.speechRecognition)",
+            whisperState: "\(whisperState)", kokoroStatus: "\(kokoroStatus)", project: project?.path)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let zip = try DiagnosticsExporter.export(s)
+                await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([zip]) }
+            } catch {
+                await MainActor.run { self?.errorMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    /// Speaks about a minute of fixed text through the real synthesis and playback path, with no model call.
+    /// Used to reproduce and measure audio problems (noise, dropouts) on demand: read the log afterwards.
+    func playAudioTest() {
+        if !voice.audio.isRunning { startAudio() }
+        let lines = [
+            "This is the PairVox audio test. I will read a few sentences so we can check the sound.",
+            "The quick brown fox jumps over the lazy dog, and then it sits quietly by the river.",
+            "She sells seashells by the seashore, and the thick fog fizzled before the sun came up.",
+            "Numbers matter too: one, two, three, four, five, six, seven, eight, nine, ten.",
+            "If you hear crackling, static, or sudden loud noise, note roughly how many seconds in it happened.",
+            "A steady voice should sound the same from the first word to the last, with no hiss between sentences.",
+            "Now a longer sentence that keeps going for a while, so any dropout in the middle of a phrase would be easy to notice, because nothing should interrupt it.",
+            "Peter Piper picked a peck of pickled peppers, and the sixth sick sheikh's sixth sheep is sick.",
+            "Almost done. A few more sentences remain, then the test ends with a short goodbye.",
+            "The audio engine is running, the voice is synthesized on this Mac, and nothing leaves the machine.",
+            "Thank you for listening. This is the end of the PairVox audio test.",
+        ]
+        log.log(.info, .app, "audio.test.start", ["sentences": .int(lines.count)])
+        let out = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
+        out.setRate(settings.speechRate)
+        for (i, text) in lines.enumerated() { out.enqueue(Utterance(id: 9_000 + i, text: text, kind: .prose)) }
+        audioTestOutput = out
+    }
+
+    func revealLogs() {
+        try? FileManager.default.createDirectory(at: DiagnosticsExporter.logDirectory, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(DiagnosticsExporter.logDirectory)
+    }
+
+    /// Restarts capture and playback (used when a setting changes how the audio engine is built).
+    private func restartAudioEngine() {
+        let audio = voice.audio
+        guard audio.isRunning else { return }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                try audio.restart()
+                await MainActor.run { self?.setup.audioError = nil }
+            } catch {
+                await MainActor.run { self?.errorMessage = "Microphone unavailable: \(error.localizedDescription)" }
+            }
         }
     }
 
@@ -362,7 +554,23 @@ final class AppModel: ObservableObject {
 
     private func settingsChanged(from old: AppSettings) {
         try? store.save(settings)
+        logSettingChanges(from: old)
         voice.apply(settings)
+        if old.verboseLogging != settings.verboseLogging || old.logConversationText != settings.logConversationText {
+            Self.configureDiagnostics(settings)
+        }
+        voice.audio.recordPlayback = settings.recordPlaybackAudio
+        if old.echoCancellation != settings.echoCancellation {
+            voice.audio.voiceProcessingEnabled = settings.echoCancellation
+            restartAudioEngine()
+        }
+        if old.microphoneEnabled != settings.microphoneEnabled, VoicePermissions.microphone == .granted {
+            startAudioEngine(capture: settings.microphoneEnabled)
+        }
+        if old.outputDeviceUID != settings.outputDeviceUID {
+            voice.audio.outputDeviceUID = settings.outputDeviceUID
+            restartAudioEngine()
+        }
         input?.setBargeInEnabled(settings.bargeInEnabled)
         input?.setEndSilence(settings.endOfTurnSilence)
         if !syncingFromEngine, old.speechRate != settings.speechRate {
@@ -395,7 +603,10 @@ final class AppModel: ObservableObject {
     var statusLine: String {
         switch snapshot.phase {
         case .starting: return "Starting…"
-        case .idle: return listeningMode == .muted ? "Muted" : (listeningMode == .pushToTalk ? "Hold ⌃⌥Space to talk" : "Listening")
+        case .idle:
+            if !settings.microphoneEnabled { return "Microphone off" }
+            if !microphoneAvailable { return "No microphone" }
+            return listeningMode == .muted ? "Muted" : (listeningMode == .pushToTalk ? "Hold \(Shortcuts.global[0].display) to talk" : "Listening")
         case .listening: return "Hearing you…"
         case .transcribing: return "Transcribing…"
         case .thinking: return "Thinking…"

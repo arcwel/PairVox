@@ -24,35 +24,38 @@ struct PairVoxApp: App {
         .defaultSize(width: 860, height: 760)
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Open Project…") { model.chooseProject() }
-                    .keyboardShortcut("o")
-                Button("New Claude Session") { model.newSession() }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                Button(Shortcuts.of(.openProject).title) { model.chooseProject() }.shortcut(.openProject)
+                Button(Shortcuts.of(.newSession).title) { model.newSession() }.shortcut(.newSession)
+                Button(Shortcuts.of(.focusInput).title) { model.focusInputField() }.shortcut(.focusInput)
             }
             CommandMenu("Conversation") {
-                Button("Stop Speaking") { model.stopSpeaking() }
-                    .keyboardShortcut(".", modifiers: [.command])
-                Button("Interrupt Claude") { model.interrupt() }
-                    .keyboardShortcut(".", modifiers: [.command, .shift])
+                Button(Shortcuts.of(.stopSpeaking).title) { model.stopSpeaking() }.shortcut(.stopSpeaking)
+                Button(Shortcuts.of(.interrupt).title) { model.interrupt() }.shortcut(.interrupt)
                 Button(model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .shortcut(.toggleMute)
                 Divider()
-                Button("Repeat Last Reply") { model.perform(.repeatLast) }
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
-                Button("Read the Details") { model.perform(.readMore) }
-                    .keyboardShortcut("d", modifiers: [.command, .shift])
-                Button("Read the Code") { model.perform(.readCode) }
+                Button(Shortcuts.of(.repeatLast).title) { model.perform(.repeatLast) }.shortcut(.repeatLast)
+                Button(Shortcuts.of(.readDetails).title) { model.perform(.readMore) }.shortcut(.readDetails)
+                Button(Shortcuts.of(.readCode).title) { model.perform(.readCode) }.shortcut(.readCode)
+                Button(Shortcuts.of(.faster).title) { model.changeSpeechRate(faster: true) }.shortcut(.faster)
+                Button(Shortcuts.of(.slower).title) { model.changeSpeechRate(faster: false) }.shortcut(.slower)
                 Divider()
-                Picker("Speech", selection: Binding(get: { model.settings.speechMode }, set: { model.setSpeechMode($0) })) {
-                    Text("Read everything").tag(SpeechMode.full)
-                    Text("Skip code").tag(SpeechMode.skipCode)
-                    Text("Summaries only").tag(SpeechMode.summary)
-                }
-                Picker("Mode", selection: Binding(get: { model.snapshot.conversationMode },
-                                                  set: { model.setConversationMode($0) })) {
-                    Text("Brainstorm (no changes)").tag(ConversationMode.brainstorm)
-                    Text("Execute").tag(ConversationMode.execute)
-                }
+                Button(Shortcuts.of(.speechFull).title) { model.setSpeechMode(.full) }.shortcut(.speechFull)
+                Button(Shortcuts.of(.speechSkipCode).title) { model.setSpeechMode(.skipCode) }.shortcut(.speechSkipCode)
+                Button(Shortcuts.of(.speechSummary).title) { model.setSpeechMode(.summary) }.shortcut(.speechSummary)
+                Button(Shortcuts.of(.modeBrainstorm).title) { model.setConversationMode(.brainstorm) }.shortcut(.modeBrainstorm)
+                Button(Shortcuts.of(.modeExecute).title) { model.setConversationMode(.execute) }.shortcut(.modeExecute)
+                Divider()
+                // Active only while Claude is asking. High-risk requests need a click on the card.
+                Button("Allow") { model.approve() }.shortcut(.allow).disabled(!model.canApproveWithKeyboard)
+                Button("Always Allow This Session") { model.approve(always: true) }.shortcut(.allowAlways)
+                    .disabled(!model.canApproveWithKeyboard)
+                Button("Deny") { model.deny() }.shortcut(.deny).disabled(model.snapshot.pendingPermission == nil)
+            }
+            CommandGroup(replacing: .help) {
+                Button(Shortcuts.of(.exportDiagnostics).title) { model.exportDiagnostics() }.shortcut(.exportDiagnostics)
+                Button("Show Log Folder in Finder") { model.revealLogs() }
+                Button("Play Audio Test") { model.playAudioTest() }
             }
         }
 
