@@ -35,6 +35,9 @@ public final class AudioIO: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let lock = NSLock()
+    /// Every player-node call goes through this queue, so the running check and `play()` can't be split by
+    /// a device change or a stop, and a stop is always ordered before a later schedule.
+    private let playerQueue = DispatchQueue(label: "app.pairvox.audio.player", qos: .userInteractive)
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1,
                                              interleaved: false)!
     private var converter: AVAudioConverter?
@@ -109,8 +112,8 @@ public final class AudioIO: @unchecked Sendable {
         isRunning = false
         lock.unlock()
         engine.inputNode.removeTap(onBus: 0)
-        player.stop()
-        engine.stop()
+        // Completions fired by stop() may call schedule(); that only enqueues, so waiting here is safe.
+        playerQueue.sync { player.stop(); engine.stop() }
     }
 
     private func restartAfterConfigurationChange() {
@@ -173,24 +176,26 @@ public final class AudioIO: @unchecked Sendable {
     /// Plays a buffer in `playbackFormat`. `completion` runs when it finished playing
     /// (or when playback was stopped).
     public func schedule(_ buffer: AVAudioPCMBuffer, completion: @escaping @Sendable () -> Void) {
-        lock.lock()
-        // The system may stop the engine (device change) before our observer runs;
-        // play() on a stopped engine raises an exception.
-        let running = isRunning && engine.isRunning
-        lock.unlock()
-        guard running else {
-            completion()
-            return
+        playerQueue.async { [self] in
+            // The system may stop the engine (device change) before our observer runs;
+            // play() on a stopped engine raises an exception.
+            lock.lock()
+            let running = isRunning
+            lock.unlock()
+            guard running, engine.isRunning else {
+                completion()
+                return
+            }
+            player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { _ in
+                completion()
+            }
+            if !player.isPlaying { player.play() }
         }
-        player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { _ in
-            completion()
-        }
-        if !player.isPlaying, engine.isRunning { player.play() }
     }
 
     /// Stops speech immediately (barge-in). Pending completions fire.
     public func stopPlayback() {
-        player.stop()
+        playerQueue.async { [self] in player.stop() }
     }
 
     /// Mutes the microphone at the voice-processing level (push-to-talk idle state).

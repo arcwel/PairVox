@@ -16,8 +16,7 @@ VERSION="${1:?usage: scripts/release.sh VERSION}"
 : "${SIGN_IDENTITY:?set SIGN_IDENTITY to your Developer ID Application identity}"
 : "${NOTARY_PROFILE:?set NOTARY_PROFILE (xcrun notarytool store-credentials)}"
 
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" Sources/PairVoxApp/Info.plist
-scripts/build-app.sh
+MARKETING_VERSION="$VERSION" scripts/build-app.sh
 
 DMG="dist/PairVox-$VERSION.dmg"
 rm -f "$DMG"

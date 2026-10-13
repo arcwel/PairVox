@@ -92,13 +92,14 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
             } catch {
                 result = .failure(error)
             }
-            self.lock.lock()
-            self.synthesizing = false
-            let current = gen == self.generation
-            if current, case .success(let buffer) = result {
-                self.ready.append((next, buffer))
+            let current = self.lock.withLock { () -> Bool in
+                self.synthesizing = false
+                let current = gen == self.generation
+                if current, case .success(let buffer) = result {
+                    self.ready.append((next, buffer))
+                }
+                return current
             }
-            self.lock.unlock()
             if current, case .failure(let error) = result {
                 self.continuation.yield(.failed(next.id, error.localizedDescription))
             }

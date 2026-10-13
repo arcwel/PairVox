@@ -21,6 +21,8 @@ command -v xcodegen >/dev/null || { echo "Install XcodeGen first: brew install x
 CONFIG="${CONFIG:-Release}"
 IDENTITY="${SIGN_IDENTITY:--}"
 TEAM="${DEVELOPMENT_TEAM:-}"
+VERSION_ARGS=()
+[[ -n "${MARKETING_VERSION:-}" ]] && VERSION_ARGS+=(MARKETING_VERSION="$MARKETING_VERSION")
 
 xcodegen generate --quiet
 
@@ -38,7 +40,7 @@ set -x
 xcodebuild -project PairVox.xcodeproj -scheme PairVox -configuration "$CONFIG" \
   -derivedDataPath .build/xcode -destination "generic/platform=macOS" \
   -skipPackagePluginValidation -skipMacroValidation \
-  "${SIGN_ARGS[@]}" build | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
+  "${SIGN_ARGS[@]}" "${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"}" build | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
 set +x
 
 mkdir -p dist

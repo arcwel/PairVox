@@ -50,17 +50,14 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
 
     /// Downloads (first run) and loads the model. Safe to call more than once.
     public func load(model: String) async {
-        lock.lock()
-        let current = _state
-        let same = loadedModel == model
-        lock.unlock()
+        let (current, same) = lock.withLock { (_state, loadedModel == model) }
         if case .loading = current { return }
         if same, current == .ready { return }
         setState(.loading("Loading speech recognition model…"))
         do {
             let config = WhisperKitConfig(model: model, verbose: false, prewarm: true, load: true, download: true)
             let kit = try await WhisperKit(config)
-            lock.lock(); pipe = kit; loadedModel = model; lock.unlock()
+            lock.withLock { pipe = kit; loadedModel = model }
             setState(.ready)
         } catch {
             setState(.failed(error.localizedDescription))
@@ -68,9 +65,7 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
     }
 
     public func transcribe(_ samples: [Float], vocabulary: [String]) async throws -> String {
-        lock.lock()
-        let kit = pipe
-        lock.unlock()
+        let kit = lock.withLock { pipe }
         guard let kit else { throw TranscriptionError.notReady }
 
         var options = DecodingOptions(language: "en", temperature: 0, usePrefillPrompt: true, skipSpecialTokens: true,
