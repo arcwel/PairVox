@@ -56,7 +56,10 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
         if same, current == .ready { return }
         setState(.loading("Loading speech recognition model…"))
         do {
-            let config = WhisperKitConfig(model: model, verbose: false, prewarm: true, load: true, download: true)
+            // Model and tokenizer come from commit-pinned, hash-checked copies, never from a moving branch.
+            let folders = try await WhisperModelStore().ensure(variant: model)
+            let config = WhisperKitConfig(model: model, modelFolder: folders.model.path, tokenizerFolder: folders.tokenizer,
+                                          verbose: false, prewarm: true, load: true, download: false)
             let kit = try await WhisperKit(config)
             lock.withLock { pipe = kit; loadedModel = model }
             setState(.ready)

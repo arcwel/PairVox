@@ -49,7 +49,7 @@ var targets: [Target] = [
 #if os(macOS)
 dependencies += [
     // Speech-to-text (MIT)
-    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.1.0"),
+    .package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "1.1.1"),
     // Kokoro text-to-speech (MIT; MisakiSwift G2P is Apache-2.0, no espeak-ng).
     // Pinned exactly: 1.0.11 pins mlx-swift 0.30.2 / MLXUtilsLibrary 0.0.6; newer mlx breaks Kokoro.
     .package(url: "https://github.com/mlalma/kokoro-ios.git", exact: "1.0.11"),
@@ -76,6 +76,12 @@ targets += [
             .product(name: "MLXUtilsLibrary", package: "MLXUtilsLibrary"),
         ],
         path: "Sources/PairVoxVoice",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .testTarget(
+        name: "PairVoxVoiceTests",
+        dependencies: ["PairVoxVoice", "PairVoxCore", .product(name: "WhisperKit", package: "WhisperKit")],
+        path: "Tests/PairVoxVoiceTests",
         swiftSettings: [.swiftLanguageMode(.v5)]
     ),
     .executableTarget(
