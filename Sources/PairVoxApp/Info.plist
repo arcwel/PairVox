@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>PairVox</string>
+	<key>CFBundleExecutable</key>
+	<string>PairVox</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.pairvox.PairVox</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>PairVox</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 SCOAEONGEO. Licensed under the Apache License 2.0.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PairVox listens to you so you can talk with Claude Code. Audio is processed on this Mac.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PairVox uses on-device speech recognition as a fallback while its Whisper model loads.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>PairVox can open Terminal so you can sign in to Claude Code.</string>
+</dict>
+</plist>

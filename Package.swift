@@ -59,6 +59,7 @@ dependencies += [
 ]
 
 products += [
+    .library(name: "PairVoxVoice", targets: ["PairVoxVoice"]),
     .executable(name: "PairVox", targets: ["PairVoxApp"]),
 ]
 

@@ -67,8 +67,17 @@ public struct AppSettings: Sendable, Codable, Equatable {
 
     public init() {}
 
-    public static let modelChoices: [(id: String?, label: String)] = [
-        (nil, "Default"), ("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku (fastest)"),
+    public struct ModelChoice: Identifiable, Hashable, Sendable {
+        public var id: String { model ?? "default" }
+        public let model: String?
+        public let label: String
+    }
+
+    public static let modelChoices: [ModelChoice] = [
+        ModelChoice(model: nil, label: "Default"),
+        ModelChoice(model: "sonnet", label: "Sonnet"),
+        ModelChoice(model: "opus", label: "Opus"),
+        ModelChoice(model: "haiku", label: "Haiku (fastest)"),
     ]
 
     public func preferences(for project: String?) -> ProjectPreferences {

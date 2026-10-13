@@ -1,0 +1,65 @@
+# XcodeGen spec for the signed macOS app bundle.
+#   brew install xcodegen && xcodegen generate && open PairVox.xcodeproj
+# Building through Xcode is required for Kokoro: it compiles MLX's Metal shaders
+# and embeds frameworks/resource bundles correctly. The engine and CLI build with
+# plain `swift build`.
+name: PairVox
+options:
+  bundleIdPrefix: app.pairvox
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  PairVoxKit:
+    path: .
+
+targets:
+  PairVox:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/PairVoxApp
+        excludes:
+          - "Info.plist"
+          - "PairVox.entitlements"
+      - path: Resources/Assets.xcassets
+    dependencies:
+      - package: PairVoxKit
+        product: PairVoxCore
+      - package: PairVoxKit
+        product: PairVoxVoice
+    settings:
+      base:
+        PRODUCT_NAME: PairVox
+        PRODUCT_BUNDLE_IDENTIFIER: app.pairvox.PairVox
+        INFOPLIST_FILE: Sources/PairVoxApp/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Sources/PairVoxApp/PairVox.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: NO
+        DEAD_CODE_STRIPPING: YES
+        # The app is not sandboxed: it launches the user's own `claude` CLI.
+        ENABLE_APP_SANDBOX: NO
+
+schemes:
+  PairVox:
+    build:
+      targets:
+        PairVox: all
+    run:
+      config: Debug
+    archive:
+      config: Release
