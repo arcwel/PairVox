@@ -112,6 +112,10 @@ final class AppModel: ObservableObject {
         setup.checking = true
         let exe = ClaudeLocator.locate(override: settings.claudePathOverride, pathVariable: loginEnvironment["PATH"])
         setup.claudePath = exe?.path
+        if exe == nil, let o = settings.claudePathOverride, !o.isEmpty,
+           let why = ClaudeLocator.overrideProblem((o as NSString).expandingTildeInPath) {
+            errorMessage = "The Claude path set in Settings was not used. \(why)"
+        }
         setup.cliVersion = nil
         if let exe { setup.cliVersion = await ClaudeLocator.version(of: exe, environment: loginEnvironment) }
         setup.microphone = VoicePermissions.microphone
@@ -158,7 +162,8 @@ final class AppModel: ObservableObject {
         let launch = LaunchConfiguration(
             executable: URL(fileURLWithPath: path), workingDirectory: url, auth: auth,
             model: settings.effectiveModel(for: projectPath), permissionMode: conversationMode.permissionMode,
-            appendSystemPrompt: SystemPrompts.voice, baseEnvironment: loginEnvironment)
+            appendSystemPrompt: SystemPrompts.voice, baseEnvironment: loginEnvironment,
+            trustProjectConfiguration: settings.trustProjectConfiguration)
 
         let output = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
         let engine = ConversationEngine(configuration: EngineConfiguration(settings: settings, project: projectPath),
@@ -410,8 +415,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func approve(always: Bool = false) { Task { await engine?.approvePending(always: always) } }
-    func deny() { Task { await engine?.denyPending() } }
+    /// Approves the request that was on screen when the button was pressed; if it has changed since, nothing happens.
+    func approve(always: Bool = false, requestID: String? = nil) {
+        let id = requestID ?? snapshot.pendingPermission?.request.requestID
+        Task { await engine?.approvePending(always: always, requestID: id) }
+    }
+    func deny(requestID: String? = nil) {
+        let id = requestID ?? snapshot.pendingPermission?.request.requestID
+        Task { await engine?.denyPending(requestID: id) }
+    }
     func interrupt() { Task { await engine?.interruptClaude() } }
     func stopSpeaking() { Task { await engine?.stopSpeaking() } }
     func newSession() { Task { await engine?.newSession() } }
@@ -534,6 +546,7 @@ final class AppModel: ObservableObject {
             syncingFromEngine = true
             if abs(snap.speechRate - settings.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
             if snap.speechMode != settings.speechMode { settings.speechMode = snap.speechMode }
+            if snap.conversationMode != settings.conversationMode { settings.conversationMode = snap.conversationMode }
             syncingFromEngine = false
         }
         receivedFirstSnapshot = true
@@ -586,6 +599,13 @@ final class AppModel: ObservableObject {
         if !syncingFromEngine, old.speechMode != settings.speechMode {
             let mode = settings.speechMode
             Task { await engine?.setSpeechMode(mode) }
+        }
+        if old.autoApproveLowRisk != settings.autoApproveLowRisk {
+            let on = settings.autoApproveLowRisk
+            Task { await engine?.setAutoApproveLowRisk(on) }
+        }
+        if old.trustProjectConfiguration != settings.trustProjectConfiguration, project != nil {
+            restartSession()
         }
         if old.verbosity != settings.verbosity {
             let v = settings.verbosity

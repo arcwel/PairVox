@@ -34,10 +34,19 @@ struct PermissionCardView: View {
                     .padding(.vertical, 3)
                     .background(riskColor.opacity(0.18), in: Capsule())
             }
-            Text(pending.assessment.summary)
-                .font(.system(.callout, design: .monospaced))
-                .textSelection(.enabled)
-                .lineLimit(6)
+            // The whole request, scrollable: an approval must never cover text the approver could not see.
+            ScrollView {
+                Text(pending.assessment.summary)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 160)
+            .fixedSize(horizontal: false, vertical: true)
+            if model.snapshot.queuedPermissionCount > 0 {
+                Text("\(model.snapshot.queuedPermissionCount) more waiting after this one.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(pending.assessment.reasons, id: \.self) { reason in
                 Label(reason, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary)
             }
@@ -47,12 +56,12 @@ struct PermissionCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Deny", role: .destructive) { model.deny() }
+                Button("Deny", role: .destructive) { model.deny(requestID: pending.request.requestID) }
                     .keyboardShortcut(.escape, modifiers: [])
                 if offersAlwaysAllow {
-                    Button("Always Allow") { model.approve(always: true) }
+                    Button("Always Allow (this session)") { model.approve(always: true, requestID: pending.request.requestID) }
                 }
-                Button("Allow") { model.approve() }
+                Button("Allow") { model.approve(requestID: pending.request.requestID) }
                     .keyboardShortcut(.return, modifiers: [.command])
                     .buttonStyle(.borderedProminent)
             }

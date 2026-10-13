@@ -18,6 +18,9 @@ public struct PermissionAssessment: Sendable, Equatable {
     public var summary: String
     /// Why it was rated this way (shown on screen).
     public var reasons: [String]
+    /// Whether the opt-in "auto-approve read-only tools" setting may answer this without asking.
+    /// Only plain read-only tools qualify, never an unrecognized shell command.
+    public var autoApprovable: Bool = false
 }
 
 /// Classifies tool-permission requests so misheard voice approvals can't do
@@ -34,6 +37,8 @@ public struct PermissionPolicy: Sendable {
 
     static let readOnlyTools: Set<String> = ["Read", "Glob", "Grep", "LS", "WebSearch", "TodoWrite", "TaskCreate",
                                              "TaskUpdate", "TaskList", "TaskGet", "ExitPlanMode", "ToolSearch"]
+    /// Read-only in the policy's eyes, but leaving plan mode changes what Claude may do, so a person decides.
+    static let neverAutoApprove: Set<String> = ["ExitPlanMode"]
     static let fileWriteTools: Set<String> = ["Edit", "MultiEdit", "Write", "NotebookEdit"]
 
     public func assess(_ r: PermissionRequest) -> PermissionAssessment {
@@ -47,6 +52,12 @@ public struct PermissionPolicy: Sendable {
             risk = .low
             summary = "\(r.displayName ?? t)"
             spoken = "Claude wants to use \(Pronunciation.splitIdentifier(t)). Allow?"
+            let target = r.input["file_path"]?.stringValue ?? r.input["path"]?.stringValue ?? ""
+            if PermissionPolicy.isSensitivePath(target) {
+                risk = .medium
+                summary = "\(r.displayName ?? t) \(target)"
+                reasons.append("It would read a file that looks sensitive (credentials, keys, shell or git config).")
+            }
 
         case "WebFetch":
             risk = .medium
@@ -76,8 +87,9 @@ public struct PermissionPolicy: Sendable {
             risk = bash.level
             reasons += bash.reasons
             summary = "Run: \(command)"
-            let what = r.input["description"]?.stringValue.flatMap { $0.count <= 80 ? $0 : nil }
-                ?? ToolNarrator.commandSummary(command, pronunciation: pronunciation)
+            // Spoken from the command itself. Claude's own `description` field is free text the model
+            // (or a prompt-injected repo) chooses, so it never stands in for what will run.
+            let what = ToolNarrator.commandSummary(command, pronunciation: pronunciation)
             spoken = "Claude wants to run \(pronunciation.speak(what)). Allow?"
 
         default:
@@ -100,8 +112,10 @@ public struct PermissionPolicy: Sendable {
         if !voiceOK {
             spoken = spoken.replacingOccurrences(of: " Allow?", with: ". Please confirm on screen.")
         }
+        let auto = risk == .low && voiceOK && !r.requiresUserInteraction
+            && PermissionPolicy.readOnlyTools.contains(r.toolName) && !PermissionPolicy.neverAutoApprove.contains(r.toolName)
         return PermissionAssessment(risk: risk, voiceApprovable: voiceOK, spokenPrompt: spoken, summary: summary,
-                                    reasons: reasons)
+                                    reasons: reasons, autoApprovable: auto)
     }
 
     func isInsideProject(_ path: String) -> Bool {
@@ -163,9 +177,44 @@ public enum BashRisk {
         Rule(pattern: #"\bmv\s"#, level: .medium, reason: "Moves or renames files."),
         Rule(pattern: #"\bgit\s+(commit|merge|rebase|checkout|switch|stash|tag)\b"#, level: .medium, reason: "Changes git state."),
         Rule(pattern: #"(^|[^>])>\s*[^\s&]"#, level: .medium, reason: "Writes a file via redirection."),
+        Rule(pattern: #"\b(python3?|node|deno|bun|perl|ruby|php|lua|osascript|swift|go\s+run)\b"#, level: .medium, reason: "Runs a script or interpreter."),
+        Rule(pattern: #"(^|[\s;&|(])(ba|z)?sh\s|\beval\b|\bxargs\b|\bexec\b|\bsource\s|<\("#, level: .medium, reason: "Runs a nested shell or evaluates text as code."),
+        Rule(pattern: #"\bopen\s"#, level: .medium, reason: "Opens a file or URL with another app."),
     ]
 
-    public static func classify(_ command: String) -> Result {
+    /// Commands that only read and print, when they stand alone (no chaining, redirection or substitution).
+    static let readOnlyCommands: Set<String> = ["ls", "pwd", "cat", "head", "tail", "wc", "echo", "grep", "rg", "which",
+                                               "whoami", "date", "diff", "file", "stat", "tree", "du", "df", "uname",
+                                               "sort", "uniq", "basename", "dirname", "realpath", "true"]
+    static let readOnlyGitSubcommands: Set<String> = ["status", "diff", "log", "show", "rev-parse", "ls-files", "blame"]
+
+    /// Global git options (`-C dir`, `-c k=v`, ...) sit between `git` and the subcommand and would hide it from the
+    /// rules, so matching is done on a copy with them removed.
+    static func normalizedForMatching(_ command: String) -> String {
+        let pattern = #"\bgit(\s+(-C\s+\S+|-c\s+\S+|--git-dir(=|\s+)\S+|--work-tree(=|\s+)\S+|--no-pager|-P|--no-optional-locks))+"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return command }
+        return re.stringByReplacingMatches(in: command, range: NSRange(location: 0, length: (command as NSString).length),
+                                           withTemplate: "git")
+    }
+
+    /// True for plain read-only commands such as `ls -la src` or `git status | head`, optionally joined
+    /// with `&&` or a pipe. Anything with substitution, redirection, backgrounding or `;` is not plain.
+    static func isPlainReadOnly(_ command: String) -> Bool {
+        let c = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !c.isEmpty else { return false }
+        let joined = c.replacingOccurrences(of: "&&", with: "|")
+        guard joined.rangeOfCharacter(from: CharacterSet(charactersIn: ";&<>`$()\n\\")) == nil else { return false }
+        let segments = joined.components(separatedBy: "|")
+        return segments.allSatisfy { segment in
+            let words = segment.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+            guard let first = words.first else { return false }  // an empty segment means `||` or a stray pipe
+            if first == "git" { return words.count > 1 && readOnlyGitSubcommands.contains(words[1]) }
+            return readOnlyCommands.contains(first)
+        }
+    }
+
+    public static func classify(_ original: String) -> Result {
+        let command = normalizedForMatching(original)
         var level: RiskLevel = .low
         var reasons: [String] = []
         let ns = command as NSString
@@ -181,6 +230,15 @@ public enum BashRisk {
         if command.contains("~/") || command.contains("$HOME") {
             level = max(level, .medium)
             reasons.append("Touches your home folder.")
+        }
+        if PermissionPolicy.isSensitivePath(command) {
+            level = max(level, .medium)
+            reasons.append("Mentions a file that looks sensitive (credentials, keys, shell or git config).")
+        }
+        // Anything not recognized as a plain read-only command is not "low": low means known-harmless.
+        if level == .low, !isPlainReadOnly(command) {
+            level = .medium
+            reasons.append("Not a recognized read-only command.")
         }
         // A deletion rule implies the weaker "Deletes files." reason; keep the strongest only.
         if reasons.contains("Deletes files recursively or forcefully.") {

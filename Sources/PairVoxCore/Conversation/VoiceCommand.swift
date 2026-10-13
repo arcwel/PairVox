@@ -118,13 +118,14 @@ public enum VoiceCommand: Sendable, Equatable {
     static func permissionAnswer(_ core: String) -> VoiceCommand? {
         let words = core.split(separator: " ").map(String.init)
         guard !words.isEmpty, words.count <= 5 else { return nil }
+        if words.contains(where: denyWords.contains) {
+            // "no" and friends win over any approving word, including "always allow" and "ask again":
+            // "don't always allow" and "never ask again" are refusals, and a misheard refusal fails safe.
+            return words.count <= 4 ? .deny : nil
+        }
         if core.contains("ask again") || core.contains("always allow") || core.contains("allow always")
             || core == "always" || core == "yes always" {
             return .approveAlways
-        }
-        if words.contains(where: denyWords.contains) {
-            // "no" and friends win over any approving word.
-            return words.count <= 4 ? .deny : nil
         }
         let approving = words.contains(where: approveWords.contains)
             || approvePhrases.contains { core.contains($0) }

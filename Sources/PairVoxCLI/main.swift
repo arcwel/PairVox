@@ -173,17 +173,17 @@ let observer = Task {
         for e in snap.transcript where !seenEntries.contains(e.id) {
             seenEntries.insert(e.id)
             switch e.role {
-            case .tool: print(Term.color("2", "         🔧 \(e.text.prefix(160))"))
-            case .system: print(Term.color("2", "         · \(e.text)"))
+            case .tool: print(Term.color("2", "         🔧 \(Term.safe(String(e.text.prefix(160))))"))
+            case .system: print(Term.color("2", "         · \(Term.safe(e.text))"))
             default: break
             }
         }
         if let p = snap.pendingPermission, p.request.requestID != lastPermission {
             lastPermission = p.request.requestID
             let a = p.assessment
-            print(Term.color("1;35", "         ┌ Permission: \(a.summary.prefix(200))"))
+            print(Term.color("1;35", "         ┌ Permission: \(Term.safe(String(a.summary.prefix(2000))))"))
             print(Term.color("35", "         │ risk: \(a.risk) · \(a.voiceApprovable ? "say yes / no / always allow" : "type /approve or /deny")"))
-            for r in a.reasons { print(Term.color("35", "         │ \(r)")) }
+            for r in a.reasons { print(Term.color("35", "         │ \(Term.safe(r))")) }
             print(Term.color("35", "         └"))
         }
         if snap.pendingPermission == nil { lastPermission = nil }

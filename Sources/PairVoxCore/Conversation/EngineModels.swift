@@ -93,6 +93,8 @@ public struct EngineSnapshot: Sendable, Equatable {
     public var phase: EnginePhase = .starting
     public var transcript: [TranscriptEntry] = []
     public var pendingPermission: PendingPermission?
+    /// Requests waiting behind the one shown; each is shown and spoken in turn once the current one is answered.
+    public var queuedPermissionCount = 0
     public var session: SessionInfo?
     public var usage = UsageSnapshot()
     public var speechMode: SpeechMode = .skipCode

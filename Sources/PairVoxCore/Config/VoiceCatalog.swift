@@ -16,6 +16,10 @@ public struct KokoroVoiceInfo: Sendable, Equatable, Identifiable {
 }
 
 public enum VoiceCatalog {
+    /// The speech-recognition models PairVox can verify (see `WhisperPins`); anything else is replaced by the default.
+    public static let whisperModelIDs = ["openai_whisper-base.en", "openai_whisper-small.en", "distil-whisper_distil-large-v3_turbo"]
+    public static let defaultWhisperModel = "openai_whisper-small.en"
+
     public static let defaultVoiceID = "af_heart"
 
     /// Two American and two British voices, one female and one male in each accent.

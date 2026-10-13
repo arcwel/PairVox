@@ -15,6 +15,11 @@ public actor ConversationEngine {
     private var config: EngineConfiguration
     private let authKind: AuthKind
     private let makeBackend: SessionBackendFactory
+    /// Requests that arrived while another was waiting. Answering the shown one promotes the next, so an
+    /// approval can only ever apply to the request the user was shown and told about.
+    private var permissionQueue: [PendingPermission] = []
+    /// The conversation mode the backend factory launches with; a later change is re-applied to new sessions.
+    private var launchedConversationMode: ConversationMode
     private var backend: (any SessionBackend)?
     private var backendGeneration = 0
     private var eventTask: Task<Void, Never>?
@@ -53,6 +58,7 @@ public actor ConversationEngine {
     public init(configuration: EngineConfiguration, authKind: AuthKind = .subscription, output: any SpeechOutput,
                 backendFactory: @escaping SessionBackendFactory) {
         self.config = configuration
+        self.launchedConversationMode = configuration.conversationMode
         self.authKind = authKind
         self.output = output
         self.makeBackend = backendFactory
@@ -109,6 +115,10 @@ public actor ConversationEngine {
             try b.start()
         } catch {
             noteProblem("\(error)")
+        }
+        // The factory launches with the mode the project opened in; carry a later change into the new child.
+        if config.conversationMode != launchedConversationMode {
+            try? b.setPermissionMode(config.conversationMode.permissionMode)
         }
     }
 
@@ -189,14 +199,21 @@ public actor ConversationEngine {
 
     // MARK: - UI actions
 
-    public func approvePending(always: Bool = false) {
-        guard let p = snapshot.pendingPermission else { return }
+    /// Approves the request on screen. Pass the `requestID` the user was shown: if the shown request has
+    /// since changed, nothing is approved.
+    public func approvePending(always: Bool = false, requestID: String? = nil) {
+        guard let p = snapshot.pendingPermission, requestID == nil || requestID == p.request.requestID else { return }
         respondToPermission(p.request, decision: always ? .allowAlways : .allow)
     }
 
-    public func denyPending(message: String = "The user denied this action.") {
-        guard let p = snapshot.pendingPermission else { return }
+    public func denyPending(message: String = "The user denied this action.", requestID: String? = nil) {
+        guard let p = snapshot.pendingPermission, requestID == nil || requestID == p.request.requestID else { return }
         respondToPermission(p.request, decision: .deny(message: message, interrupt: false))
+    }
+
+    /// Turns the "auto-approve read-only tools" setting on or off for the running session.
+    public func setAutoApproveLowRisk(_ on: Bool) {
+        config.autoApproveLowRisk = on
     }
 
     public func interruptClaude() {
@@ -256,6 +273,8 @@ public actor ConversationEngine {
         resetTurnState()
         sendTimes.removeAll()
         snapshot.pendingPermission = nil
+        permissionQueue.removeAll()
+        snapshot.queuedPermissionCount = 0
         snapshot.session = nil
         snapshot.isClaudeWorking = false
         appendEntry(.system, "New session started.", status: .done)
@@ -392,20 +411,29 @@ public actor ConversationEngine {
 
         case .permissionRequested(let request):
             let assessment = policy.assess(request)
-            let auto = config.autoApproveLowRisk && assessment.risk == .low
+            let auto = config.autoApproveLowRisk && assessment.autoApprovable
             log.log(.info, .policy, "permission.requested",
-                    ["tool": .string(request.toolName), "risk": "\(assessment.risk)", "autoApproved": .bool(auto)])
+                    ["tool": .string(request.toolName), "risk": "\(assessment.risk)", "autoApproved": .bool(auto),
+                     "queued": .bool(snapshot.pendingPermission != nil)])
             if auto {
                 try? backend?.respond(to: request, decision: .allow)
                 break
             }
-            snapshot.pendingPermission = PendingPermission(request: request, assessment: assessment)
-            ackTask?.cancel()
-            speak([make(assessment.spokenPrompt, .prompt)], record: false, force: true)
+            let pending = PendingPermission(request: request, assessment: assessment)
+            if snapshot.pendingPermission != nil {
+                // Never replace the request the user is looking at or has just heard.
+                permissionQueue.append(pending)
+                snapshot.queuedPermissionCount = permissionQueue.count
+            } else {
+                showPermission(pending)
+            }
 
         case .permissionCancelled(let id):
+            permissionQueue.removeAll { $0.request.requestID == id }
+            snapshot.queuedPermissionCount = permissionQueue.count
             if snapshot.pendingPermission?.request.requestID == id {
                 snapshot.pendingPermission = nil
+                promoteNextPermission()
             }
 
         case .turnCompleted(let result):
@@ -438,6 +466,8 @@ public actor ConversationEngine {
                 snapshot.isClaudeWorking = false
             }
             snapshot.pendingPermission = nil
+            permissionQueue.removeAll()
+            snapshot.queuedPermissionCount = 0
             if code != 0, !stderr.isEmpty { snapshot.lastNotice = String(stderr.suffix(300)) }
         }
         recomputePhase()
@@ -581,7 +611,24 @@ public actor ConversationEngine {
             case .deny: return "Denied."
             }
         }(), status: .done)
+        promoteNextPermission()
         recomputePhase()
+    }
+
+    private func showPermission(_ pending: PendingPermission) {
+        snapshot.pendingPermission = pending
+        ackTask?.cancel()
+        speak([make(pending.assessment.spokenPrompt, .prompt)], record: false, force: true)
+    }
+
+    private func promoteNextPermission() {
+        guard snapshot.pendingPermission == nil, !permissionQueue.isEmpty else {
+            snapshot.queuedPermissionCount = permissionQueue.count
+            return
+        }
+        let next = permissionQueue.removeFirst()
+        snapshot.queuedPermissionCount = permissionQueue.count
+        showPermission(next)
     }
 
     private func speakFromPlanner(_ utterances: [Utterance]) {

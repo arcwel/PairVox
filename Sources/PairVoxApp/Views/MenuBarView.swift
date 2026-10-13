@@ -11,9 +11,18 @@ struct MenuBarView: View {
         Text(model.project.map { "\($0.lastPathComponent) — \(model.statusLine)" } ?? "No project open")
         if let pending = model.snapshot.pendingPermission {
             Divider()
-            Text(pending.assessment.summary).lineLimit(2)
-            Button("Allow") { model.approve() }
-            Button("Deny") { model.deny() }
+            Text("\(riskLabel(pending.assessment.risk)): \(pending.assessment.summary)").lineLimit(3)
+            if let reason = pending.assessment.reasons.first { Text(reason).lineLimit(2) }
+            if pending.assessment.risk == .high {
+                // The menu cannot show a whole command, so a high-risk request is reviewed in the window.
+                Button("Review in PairVox…") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    NSApp.windows.first { $0.canBecomeMain }?.makeKeyAndOrderFront(nil)
+                }
+            } else {
+                Button("Allow") { model.approve(requestID: pending.request.requestID) }
+            }
+            Button("Deny") { model.deny(requestID: pending.request.requestID) }
         }
         Divider()
         Button(model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
@@ -26,5 +35,13 @@ struct MenuBarView: View {
         }
         Button("Quit PairVox") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    private func riskLabel(_ risk: RiskLevel) -> String {
+        switch risk {
+        case .low: return "Low risk"
+        case .medium: return "Review"
+        case .high: return "High risk"
+        }
     }
 }

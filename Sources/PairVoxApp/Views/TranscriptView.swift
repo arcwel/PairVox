@@ -144,6 +144,10 @@ struct MarkdownBlocksView: View {
                     Text(Self.attributed(text))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                        // Links come from Claude's text, which a repository can steer: only web and mail links open.
+                        .environment(\.openURL, OpenURLAction { url in
+                            Self.isSafeLinkScheme(url) ? .systemAction : .discarded
+                        })
                 case .code(let lang, let body):
                     VStack(alignment: .leading, spacing: 4) {
                         if !lang.isEmpty {
@@ -161,6 +165,10 @@ struct MarkdownBlocksView: View {
                 }
             }
         }
+    }
+
+    static func isSafeLinkScheme(_ url: URL) -> Bool {
+        ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "")
     }
 
     static func attributed(_ text: String) -> AttributedString {

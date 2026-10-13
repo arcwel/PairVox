@@ -52,6 +52,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var verbosity: Verbosity = .normal
     public var acknowledgements = true
     public var autoApproveLowRisk = false
+    /// Whether the child may load the opened project's own Claude Code settings, hooks and MCP servers.
+    /// Off by default: those files come with the repository and can act outside PairVox's approval prompts.
+    public var trustProjectConfiguration = false
 
     // Voice
     public var transcriber: TranscriberChoice = .automatic
@@ -138,8 +141,10 @@ public struct AppSettings: Sendable, Codable, Equatable {
         verbosity = (try? c.decode(Verbosity.self, forKey: .verbosity)) ?? d.verbosity
         acknowledgements = (try? c.decode(Bool.self, forKey: .acknowledgements)) ?? d.acknowledgements
         autoApproveLowRisk = (try? c.decode(Bool.self, forKey: .autoApproveLowRisk)) ?? d.autoApproveLowRisk
+        trustProjectConfiguration = (try? c.decode(Bool.self, forKey: .trustProjectConfiguration)) ?? d.trustProjectConfiguration
         transcriber = (try? c.decode(TranscriberChoice.self, forKey: .transcriber)) ?? d.transcriber
-        whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? d.whisperModel
+        let decodedWhisper = (try? c.decode(String.self, forKey: .whisperModel)) ?? d.whisperModel
+        whisperModel = VoiceCatalog.whisperModelIDs.contains(decodedWhisper) ? decodedWhisper : VoiceCatalog.defaultWhisperModel
         synthesizer = (try? c.decode(SynthesizerChoice.self, forKey: .synthesizer)) ?? d.synthesizer
         kokoroVoice = (try? c.decode(String.self, forKey: .kokoroVoice)) ?? d.kokoroVoice
         systemVoiceIdentifier = try? c.decode(String.self, forKey: .systemVoiceIdentifier)
@@ -174,14 +179,27 @@ public struct SettingsStore: Sendable {
 
     public func load() -> AppSettings {
         guard let data = try? Data(contentsOf: url),
-              let s = try? JSONDecoder().decode(AppSettings.self, from: data) else { return AppSettings() }
+              var s = try? JSONDecoder().decode(AppSettings.self, from: data) else { return AppSettings() }
+        // A settings file that other users or groups can write, or that another user owns, is not trusted to name
+        // the program that receives the API key.
+        if !isPrivateToUser(url) { s.claudePathOverride = nil }
         return s
     }
 
     public func save(_ settings: AppSettings) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let dir = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(settings).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    func isPrivateToUser(_ file: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) else { return false }
+        let uid = (attrs[.ownerAccountID] as? NSNumber)?.uint32Value ?? .max
+        let mode = (attrs[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777
+        return uid == getuid() && mode & 0o022 == 0
     }
 }

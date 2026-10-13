@@ -39,11 +39,17 @@ public struct LaunchConfiguration: Sendable, Equatable {
     public var extraArguments: [String]
     /// Base environment (normally the user's login-shell environment).
     public var baseEnvironment: [String: String]
+    /// When false (the default) the child loads only the user's own Claude Code settings and MCP servers, not the
+    /// opened repository's `.claude/settings*.json` (hooks, allow rules) or `.mcp.json`, which would otherwise run
+    /// at session start with no permission request reaching PairVox (checked by scripts/validate-claude-config.sh;
+    /// `--strict-mcp-config` is deliberately not used because it would also drop the user's own MCP servers).
+    public var trustProjectConfiguration: Bool
 
     public init(executable: URL, workingDirectory: URL, auth: AuthMode = .subscription, model: String? = nil,
                 permissionMode: PermissionMode = .default, appendSystemPrompt: String? = nil,
                 resumeSessionID: String? = nil, includePartialMessages: Bool = true, extraArguments: [String] = [],
-                baseEnvironment: [String: String] = ProcessInfo.processInfo.environment) {
+                baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
+                trustProjectConfiguration: Bool = false) {
         self.executable = executable
         self.workingDirectory = workingDirectory
         self.auth = auth
@@ -54,6 +60,7 @@ public struct LaunchConfiguration: Sendable, Equatable {
         self.includePartialMessages = includePartialMessages
         self.extraArguments = extraArguments
         self.baseEnvironment = baseEnvironment
+        self.trustProjectConfiguration = trustProjectConfiguration
     }
 
     public func arguments() -> [String] {
@@ -66,6 +73,7 @@ public struct LaunchConfiguration: Sendable, Equatable {
             "--permission-prompt-tool", "stdio",
             "--permission-mode", permissionMode.rawValue,
         ]
+        if !trustProjectConfiguration { args += ["--setting-sources", "user"] }
         if includePartialMessages { args.append("--include-partial-messages") }
         if let model, !model.isEmpty { args += ["--model", model] }
         if let appendSystemPrompt, !appendSystemPrompt.isEmpty { args += ["--append-system-prompt", appendSystemPrompt] }

@@ -30,7 +30,9 @@ public enum ClaudeLocator {
                               fileManager: FileManager = .default) -> URL? {
         if let override, !override.isEmpty {
             let expanded = (override as NSString).expandingTildeInPath
-            return fileManager.isExecutableFile(atPath: expanded) ? URL(fileURLWithPath: expanded) : nil
+            guard fileManager.isExecutableFile(atPath: expanded), overrideProblem(expanded, fileManager: fileManager) == nil
+            else { return nil }
+            return URL(fileURLWithPath: expanded)
         }
         for dir in candidateDirectories(home: home, pathVariable: pathVariable) {
             let path = (dir as NSString).appendingPathComponent("claude")
@@ -38,6 +40,24 @@ public enum ClaudeLocator {
                 return URL(fileURLWithPath: path)
             }
         }
+        return nil
+    }
+
+    /// Why a user-chosen `claude` path cannot be trusted with the API key and the repository, or nil if it can.
+    /// The override comes from a file any process of the user can edit, and the program it names is started with
+    /// the key in its environment, so it must be a real file that only the user or root can change.
+    public static func overrideProblem(_ path: String, fileManager: FileManager = .default) -> String? {
+        guard (path as NSString).isAbsolutePath else { return "The path must be absolute." }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attrs = try? fileManager.attributesOfItem(atPath: resolved) else { return "The file does not exist." }
+        guard (attrs[.type] as? FileAttributeType) == .typeRegular else { return "It is not a regular file." }
+        let uid = (attrs[.ownerAccountID] as? NSNumber)?.uint32Value ?? .max
+        guard uid == getuid() || uid == 0 else { return "It is owned by another user." }
+        let mode = (attrs[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777
+        guard mode & 0o022 == 0 else { return "Other users or groups can change it." }
+        let parent = (resolved as NSString).deletingLastPathComponent
+        let parentMode = (try? fileManager.attributesOfItem(atPath: parent))?[.posixPermissions] as? NSNumber
+        guard (parentMode?.uint16Value ?? 0o777) & 0o002 == 0 else { return "Its folder is writable by everyone." }
         return nil
     }
 

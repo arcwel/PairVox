@@ -72,6 +72,9 @@ private struct GeneralSettings: View {
                 Toggle("Auto-approve read-only tools (Read, Grep, Glob, search)", isOn: $model.settings.autoApproveLowRisk)
                 Text("High-risk actions (deleting files, pushing, sudo, edits outside the project) always need a click, never just a spoken “yes”.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Load this project's own Claude Code settings, hooks and MCP servers", isOn: $model.settings.trustProjectConfiguration)
+                Text("Off by default. A repository you downloaded can include settings that run commands or approve tools without asking you. Turn this on only for projects you wrote or trust. Your own Claude Code settings and MCP servers always load.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
