@@ -9,6 +9,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
+            ProjectSettings().tabItem { Label("Project", systemImage: "folder") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }
             AccountSettings().tabItem { Label("Account", systemImage: "person.badge.key") }
             PronunciationSettings().tabItem { Label("Pronunciation", systemImage: "character.bubble") }
@@ -40,6 +41,7 @@ private struct GeneralSettings: View {
                 Text("Every step").tag(Verbosity.detailed)
             }
             Toggle("Say “On it” while Claude starts working", isOn: $model.settings.acknowledgements)
+            Toggle("Play a short sound when Claude starts and finishes", isOn: $model.settings.earcons)
 
             Section("Listening") {
                 Picker("Microphone", selection: Binding(get: { model.settings.handsFree }, set: {
@@ -249,6 +251,8 @@ private struct VoiceSettings: View {
 }
 
 private struct ShortcutSettings: View {
+    @EnvironmentObject var model: AppModel
+
     private var groups: [(String, [AppShortcut])] {
         var order: [String] = []
         for s in Shortcuts.all where !order.contains(s.group) { order.append(s.group) }
@@ -258,7 +262,13 @@ private struct ShortcutSettings: View {
     var body: some View {
         Form {
             Section("Anywhere on your Mac") {
-                ForEach(Shortcuts.global) { key in row(key.title, key.display) }
+                Picker("Hold to talk", selection: Binding(get: { model.settings.pushToTalkKey }, set: {
+                    model.settings.pushToTalkKey = $0
+                    model.applyPushToTalkKey()
+                })) {
+                    ForEach(AppSettings.pushToTalkKeys, id: \.self) { Text("⌃⌥" + Shortcuts.pushToTalk($0).letter).tag($0) }
+                }
+                ForEach(Shortcuts.global.dropFirst()) { key in row(key.title, key.display) }
             }
             ForEach(groups, id: \.0) { group, items in
                 Section(group) {
@@ -416,5 +426,51 @@ private struct AboutSettings: View {
             Spacer()
         }
         .padding()
+    }
+}
+
+
+/// Overrides for the open project only. "Same as General" removes the override, so General stays the default.
+private struct ProjectSettings: View {
+    @EnvironmentObject var model: AppModel
+
+    private func prefs(_ path: String) -> ProjectPreferences { model.settings.preferences(for: path) }
+
+    private func update(_ path: String, _ change: (inout ProjectPreferences) -> Void) {
+        var p = prefs(path)
+        change(&p)
+        if p == ProjectPreferences() { model.settings.projectPreferences.removeValue(forKey: path) }
+        else { model.settings.projectPreferences[path] = p }
+    }
+
+    var body: some View {
+        if let url = model.project {
+            let path = url.path
+            Form {
+                Section(url.lastPathComponent) {
+                    Picker("Read replies", selection: Binding(get: { prefs(path).speechMode }, set: { v in update(path) { $0.speechMode = v } })) {
+                        Text("Same as General").tag(SpeechMode?.none)
+                        Text("Everything, including code").tag(SpeechMode?.some(.full))
+                        Text("Prose; describe code briefly").tag(SpeechMode?.some(.skipCode))
+                        Text("Summaries only").tag(SpeechMode?.some(.summary))
+                    }
+                    Picker("Start sessions in", selection: Binding(get: { prefs(path).conversationMode }, set: { v in update(path) { $0.conversationMode = v } })) {
+                        Text("Same as General").tag(ConversationMode?.none)
+                        Text("Brainstorm").tag(ConversationMode?.some(.brainstorm))
+                        Text("Execute").tag(ConversationMode?.some(.execute))
+                    }
+                    TextField("Model (blank = General)", text: Binding(get: { prefs(path).model ?? "" }, set: { v in
+                        update(path) { $0.model = v.trimmingCharacters(in: .whitespaces).isEmpty ? nil : v.trimmingCharacters(in: .whitespaces) }
+                    }))
+                    TextField("Words to listen for (comma separated)", text: Binding(get: { prefs(path).vocabulary.joined(separator: ", ") }, set: { v in
+                        update(path) { $0.vocabulary = v.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+                    }))
+                    Text("Changes to the model and the mode apply to the next session in this project.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        } else {
+            Text("Open a project to set options for it.").foregroundStyle(.secondary).padding()
+        }
     }
 }

@@ -69,6 +69,11 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var openProjects: [String] = []
     /// Hide the Dock icon and window; PairVox lives in the menu bar (and the small floating window).
     public var menuBarOnly = false
+    /// A short sound when Claude starts working and when it finishes.
+    public var earcons = false
+    /// The key held with ⌃⌥ to talk, from `pushToTalkKeys`.
+    public var pushToTalkKey = AppSettings.pushToTalkKeys[0]
+    public static let pushToTalkKeys = ["space", "t", "v", "g", "b"]
 
     // Voice
     public var transcriber: TranscriberChoice = .automatic
@@ -162,6 +167,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
         declinedGrantFolders = (try? c.decode([String].self, forKey: .declinedGrantFolders)) ?? d.declinedGrantFolders
         openProjects = (try? c.decode([String].self, forKey: .openProjects)) ?? d.openProjects
         menuBarOnly = (try? c.decode(Bool.self, forKey: .menuBarOnly)) ?? d.menuBarOnly
+        earcons = (try? c.decode(Bool.self, forKey: .earcons)) ?? d.earcons
+        let decodedKey = (try? c.decode(String.self, forKey: .pushToTalkKey)) ?? d.pushToTalkKey
+        pushToTalkKey = AppSettings.pushToTalkKeys.contains(decodedKey) ? decodedKey : d.pushToTalkKey
         transcriber = (try? c.decode(TranscriberChoice.self, forKey: .transcriber)) ?? d.transcriber
         let decodedWhisper = (try? c.decode(String.self, forKey: .whisperModel)) ?? d.whisperModel
         whisperModel = VoiceCatalog.whisperModelIDs.contains(decodedWhisper) ? decodedWhisper : VoiceCatalog.defaultWhisperModel

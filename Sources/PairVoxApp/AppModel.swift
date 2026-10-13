@@ -108,7 +108,7 @@ final class AppModel: ObservableObject {
 
         hotKeys.onPress = { [weak self] id in self?.globalHotKey(id, down: true) }
         hotKeys.onRelease = { [weak self] id in self?.globalHotKey(id, down: false) }
-        for key in Shortcuts.global {
+        for key in [Shortcuts.pushToTalk(settings.pushToTalkKey)] + Shortcuts.global.dropFirst() {
             let ok = hotKeys.register(id: key.id.rawValue, keyCode: UInt32(key.keyCode), modifiers: key.carbonModifiers)
             log.log(ok ? .info : .warning, .hotkey, "register", ["key": .string(key.display), "action": .string(key.title), "ok": .bool(ok)])
         }
@@ -424,6 +424,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Re-registers the hold-to-talk hotkey after the key setting changes.
+    func applyPushToTalkKey() {
+        let key = Shortcuts.pushToTalk(settings.pushToTalkKey)
+        let ok = hotKeys.register(id: key.id.rawValue, keyCode: UInt32(key.keyCode), modifiers: key.carbonModifiers)
+        log.log(ok ? .info : .warning, .hotkey, "register", ["key": .string(key.display), "action": .string(key.title), "ok": .bool(ok)])
+    }
+
     func focusInputField() { focusInputTick += 1 }
 
     // MARK: Menu bar only
@@ -660,6 +667,9 @@ final class AppModel: ObservableObject {
     func interrupt() { Task { await engine?.interruptClaude() } }
     func stopSpeaking() { Task { await engine?.stopSpeaking() } }
     func newSession() { Task { await engine?.newSession() } }
+    func resumeSession(_ id: String) { Task { await engine?.resumeSession(id: id) } }
+    /// Earlier sessions of the open project, newest first.
+    var pastSessions: [PastSession] { project.map { SessionCatalog.recent(for: $0.path) } ?? [] }
     func perform(_ command: VoiceCommand) { Task { await engine?.perform(command) } }
 
     func setSpeechMode(_ mode: SpeechMode) {
@@ -770,6 +780,17 @@ final class AppModel: ObservableObject {
 
     // MARK: Internals
 
+    /// A quiet system sound when Claude starts and when it finishes, for people who look away while it works.
+    private func playEarcon(from old: EnginePhase, to new: EnginePhase) {
+        guard settings.earcons else { return }
+        let busy: Set<EnginePhase> = [.thinking, .working]
+        if busy.contains(new), !busy.contains(old) {
+            NSSound(named: "Pop")?.play()
+        } else if busy.contains(old), !busy.contains(new), new != .awaitingPermission {
+            NSSound(named: "Glass")?.play()
+        }
+    }
+
     private func receive(_ snap: EngineSnapshot, from session: ProjectSession) {
         guard liveSessions[session.id] != nil else { return }
         let previous = session.snapshot
@@ -788,6 +809,7 @@ final class AppModel: ObservableObject {
             }
             session.receivedFirstSnapshot = true
             if snap.phase == .needsSetup && previous.phase != .needsSetup { showSetup = true }
+            playEarcon(from: previous.phase, to: snap.phase)
         }
 
         // Notifications: anything in a project the user is not looking at, and everything while PairVox is in the background.
@@ -892,7 +914,7 @@ final class AppModel: ObservableObject {
         case .idle:
             if !settings.microphoneEnabled { return "Microphone off" }
             if !microphoneAvailable { return "No microphone" }
-            return listeningMode == .muted ? "Muted" : (listeningMode == .pushToTalk ? "Hold \(Shortcuts.global[0].display) to talk" : "Listening")
+            return listeningMode == .muted ? "Muted" : (listeningMode == .pushToTalk ? "Hold \(Shortcuts.pushToTalk(settings.pushToTalkKey).display) to talk" : "Listening")
         case .listening: return "Hearing you…"
         case .transcribing: return "Transcribing…"
         case .thinking: return "Thinking…"

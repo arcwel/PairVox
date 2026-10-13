@@ -26,6 +26,13 @@ struct PairVoxApp: App {
             CommandGroup(after: .newItem) {
                 Button(Shortcuts.of(.openProject).title) { model.chooseProject() }.shortcut(.openProject)
                 Button(Shortcuts.of(.newSession).title) { model.newSession() }.shortcut(.newSession)
+                Menu("Resume Earlier Session") {
+                    let past = model.pastSessions
+                    if past.isEmpty { Text("None found for this project") }
+                    ForEach(past) { s in
+                        Button("\(s.modified.formatted(date: .abbreviated, time: .shortened)) · \(s.preview)") { model.resumeSession(s.id) }
+                    }
+                }.disabled(model.project == nil)
                 Button(Shortcuts.of(.focusInput).title) { model.focusInputField() }.shortcut(.focusInput)
                 Divider()
                 Button(Shortcuts.of(.nextProject).title) { model.switchToNextProject(1) }.shortcut(.nextProject)

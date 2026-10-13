@@ -85,8 +85,16 @@ enum Shortcuts {
 
     static func of(_ id: AppShortcut.ID) -> AppShortcut { all.first { $0.id == id }! }
 
+    /// The hold-to-talk key for a setting value; unknown values fall back to Space.
+    static func pushToTalk(_ key: String) -> GlobalHotKey {
+        let table: [String: (Int, String)] = ["space": (kVK_Space, "Space"), "t": (kVK_ANSI_T, "T"), "v": (kVK_ANSI_V, "V"),
+                                              "g": (kVK_ANSI_G, "G"), "b": (kVK_ANSI_B, "B")]
+        let (code, label) = table[key] ?? (kVK_Space, "Space")
+        return GlobalHotKey(id: .pushToTalk, title: "Hold to talk", keyCode: code, letter: label)
+    }
+
     static let global: [GlobalHotKey] = [
-        GlobalHotKey(id: .pushToTalk, title: "Hold to talk", keyCode: kVK_Space, letter: "Space"),
+        pushToTalk("space"),
         GlobalHotKey(id: .stopSpeaking, title: "Stop speaking", keyCode: kVK_ANSI_S, letter: "S"),
         GlobalHotKey(id: .toggleMute, title: "Mute or unmute microphone", keyCode: kVK_ANSI_M, letter: "M"),
         GlobalHotKey(id: .interrupt, title: "Interrupt Claude", keyCode: kVK_ANSI_I, letter: "I"),

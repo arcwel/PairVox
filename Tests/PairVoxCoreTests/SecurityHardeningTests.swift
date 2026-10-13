@@ -241,3 +241,15 @@ final class AdviceSpeechTests: XCTestCase {
         XCTAssertFalse(ConversationEngine.speakableAdvice("Allow.").isEmpty)
     }
 }
+
+final class PolishSettingsTests: XCTestCase {
+    func testPushToTalkKeyFallsBackAndEarconsAreOffByDefault() throws {
+        XCTAssertFalse(AppSettings().earcons)
+        XCTAssertEqual(AppSettings().pushToTalkKey, "space")
+        let bad = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"pushToTalkKey":"q","earcons":true}"#.utf8))
+        XCTAssertEqual(bad.pushToTalkKey, "space")
+        XCTAssertTrue(bad.earcons)
+        let good = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"pushToTalkKey":"t"}"#.utf8))
+        XCTAssertEqual(good.pushToTalkKey, "t")
+    }
+}

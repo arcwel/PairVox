@@ -14,10 +14,10 @@
 
 - [ ] Streaming partial transcripts in the UI while you speak (WhisperKit `AudioStreamTranscriber`)
 - [ ] Silero VAD as an optional second-stage detector for noisy rooms
-- [ ] Per-project settings UI (overrides already exist in `ProjectPreferences`)
-- [ ] Configurable hold-to-talk shortcut
-- [ ] A speech "earcon" when Claude starts working or finishes
-- [ ] Session picker (resume earlier Claude Code sessions by ID)
+- [x] Per-project settings UI (Settings → Project: reply mode, start mode, model, extra listening words)
+- [x] Configurable hold-to-talk shortcut (⌃⌥ plus Space, T, V, G or B, in Settings → Shortcuts)
+- [x] A speech "earcon" when Claude starts working or finishes (off by default; Settings → General)
+- [x] Session picker (File → Resume Earlier Session; lists the project's earlier sessions, only UUIDs are passed to `--resume`)
 - [ ] Sparkle auto-updates
 
 ## v0.2a: approval-gate hardening (done 2026-10-13)

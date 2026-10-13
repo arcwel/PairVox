@@ -99,7 +99,7 @@ private struct PushToTalkButton: View {
             .onChange(of: pressing) { _, isPressing in
                 model.pushToTalk(down: isPressing)
             }
-            .accessibilityHint("Hold to talk. Works in any app: hold \(Shortcuts.global[0].display)")
+            .accessibilityHint("Hold to talk. Works in any app: hold \(Shortcuts.pushToTalk(model.settings.pushToTalkKey).display)")
             .disabled(model.project == nil)
     }
 }

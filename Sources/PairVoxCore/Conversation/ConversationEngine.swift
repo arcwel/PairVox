@@ -610,7 +610,15 @@ public actor ConversationEngine {
         publish()
     }
 
-    public func newSession() {
+    public func newSession() { restart(resume: nil) }
+
+    /// Continues an earlier Claude Code session. Anything that is not a session UUID is refused.
+    public func resumeSession(id: String) {
+        guard SessionCatalog.isValidSessionID(id) else { return }
+        restart(resume: id)
+    }
+
+    private func restart(resume: String?) {
         output.stopAll()
         queued.removeAll()
         queueOrder.removeAll()
@@ -623,8 +631,8 @@ public actor ConversationEngine {
         cancelAdvisorWork()
         snapshot.session = nil
         snapshot.isClaudeWorking = false
-        appendEntry(.system, "New session started.", status: .done)
-        openBackend(resume: nil)
+        appendEntry(.system, resume == nil ? "New session started." : "Resuming an earlier session.", status: .done)
+        openBackend(resume: resume)
         recomputePhase()
     }
 
