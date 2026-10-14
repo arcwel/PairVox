@@ -11,6 +11,7 @@
 - Cross-project approvals: one inbox of every waiting request, a spoken heads-up at a break in the conversation, "approve", "deny", "tell me more" or "switch" answered in place for the request just announced, an approvals tray in the project list and menu bar, per-project mute, and the same inbox on the phone.
 - Voice for high risk: separate off-by-default switches for high-risk requests (phrase plus the project name for another project) and for requests Claude Code marks as needing the screen (confirmed twice); optional Touch ID or password after the phrase on the Mac; the phone adds Face ID, Touch ID or the passcode.
 - `pairvox-link` command-line tool (status, pair, phones list/remove) and a private control socket; phone keys on the Mac now live in the Keychain.
+- Phone link setup guide `docs/PHONE_LINK_SETUP.md`: Tailscale access rule for TCP 47821, userspace Tailscale forward, troubleshooting.
 - Specs: `docs/prd/pairvox-iphone-prd.md` and `docs/prd/cross-project-approvals-prd.md`.
 
 ## 0.1.0 (unreleased)

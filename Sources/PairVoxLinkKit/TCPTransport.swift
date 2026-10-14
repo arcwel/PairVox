@@ -14,9 +14,22 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
         return nil
     }
 
+    /// The latest connection state in words ("ready", "waiting: no route", "failed: ..."), for error messages.
+    public private(set) var stateDescription = "starting"
+
     public init(connection: NWConnection) {
         signal(SIGPIPE, SIG_IGN)
         self.connection = connection
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready: self?.stateDescription = "connected"
+            case .waiting(let e): self?.stateDescription = "waiting: \(e.localizedDescription)"
+            case .failed(let e): self?.stateDescription = "failed: \(e.localizedDescription)"
+            case .preparing: self?.stateDescription = "connecting"
+            case .cancelled: if self?.stateDescription != "connected" { self?.stateDescription += " (cancelled)" }
+            default: break
+            }
+        }
         connection.start(queue: queue)
     }
 

@@ -70,3 +70,33 @@ final class WhisperDestinationTests: XCTestCase {
         }
     }
 }
+
+import AVFoundation
+
+final class SynthesisRecoveryTests: XCTestCase {
+    func testASentenceIsCutNearItsMiddleAtAPunctuationMarkWhenThereIsOne() throws {
+        let text = "I looked at the login page and found the bug, which is in the token check, so I fixed it."
+        let (a, b) = try XCTUnwrap(SynthesisRecovery.split(text))
+        XCTAssertEqual(a + " " + b, text.replacingOccurrences(of: ", ", with: ", "), "nothing is lost")
+        XCTAssertTrue(a.hasSuffix(","), a)
+        XCTAssertTrue(abs(a.count - b.count) < text.count / 2)
+        XCTAssertNil(SynthesisRecovery.split("Too short to cut."))
+        let noPunct = "this sentence has no commas at all but it is long enough to be cut in two pieces"
+        let (c, d) = try XCTUnwrap(SynthesisRecovery.split(noPunct))
+        XCTAssertEqual(c + " " + d, noPunct)
+    }
+
+    func testJoiningKeepsEverySampleInOrder() throws {
+        let fmt = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24000, channels: 1, interleaved: false)!
+        func buf(_ v: Float, _ n: Int) -> AVAudioPCMBuffer {
+            let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(n))!
+            b.frameLength = AVAudioFrameCount(n)
+            for i in 0..<n { b.floatChannelData![0][i] = v }
+            return b
+        }
+        let j = try XCTUnwrap(SynthesisRecovery.join(buf(0.25, 100), buf(0.5, 50)))
+        XCTAssertEqual(j.frameLength, 150)
+        XCTAssertEqual(j.floatChannelData![0][99], 0.25)
+        XCTAssertEqual(j.floatChannelData![0][100], 0.5)
+    }
+}

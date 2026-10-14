@@ -121,7 +121,11 @@ Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Security repo
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party components and model files are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
-## Phone link from the terminal
+## Phone link
+
+The phone talks to the Mac over Tailscale. **If your tailnet uses access rules, allow your phone to reach your Mac on TCP port 47821, or pairing fails silently.** Full setup, the exact rule and troubleshooting: [docs/PHONE_LINK_SETUP.md](docs/PHONE_LINK_SETUP.md).
+
+### From the terminal
 
 `pairvox-link` talks to the running app (private socket in `~/Library/Application Support/PairVox/`). Every command has `--json`; exit codes are 0 done, 1 refused, 2 bad usage, 3 PairVox not running.
 

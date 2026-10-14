@@ -53,8 +53,15 @@ final class PhoneModel: ObservableObject {
             connect()
         } catch {
             await transport.close()
-            state = .failed("Pairing did not complete. Check the code, that Tailscale is on, and that you clicked Pair on the Mac.")
+            print("pair failed: \(error)")
+            state = .failed("Pairing did not complete (\(Self.describe(error)); network: \(transport.stateDescription)). Check the code and that you clicked Pair on the Mac. If it stays on \"connecting\", Tailscale may be off on this phone, or your tailnet rules may block port \(port) from this phone to the Mac.")
         }
+    }
+
+    /// A short reason for the screen: the Network framework's error, or ours.
+    static func describe(_ error: Error) -> String {
+        if let l = error as? LinkError { return "\(l)" }
+        return (error as NSError).localizedDescription
     }
 
     func forget() {
@@ -87,7 +94,8 @@ final class PhoneModel: ObservableObject {
                     await transport.close()
                     if Task.isCancelled || self.generation != mine { return }
                     self.client = nil
-                    self.state = .failed("Can't reach your Mac. Is Tailscale on, and is the phone link switched on in PairVox?")
+                    print("connect failed: \(error)")
+                    self.state = .failed("Can't reach your Mac (\(Self.describe(error)); network: \(transport.stateDescription)). Is Tailscale on, is the phone link switched on in PairVox, and do your tailnet rules allow this phone to reach the Mac on port \(creds.port)?")
                 }
                 try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
                 delay = min(delay * 2, 15)

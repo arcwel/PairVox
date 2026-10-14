@@ -2,6 +2,8 @@
 
 A small SwiftUI app that talks to the PairVox Mac app over Tailscale. It pairs by QR code or six-digit code, shows the active project's transcript, speaks replies and approval prompts, listens with on-device speech recognition, and answers permission requests. The Mac makes every permission decision.
 
+> **Before you pair:** Tailscale must run on both devices, and if your tailnet restricts ports, your phone must be allowed to reach your Mac on **TCP 47821**. Otherwise the phone sits on "connecting" and the Mac sees nothing. See [../docs/PHONE_LINK_SETUP.md](../docs/PHONE_LINK_SETUP.md).
+
 ## Build and run on your iPhone
 
 1. On the Mac: `cd ios && xcodegen generate && open PairVoxPhone.xcodeproj`

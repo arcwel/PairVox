@@ -45,6 +45,8 @@ final class PhoneLinkModel: ObservableObject {
     @Published var revokeError: String?
     /// Where the open pairing offer came from, shown in the Accept dialog.
     var offerSource = "Settings"
+    /// Tailscale is running without a network interface (userspace mode): connections reach this Mac only through `tailscale serve`.
+    @Published private(set) var userspaceTailscale = false
 
     let engineBox = ActiveEngineBox()
     private let pairing: PairingManager
@@ -79,7 +81,9 @@ final class PhoneLinkModel: ObservableObject {
         stop()
         guard enabled else { status = "Off"; return }
         // PAIRVOX_LINK_LOOPBACK=1 lets the link run on 127.0.0.1 for testing on a Mac without Tailscale.
-        tailnetAddress = TailnetAddress.current() ?? (ProcessInfo.processInfo.environment["PAIRVOX_LINK_LOOPBACK"] == "1" ? "127.0.0.1" : nil)
+        tailnetAddress = TailnetAddress.current() ?? Self.tailscaleCLIAddress()
+            ?? (ProcessInfo.processInfo.environment["PAIRVOX_LINK_LOOPBACK"] == "1" ? "127.0.0.1" : nil)
+        userspaceTailscale = TailnetAddress.current() == nil && tailnetAddress != nil && tailnetAddress != "127.0.0.1"
         guard tailnetAddress != nil else {
             status = "Tailscale is not running on this Mac. Start it, then turn the phone link off and on."
             return
@@ -108,6 +112,30 @@ final class PhoneLinkModel: ObservableObject {
         } catch {
             status = "Could not listen on port \(wanted): \(error.localizedDescription)"
         }
+    }
+
+    /// The Mac's Tailscale address from the `tailscale` command, for Tailscale running in userspace mode (no interface).
+    static func tailscaleCLIAddress() -> String? {
+        let socket = NSHomeDirectory() + "/.config/tailscale/tailscaled.sock"
+        for tool in ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+        where FileManager.default.isExecutableFile(atPath: tool) {
+            for args in [FileManager.default.fileExists(atPath: socket) ? ["--socket=\(socket)", "ip", "-4"] : [], ["ip", "-4"]] where !args.isEmpty {
+                let p = Process(), pipe = Pipe()
+                p.executableURL = URL(fileURLWithPath: tool); p.arguments = args
+                p.standardOutput = pipe; p.standardError = Pipe()
+                guard (try? p.run()) != nil else { continue }
+                p.waitUntilExit()
+                let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    .split(separator: "\n").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+                if PairingPayload.isAllowedHost(out), out != "127.0.0.1" { return out }
+            }
+        }
+        return nil
+    }
+
+    /// The command that lets a userspace Tailscale pass connections to the phone link.
+    static func serveCommand(port: Int) -> String {
+        "tailscale --socket=\(NSHomeDirectory())/.config/tailscale/tailscaled.sock serve --bg --tcp \(port) tcp://127.0.0.1:\(port)"
     }
 
     func stop() {

@@ -112,6 +112,21 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
                                           "nonFinite": .int(report.nonFinite), "overRange": .int(report.overRange)])
                         }
                     }
+                    // Still noise: the same text tends to come out bad every time, so change what is asked of the voice.
+                    // First two shorter pieces, then the plain system voice; repairing the samples is the last resort.
+                    if !report.isClean, let (first, second) = SynthesisRecovery.split(next.text),
+                       let x = try? await self.synthesizer.synthesize(first, rate: r),
+                       let y = try? await self.synthesizer.synthesize(second, rate: r),
+                       AudioIO.inspect(x).isClean, AudioIO.inspect(y).isClean,
+                       let joined = SynthesisRecovery.join(x, y) {
+                        buffer = joined; report = AudioIO.inspect(joined)
+                        self.log.log(.warning, .tts, "synth.recovered", ["id": .int(next.id), "how": "split"])
+                    }
+                    if !report.isClean, let plain = try? await self.synthesizer.synthesizeWithSystemVoice(next.text, rate: r),
+                       AudioIO.inspect(plain).isClean {
+                        buffer = plain; report = AudioIO.inspect(plain)
+                        self.log.log(.warning, .tts, "synth.recovered", ["id": .int(next.id), "how": "systemVoice"])
+                    }
                     if !report.isClean { AudioIO.sanitize(buffer) }
                     result = .success(buffer)
                 }

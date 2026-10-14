@@ -521,10 +521,16 @@ private struct PhoneSettings: View {
             Section {
                 Toggle("Let paired phones connect over Tailscale", isOn: $model.settings.phoneLinkEnabled)
                 Text(phone.status).font(.caption).foregroundStyle(.secondary)
+                if phone.userspaceTailscale, model.settings.phoneLinkEnabled {
+                    Text("Tailscale here runs without a network interface, so phones reach this Mac only through a forward. Run once in Terminal:")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text(PhoneLinkModel.serveCommand(port: model.settings.phoneLinkPort))
+                        .font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
+                }
                 if let address = phone.tailnetAddress, model.settings.phoneLinkEnabled {
                     Text("This Mac: \(address):\(String(phone.port))").font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 }
-                Text("Only devices on your tailnet can reach this Mac, and each phone must also prove it holds a key made when you paired it. A phone cannot approve a high-risk request by voice, and the Mac keeps all permission rules.")
+                Text("Only devices on your tailnet can reach this Mac, and each phone must also prove it holds a key made when you paired it. If your tailnet uses access rules, allow your phone to reach this Mac on TCP port \(String(model.settings.phoneLinkPort)); otherwise pairing fails without any message. Details: docs/PHONE_LINK_SETUP.md in the PairVox repository.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if model.settings.phoneLinkEnabled {
