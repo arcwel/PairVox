@@ -7,8 +7,8 @@ import PairVoxLinkKit
 /// tests use a fake.
 public protocol LinkEngine: Sendable {
     func submit(_ text: String) async
-    func approve(requestID: String) async
-    func deny(requestID: String) async
+    func approve(requestID: String, projectID: String?) async
+    func deny(requestID: String, projectID: String?) async
     func interrupt() async
 }
 
@@ -55,8 +55,9 @@ public actor LinkHost {
     public func publish(_ raw: LinkSnapshot) async {
         let snapshot = raw.bounded()
         let now = clock()
-        if let r = snapshot.request { firstSeen[r.requestID] = firstSeen[r.requestID] ?? now }
-        firstSeen = firstSeen.filter { id, _ in snapshot.request?.requestID == id }
+        let live = ([snapshot.request].compactMap { $0 } + snapshot.others).map { key($0.projectID, $0.requestID, active: snapshot.activeProjectID) }
+        for k in live { firstSeen[k] = firstSeen[k] ?? now }
+        firstSeen = firstSeen.filter { live.contains($0.key) }
         latest = snapshot
         for (id, c) in connections { await push(snapshot, to: c, id: id) }
     }
@@ -95,18 +96,25 @@ public actor LinkHost {
         connectionsChanged(connections.count)
     }
 
+    /// One identity per request: the request on the Mac's screen is keyed by the project it belongs to, the same as
+    /// when it later shows up under "other projects", so switching projects never resets its age.
+    func key(_ projectID: String?, _ requestID: String, active: String? = nil) -> String { (projectID ?? active ?? latest?.activeProjectID ?? "") + "/" + requestID }
+
     private func push(_ snap: LinkSnapshot, to c: Connection, id: UUID) async {
         // Nothing is sent to a phone that has been removed, even if its connection is still open.
         guard await pairing.activeDevice(c.deviceID) != nil else { await dropDevice(c.deviceID); return }
         var out = snap
-        if var r = out.request {
-            let seen = firstSeen[r.requestID] ?? clock()
+        func aged(_ request: LinkRequest) -> LinkRequest {
+            var r = request
+            let seen = firstSeen[key(r.projectID, r.requestID)] ?? clock()
             r.ageSeconds = max(0, Int(clock().timeIntervalSince(seen)))
-            out.request = r
+            return r
         }
+        out.request = out.request.map(aged)
+        out.others = out.others.map(aged)
         guard (try? await send(.snapshot(out), on: c, id: id)) != nil else { return }
         // Only a request that really went out counts as shown on this phone.
-        if let r = out.request { c.presented[r.requestID] = clock() }
+        for r in ([out.request].compactMap { $0 } + out.others) { c.presented[key(r.projectID, r.requestID)] = clock() }
     }
 
     private func send(_ m: HostMessage, on c: Connection, id: UUID) async throws {
@@ -208,33 +216,45 @@ public actor LinkHost {
         case .submit(let text):
             guard !text.isEmpty, text.count <= 4000 else { return }
             await engine.submit(text)
-        case .deny(let requestID):
-            guard latest?.request?.requestID == requestID else { return }
-            await engine.deny(requestID: requestID)
-        case .approve(let requestID, let method, let auth):
-            if let reason = approvalRefusal(requestID, method, c) {
+        case .deny(let requestID, let projectID):
+            guard find(requestID, projectID) != nil else { return }
+            await engine.deny(requestID: requestID, projectID: projectID)
+        case .approve(let requestID, let method, let auth, let projectID):
+            if let reason = approvalRefusal(requestID, projectID, method, auth, c) {
                 log("link.approvalRefused \(reason)")
                 try? await send(.refused(reason), on: c, id: id)
                 if let latest { await push(latest, to: c, id: id) }
                 return
             }
-            log("link.approved \(requestID) via \(method.rawValue) \(auth.rawValue)")
-            await engine.approve(requestID: requestID)
+            log("link.approved \(requestID) via \(method.rawValue) \(auth.rawValue)\(projectID == nil ? "" : " (other project)")")
+            await engine.approve(requestID: requestID, projectID: projectID)
         }
     }
 
-    /// The reason an approval from the phone is not accepted, or nil if it is.
-    func approvalRefusal(_ requestID: String, _ method: ApprovalMethod, _ c: Connection) -> String? {
-        guard let request = latest?.request, request.requestID == requestID else { return "That request is no longer waiting." }
+    func find(_ requestID: String, _ projectID: String?) -> LinkRequest? {
+        guard let latest else { return nil }
+        if let projectID, projectID != latest.activeProjectID { return latest.others.first { $0.projectID == projectID && $0.requestID == requestID } }
+        return latest.request?.requestID == requestID ? latest.request : nil
+    }
+
+    /// The reason an approval from the phone is not accepted, or nil if it is. The same rules cover the request on
+    /// the Mac's screen and requests in other projects.
+    func approvalRefusal(_ requestID: String, _ projectID: String?, _ method: ApprovalMethod, _ auth: DeviceAuth, _ c: Connection) -> String? {
+        guard let request = find(requestID, projectID), let latest else { return "That request is no longer waiting." }
         if request.truncated { return "This request is too long to read on the phone. Approve it on the Mac." }
-        guard let shown = c.presented[requestID] else { return "That request has not been shown on this phone yet." }
-        let age = clock().timeIntervalSince(firstSeen[requestID] ?? shown)
-        if request.risk == "high" {
-            guard method == .tap else { return "A high-risk request needs a tap, not a spoken yes." }
-            return nil
+        let key = key(projectID, requestID)
+        guard let shown = c.presented[key] else { return "That request has not been shown on this phone yet." }
+        let age = clock().timeIntervalSince(firstSeen[key] ?? shown)
+        if method == .tap { return nil }   // a deliberate tap is the click: the phone asked for Face ID, Touch ID or the passcode first
+        // Voice from here on.
+        if !request.voiceApprovable {
+            // High risk, or too long to read out: only the spoken phrase, only if the Mac has that switched on, and
+            // only with the phone's own second confirmation (Face ID, Touch ID or the passcode).
+            guard latest.voiceHighRisk else { return "This request needs a tap, not a spoken yes." }
+            guard !request.needsScreen || latest.voiceNeedsScreen else { return "Claude Code says this needs you at the screen. Tap to allow." }
+            guard auth != .none else { return "Confirm with Face ID, Touch ID or your passcode as well." }
         }
-        guard request.voiceApprovable || method == .tap else { return "This request needs a tap, not a spoken yes." }
-        if method == .voice, age > Self.staleAfter { return "This request is old. Check it and tap to allow." }
+        if age > Self.staleAfter { return "This request is old. Check it and tap to allow." }
         return nil
     }
 }

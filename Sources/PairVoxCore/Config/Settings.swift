@@ -25,13 +25,28 @@ public struct ProjectPreferences: Sendable, Codable, Equatable {
     public var model: String?
     /// Extra words to bias speech recognition toward (names, acronyms).
     public var vocabulary: [String]
+    /// Requests from this project are never announced aloud (they still show in the inbox and badges).
+    public var muteAnnouncements: Bool
 
     public init(speechMode: SpeechMode? = nil, conversationMode: ConversationMode? = nil, model: String? = nil,
-                vocabulary: [String] = []) {
+                vocabulary: [String] = [], muteAnnouncements: Bool = false) {
+        self.muteAnnouncements = muteAnnouncements
         self.speechMode = speechMode
         self.conversationMode = conversationMode
         self.model = model
         self.vocabulary = vocabulary
+    }
+}
+
+extension ProjectPreferences {
+    enum CodingKeys: String, CodingKey { case speechMode, conversationMode, model, vocabulary, muteAnnouncements }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(speechMode: try? c.decode(SpeechMode.self, forKey: .speechMode),
+                  conversationMode: try? c.decode(ConversationMode.self, forKey: .conversationMode),
+                  model: try? c.decode(String.self, forKey: .model),
+                  vocabulary: (try? c.decode([String].self, forKey: .vocabulary)) ?? [],
+                  muteAnnouncements: (try? c.decode(Bool.self, forKey: .muteAnnouncements)) ?? false)
     }
 }
 
@@ -69,6 +84,15 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var openProjects: [String] = []
     /// Hide the Dock icon and window; PairVox lives in the menu bar (and the small floating window).
     public var menuBarOnly = false
+    /// Speak a request from another project at a break in the current conversation.
+    public var announceOtherProjects = true
+    public var announceQuietSeconds: Double = 2
+    /// Say the project's name when announcing (off: "another project").
+    public var speakProjectNames = true
+    /// Voice may also confirm requests Claude Code says need the screen. Off until switched on (and confirmed twice).
+    public var voiceApprovesNeedsScreen = false
+    /// Ask for Touch ID or the login password after the spoken high-risk phrase.
+    public var macSecondConfirmation = false
     /// Lets paired phones connect over Tailscale. Off until the owner turns it on.
     public var phoneLinkEnabled = false
     public var phoneLinkPort = 47821
@@ -170,6 +194,12 @@ public struct AppSettings: Sendable, Codable, Equatable {
         declinedGrantFolders = (try? c.decode([String].self, forKey: .declinedGrantFolders)) ?? d.declinedGrantFolders
         openProjects = (try? c.decode([String].self, forKey: .openProjects)) ?? d.openProjects
         menuBarOnly = (try? c.decode(Bool.self, forKey: .menuBarOnly)) ?? d.menuBarOnly
+        announceOtherProjects = (try? c.decode(Bool.self, forKey: .announceOtherProjects)) ?? d.announceOtherProjects
+        let quiet = (try? c.decode(Double.self, forKey: .announceQuietSeconds)) ?? d.announceQuietSeconds
+        announceQuietSeconds = min(max(quiet, 0.5), 30)
+        speakProjectNames = (try? c.decode(Bool.self, forKey: .speakProjectNames)) ?? d.speakProjectNames
+        voiceApprovesNeedsScreen = (try? c.decode(Bool.self, forKey: .voiceApprovesNeedsScreen)) ?? d.voiceApprovesNeedsScreen
+        macSecondConfirmation = (try? c.decode(Bool.self, forKey: .macSecondConfirmation)) ?? d.macSecondConfirmation
         phoneLinkEnabled = (try? c.decode(Bool.self, forKey: .phoneLinkEnabled)) ?? d.phoneLinkEnabled
         let decodedPort = (try? c.decode(Int.self, forKey: .phoneLinkPort)) ?? d.phoneLinkPort
         phoneLinkPort = (1024...65535).contains(decodedPort) ? decodedPort : d.phoneLinkPort
@@ -230,6 +260,7 @@ public struct SettingsStore: Sendable {
             s.autoApproveLowRisk = false
             s.spokenHighRiskConfirmation = false
             s.phoneLinkEnabled = false
+            s.voiceApprovesNeedsScreen = false
         }
         return s
     }

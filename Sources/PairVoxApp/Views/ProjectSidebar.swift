@@ -26,6 +26,7 @@ struct ProjectSidebar: View {
                 }
             }
             Spacer(minLength: 0)
+            ApprovalTray()
             Divider()
             if !model.settings.recentProjects.isEmpty {
                 Menu {
@@ -82,6 +83,14 @@ private struct ProjectRow: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            let muted = model.settings.preferences(for: session.path).muteAnnouncements
+            Button(muted ? "Announce Requests from This Project" : "Don't Announce Requests from This Project") {
+                var prefs = model.settings.preferences(for: session.path)
+                prefs.muteAnnouncements.toggle()
+                if prefs == ProjectPreferences() { model.settings.projectPreferences.removeValue(forKey: session.path) }
+                else { model.settings.projectPreferences[session.path] = prefs }
+            }
+            Divider()
             Button("Close Project") { model.closeProject(session.id) }
         }
         .accessibilityLabel("\(session.name)\(session.needsAttention ? ", needs your OK" : "")\(session.missedCount > 0 ? ", \(session.missedCount) new replies" : "")")
@@ -118,5 +127,46 @@ struct CatchUpBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
         .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+    }
+}
+
+
+/// Requests waiting in other projects. Answer here without switching; long or risky ones open the project instead.
+struct ApprovalTray: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var cross: CrossProjectController
+
+    init() { _cross = ObservedObject(wrappedValue: AppModel.sharedCross) }
+
+    var body: some View {
+        let others = cross.inbox.others(than: model.activeSessionID?.uuidString)
+        if !others.isEmpty {
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("WAITING IN OTHER PROJECTS").font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+                ForEach(others) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Circle().fill(item.risk == .high ? Color.red : Color.orange).frame(width: 7, height: 7)
+                            Text(item.projectName).font(.system(.caption, weight: .semibold)).lineLimit(1)
+                            if cross.announcement?.item.id == item.id { Text("ASKING").font(.system(.caption2, design: .monospaced)).foregroundStyle(.orange) }
+                        }
+                        Text(item.summary).font(.system(.caption, design: .monospaced)).lineLimit(3)
+                        HStack {
+                            Button("Deny") { cross.deny(item) }
+                            Spacer()
+                            if item.voiceApprovable && item.fitsCompactSurface {
+                                Button("Allow") { cross.approve(item) }.buttonStyle(.borderedProminent)
+                            } else {
+                                Button("Open") { cross.open(item) }
+                            }
+                        }.controlSize(.small)
+                    }
+                    .padding(8)
+                    .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+                }
+            }
+            .padding(10)
+        }
     }
 }

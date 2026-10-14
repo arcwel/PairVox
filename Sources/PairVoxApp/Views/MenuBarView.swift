@@ -43,6 +43,20 @@ struct MenuBarView: View {
             }
             Button("Deny") { model.deny(requestID: pending.request.requestID) }
         }
+        let others = AppModel.sharedCross.inbox.others(than: model.activeSessionID?.uuidString)
+        if !others.isEmpty {
+            Divider()
+            Text("Waiting in other projects").font(.caption)
+            ForEach(others) { item in
+                Text("\(item.projectName): \(item.summary)").lineLimit(2)
+                if item.voiceApprovable && item.fitsCompactSurface {
+                    Button("Allow in \(item.projectName)") { AppModel.sharedCross.approve(item) }
+                } else {
+                    Button("Open \(item.projectName)") { AppModel.sharedCross.open(item) }
+                }
+                Button("Deny in \(item.projectName)") { AppModel.sharedCross.deny(item) }
+            }
+        }
         Divider()
         Button(model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
         Button("Stop Speaking") { model.stopSpeaking() }.disabled(!model.snapshot.isSpeaking)

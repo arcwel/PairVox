@@ -25,6 +25,8 @@ A small SwiftUI app that talks to the PairVox Mac app over Tailscale. It pairs b
 | A low-risk request appears (an edit inside the project) | The phone speaks the prompt; say "yes" or tap Allow |
 | A shell command with several steps, or any high-risk request | The phone says it needs a decision on the screen; voice "yes" does nothing; tap Allow, which asks for Face ID, Touch ID or the passcode |
 | Lock the phone with earbuds in | Replies keep speaking (background audio) |
+| A request waiting in another Mac project | A "Waiting in other projects" card appears; Allow or Deny answers it in that project |
+| High-risk request with the Mac's voice switch on | Say "confirm high risk"; the phone then asks for Face ID, Touch ID or the passcode |
 | Mac: Settings → Phone → Remove on the phone | The phone drops at once and shows it can't reach the Mac |
 | Switch the Mac's phone link off | Same: the phone is disconnected |
 

@@ -7,9 +7,27 @@ import PairVoxLinkKit
 public struct PairedDevice: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var name: String
+    /// The phone's secret key. With a key store it is kept there and left out of the file.
     public var psk: Data
     public var createdAt: Date
     public var revoked: Bool
+
+    enum CodingKeys: String, CodingKey { case id, name, psk, createdAt, revoked }
+    init(id: String, name: String, psk: Data, createdAt: Date, revoked: Bool) {
+        self.id = id; self.name = name; self.psk = psk; self.createdAt = createdAt; self.revoked = revoked
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id); name = sanitizedDeviceName(try c.decode(String.self, forKey: .name))
+        psk = (try? c.decode(Data.self, forKey: .psk)) ?? Data()
+        createdAt = try c.decode(Date.self, forKey: .createdAt); revoked = try c.decode(Bool.self, forKey: .revoked)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id); try c.encode(name, forKey: .name)
+        if !psk.isEmpty { try c.encode(psk, forKey: .psk) }
+        try c.encode(createdAt, forKey: .createdAt); try c.encode(revoked, forKey: .revoked)
+    }
 }
 
 /// What the Mac shows to the person pairing: a QR payload or a six-digit code, valid once and briefly.
@@ -26,7 +44,7 @@ public struct PairingOffer: Sendable, Equatable {
 /// characters and 128 bytes, and never empty.
 public func sanitizedDeviceName(_ raw: String) -> String {
     let banned = CharacterSet.controlCharacters.union(.newlines)
-        .union(CharacterSet(charactersIn: "\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}\u{3164}\u{115F}\u{1160}\u{FFA0}\u{200B}\u{FEFF}"))
+        .union(CharacterSet(charactersIn: "\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}\u{3164}\u{115F}\u{1160}\u{FFA0}\u{200B}\u{FEFF}\u{2800}\u{17B4}\u{17B5}"))
     var out = ""
     for ch in String(raw.unicodeScalars.filter { !banned.contains($0) }).prefix(64) {
         if (out + String(ch)).utf8.count > 128 { break }
@@ -36,11 +54,12 @@ public func sanitizedDeviceName(_ raw: String) -> String {
     return out.isEmpty ? "Unnamed phone" : out
 }
 
-public enum PairingError: Error, Equatable { case noOffer, expired, wrongSecret, declined, burned }
+public enum PairingError: Error, Equatable { case noOffer, expired, wrongSecret, declined, burned, keyNotDestroyed }
 
 /// The Mac's list of paired phones and the one open pairing offer. Stored 0600; keys can be revoked at any time.
 public actor PairingManager {
     private let url: URL?
+    private let keys: DeviceKeyStore?
     private(set) var devices: [PairedDevice]
     private var offer: PairingOffer?
     private var failuresByPeer: [String: Int] = [:]
@@ -51,8 +70,11 @@ public actor PairingManager {
     public static let maxTotalFailures = 12
     public static let offerLifetime: TimeInterval = 120
 
-    public init(storeURL: URL?) {
+    /// With a `keys` store, phone keys live there and the file holds only names and dates. A file written by an
+    /// earlier version (keys inside) is converted on first load.
+    public init(storeURL: URL?, keys: DeviceKeyStore? = nil) {
         url = storeURL
+        self.keys = keys
         devices = []
         if let storeURL, FileManager.default.fileExists(atPath: storeURL.path) {
             if let data = try? Data(contentsOf: storeURL), let list = try? JSONDecoder().decode([PairedDevice].self, from: data) { devices = list }
@@ -62,6 +84,35 @@ public actor PairingManager {
                 try? FileManager.default.moveItem(at: storeURL, to: aside)
             }
         }
+        if Self.attach(&devices, keys: keys) { try? Self.write(devices, to: storeURL, withKeysInFile: keys == nil) }
+    }
+
+    /// Fills each device's key from the key store. A file written by an earlier version (keys inside) is converted
+    /// exactly once, on the first run with a key store; after that, a file entry that carries a key is not trusted
+    /// at all, because only an Accept click on this Mac may create a phone. A phone whose key is missing from the
+    /// key store stays in the list but cannot connect (a locked or unreadable Keychain must not erase pairings).
+    private static func attach(_ devices: inout [PairedDevice], keys: DeviceKeyStore?) -> Bool {
+        guard let keys else { return false }
+        var changed = false
+        let mayImport = !keys.legacyImportClosed
+        for i in devices.indices {
+            // Phone ids are UUIDs made by this app; a file cannot name anything else (such as another Keychain item).
+            if UUID(uuidString: devices[i].id) == nil && !devices[i].revoked {
+                devices[i].psk = Data(); devices[i].revoked = true; changed = true
+                continue
+            }
+            if !devices[i].psk.isEmpty {
+                if mayImport, !devices[i].revoked, (try? keys.setKey(devices[i].psk, for: devices[i].id)) != nil {
+                    changed = true
+                } else {
+                    devices[i].psk = Data(); devices[i].revoked = true; changed = true   // planted or already revoked
+                }
+            } else if !devices[i].revoked, let k = keys.key(for: devices[i].id) {
+                devices[i].psk = k
+            }
+        }
+        keys.closeLegacyImport()
+        return changed
     }
 
     public func pairedDevices() -> [PairedDevice] { devices }
@@ -108,8 +159,14 @@ public actor PairingManager {
         guard await accept(shownName) else { throw PairingError.declined }
         let device = PairedDevice(id: UUID().uuidString, name: shownName, psk: Handshake.randomBytes(32),
                                   createdAt: now, revoked: false)
+        if let keys { try keys.setKey(device.psk, for: device.id) }
         devices.append(device)
-        try persist()
+        do { try persist() }
+        catch {   // not saved, so not paired: nothing is left behind
+            devices.removeAll { $0.id == device.id }
+            keys?.removeKey(for: device.id)
+            throw error
+        }
         let plain = try JSONEncoder().encode(GrantContents(deviceID: device.id, psk: device.psk))
         let box = try ChaChaPoly.seal(plain, using: pairingKey(current.material), authenticating: request.clientNonce)
         return PairGrant(sealed: box.combined)
@@ -120,19 +177,25 @@ public actor PairingManager {
     public func revoke(_ id: String) throws {
         guard let i = devices.firstIndex(where: { $0.id == id }) else { return }
         devices[i].revoked = true
+        let destroyed = keys?.removeKey(for: id) ?? true   // the key is destroyed, not only flagged
+        devices[i].psk = Data()
         try persist()
+        if !destroyed { throw PairingError.keyNotDestroyed }
     }
 
-    public func activeDevice(_ id: String) -> PairedDevice? { devices.first { $0.id == id && !$0.revoked } }
+    public func activeDevice(_ id: String) -> PairedDevice? { devices.first { $0.id == id && !$0.revoked && !$0.psk.isEmpty } }
 
-    private func persist() throws {
+    private func persist() throws { try Self.write(devices, to: url, withKeysInFile: keys == nil) }
+
+    private static func write(_ devices: [PairedDevice], to url: URL?, withKeysInFile: Bool) throws {
         guard let url else { return }
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
-        // The temporary file is created private, so the keys are never readable by others, even briefly.
+        let toWrite = withKeysInFile ? devices : devices.map { var d = $0; d.psk = Data(); return d }
+        // The temporary file is created private, so nothing is readable by others, even briefly.
         let temp = dir.appendingPathComponent(".paired-\(UUID().uuidString).tmp")
-        guard FileManager.default.createFile(atPath: temp.path, contents: try JSONEncoder().encode(devices),
+        guard FileManager.default.createFile(atPath: temp.path, contents: try JSONEncoder().encode(toWrite),
                                              attributes: [.posixPermissions: 0o600]) else { throw CocoaError(.fileWriteUnknown) }
         _ = try FileManager.default.replaceItemAt(url, withItemAt: temp)
     }

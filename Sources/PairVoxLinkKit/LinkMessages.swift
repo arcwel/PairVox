@@ -16,9 +16,15 @@ public struct LinkRequest: Codable, Sendable, Equatable {
     /// True when the Mac had to shorten this request to send it. Such a request can be denied from the phone but
     /// not approved, because the person could not see all of it.
     public var truncated: Bool = false
+    /// Claude Code says this request needs the person at the screen.
+    public var needsScreen: Bool = false
+    /// Set for a request in a project other than the one on the Mac's screen.
+    public var projectID: String?
+    public var projectName: String?
 
     public init(requestID: String, summary: String, spokenPrompt: String, risk: String, reasons: [String],
-                voiceApprovable: Bool, ageSeconds: Int = 0) {
+                voiceApprovable: Bool, ageSeconds: Int = 0, needsScreen: Bool = false, projectID: String? = nil, projectName: String? = nil) {
+        self.needsScreen = needsScreen; self.projectID = projectID; self.projectName = projectName
         self.requestID = requestID; self.summary = summary; self.spokenPrompt = spokenPrompt; self.risk = risk
         self.reasons = reasons; self.voiceApprovable = voiceApprovable; self.ageSeconds = ageSeconds
     }
@@ -37,9 +43,19 @@ public struct LinkSnapshot: Codable, Sendable, Equatable {
     public var transcriptTail: [LinkEntry]
     public var request: LinkRequest?
     public var queuedRequests: Int
-    public init(phase: String, project: String, transcriptTail: [LinkEntry], request: LinkRequest?, queuedRequests: Int) {
+    /// Requests waiting in other open projects (the Mac's approval inbox).
+    public var others: [LinkRequest] = []
+    /// The Mac's spoken-confirmation settings, so the phone knows whether the phrase can work at all.
+    public var voiceHighRisk: Bool = false
+    public var voiceNeedsScreen: Bool = false
+    /// Identifies the project the Mac is showing, so the same request keeps one identity when the Mac switches projects.
+    public var activeProjectID: String?
+    public init(phase: String, project: String, transcriptTail: [LinkEntry], request: LinkRequest?, queuedRequests: Int,
+                others: [LinkRequest] = [], voiceHighRisk: Bool = false, voiceNeedsScreen: Bool = false, activeProjectID: String? = nil) {
+        self.activeProjectID = activeProjectID
         self.phase = phase; self.project = project; self.transcriptTail = transcriptTail
         self.request = request; self.queuedRequests = queuedRequests
+        self.others = others; self.voiceHighRisk = voiceHighRisk; self.voiceNeedsScreen = voiceNeedsScreen
     }
 }
 
@@ -59,11 +75,13 @@ extension LinkSnapshot {
         var out = self
         out.phase = Self.cut(phase, 64).text
         out.project = Self.cut(project, 256).text
+        out.activeProjectID = activeProjectID.map { Self.cut($0, 128).text }
         out.queuedRequests = max(0, min(queuedRequests, 10_000))
         out.transcriptTail = Array(transcriptTail.suffix(60)).map {
             LinkEntry(id: $0.id, role: Self.cut($0.role, 32).text, text: Self.cut($0.text, entryBytes).text)
         }
-        if var r = out.request {
+        func boundRequest(_ request: LinkRequest) -> LinkRequest {
+            var r = request
             var cutAny = false
             func field(_ s: String, _ n: Int) -> String { let c = Self.cut(s, n); cutAny = cutAny || c.cut; return c.text }
             r.requestID = Self.cut(r.requestID, 256).text
@@ -72,9 +90,14 @@ extension LinkSnapshot {
             r.risk = Self.cut(r.risk, 16).text
             if r.reasons.count > 20 { cutAny = true }
             r.reasons = Array(r.reasons.prefix(20)).map { field($0, 512) }
+            r.projectID = r.projectID.map { Self.cut($0, 128).text }
+            r.projectName = r.projectName.map { Self.cut($0, 128).text }
             r.truncated = cutAny
-            out.request = r
+            return r
         }
+        out.request = request.map(boundRequest)
+        // Only the first few other-project requests are sent; the rest wait on the Mac.
+        out.others = Array(others.prefix(10)).map(boundRequest)
         // Whatever is still too big loses its oldest transcript entries first.
         while out.transcriptTail.count > 1, (try? JSONEncoder().encode(out).count) ?? Int.max > Self.maxEncodedBytes {
             out.transcriptTail.removeFirst()
@@ -105,8 +128,8 @@ public enum HostMessage: Codable, Sendable, Equatable {
 
 public enum ClientMessage: Codable, Sendable, Equatable {
     case submit(String)
-    case approve(requestID: String, method: ApprovalMethod, auth: DeviceAuth)
-    case deny(requestID: String)
+    case approve(requestID: String, method: ApprovalMethod, auth: DeviceAuth, projectID: String? = nil)
+    case deny(requestID: String, projectID: String? = nil)
     case interrupt
     case ping
 }

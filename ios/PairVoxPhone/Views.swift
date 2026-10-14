@@ -75,6 +75,7 @@ struct SessionView: View {
                 status
                 transcript
                 if let request = model.snapshot?.request { RequestCard(request: request) }
+                if let others = model.snapshot?.others, !others.isEmpty { OtherProjectsCard(others: others) }
                 if !model.heard.isEmpty { Text(model.heard).font(.callout).padding(8).frame(maxWidth: .infinity, alignment: .leading) }
                 controls
             }
@@ -205,5 +206,33 @@ final class ScannerController: UIViewController, AVCaptureMetadataOutputObjectsD
         done = true
         session.stopRunning()
         onCode(text)
+    }
+}
+
+
+/// Requests waiting in other projects on the Mac. Answering one does not move the Mac's conversation.
+struct OtherProjectsCard: View {
+    @EnvironmentObject var model: PhoneModel
+    let others: [LinkRequest]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("WAITING IN OTHER PROJECTS").font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+            ForEach(others, id: \.self.requestID) { r in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(r.projectName ?? "Another project").font(.caption).bold()
+                    Text(r.summary).font(.system(.caption, design: .monospaced)).lineLimit(3)
+                    HStack {
+                        Button("Deny", role: .destructive) { model.deny(r) }
+                        Spacer()
+                        if r.truncated { Text("Approve on the Mac").font(.caption2).foregroundStyle(.secondary) }
+                        else { Button(r.risk == "high" ? "Allow (confirm)" : "Allow") { model.approveByTap(r) }.buttonStyle(.bordered) }
+                    }.controlSize(.small)
+                }
+                .padding(8)
+                .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
     }
 }

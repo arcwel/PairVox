@@ -310,3 +310,68 @@ final class RemoteTextCommandTests: XCTestCase {
         XCTAssertFalse(snap.transcript.contains { $0.text == "New session started." })
     }
 }
+
+final class VoiceForEverythingTests: XCTestCase {
+    var backend: FakeBackend!, output: FakeOutput!, engine: ConversationEngine!
+
+    func start(needsScreen: Bool = false) async {
+        backend = FakeBackend(); output = FakeOutput()
+        let b = backend!
+        engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", spokenHighRiskConfirmation: true,
+                                                                       explainRequests: false, acknowledgementDelay: 0.15),
+                                    output: output, backendFactory: { _ in b })
+        await engine.start()
+        await engine.submit("Do it")
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "H", toolName: "Bash", input: ["command": "git push origin main"],
+                                                            requiresUserInteraction: needsScreen)))
+        try? await Task.sleep(nanoseconds: 80_000_000)
+    }
+
+    func testHighRiskByVoiceUsesTheDeliberatePhraseNotAYes() async {
+        await start()
+        await engine.submit("yes")
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertTrue(backend.responses.isEmpty)
+        await engine.submit("confirm high risk")
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(backend.responses.map(\.0), ["H"])
+        await engine.shutdown()
+    }
+
+    func testRequestsClaudeCodeMarksAsNeedingTheScreenHaveTheirOwnSwitch() async {
+        await start(needsScreen: true)
+        await engine.submit("confirm high risk")
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertTrue(backend.responses.isEmpty, "off by default")
+        await engine.setVoiceApprovesNeedsScreen(true)
+        await engine.submit("confirm high risk")
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(backend.responses.map(\.0), ["H"])
+        await engine.shutdown()
+    }
+
+    func testSecondConfirmationCanRefuseAfterTheSpokenPhrase() async {
+        await start()
+        await engine.setSecondConfirmation { false }
+        await engine.submit("confirm high risk")
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(backend.responses.isEmpty, "the Touch ID or password check said no")
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "H", "still waiting")
+        await engine.setSecondConfirmation { true }
+        await engine.submit("confirm high risk")
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(backend.responses.map(\.0), ["H"])
+        await engine.shutdown()
+    }
+
+    func testTheAppCanInterceptAnUtteranceBeforeTheEngineReadsIt() async {
+        await start()
+        await engine.setUtteranceInterceptor { text in text == "approve" }
+        await engine.submit("approve")
+        try? await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertTrue(backend.responses.isEmpty, "the app took it")
+        await engine.setUtteranceInterceptor(nil)
+        await engine.shutdown()
+    }
+}

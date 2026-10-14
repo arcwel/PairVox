@@ -24,6 +24,8 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @EnvironmentObject var model: AppModel
+    /// 0 none, 1 first question, 2 second question (turning on voice for "needs the screen" asks twice).
+    @State private var askNeedsScreen = 0
 
     var body: some View {
         Form {
@@ -104,6 +106,16 @@ private struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Several projects") {
+                Toggle("Tell me about requests from other projects at a break", isOn: $model.settings.announceOtherProjects)
+                Picker("Wait for quiet first", selection: $model.settings.announceQuietSeconds) {
+                    ForEach([1.0, 2.0, 3.0, 5.0], id: \.self) { Text("\(Int($0)) seconds").tag($0) }
+                }
+                Toggle("Say the project's name when announcing", isOn: $model.settings.speakProjectNames)
+                Text("PairVox never interrupts you or Claude. At a pause it says which project is waiting, and you can say approve, deny, tell me more, or switch. Approving does not leave your conversation. Turning the name off says “another project”; the card still shows it.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Permissions") {
                 Toggle("Auto-approve read-only tools (Read, Grep, Glob, search)", isOn: $model.settings.autoApproveLowRisk)
                 Text("High-risk actions (deleting files, pushing, sudo, edits outside the project) always need a click, never just a spoken “yes”.")
@@ -114,12 +126,30 @@ private struct GeneralSettings: View {
                 Toggle("Allow confirming high-risk requests by voice", isOn: $model.settings.spokenHighRiskConfirmation)
                 Text("Off by default: high-risk requests then need a click. When on, PairVox reads the request back and you can say “confirm high risk” instead. PairVox's own spoken prompt contains those words, so speech from your speakers that the microphone hears can approve a high-risk request. Use headphones, or leave this off in a shared room. Anything Claude Code says needs you at the screen still needs a click.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Also allow voice for requests Claude Code says need the screen", isOn: Binding(
+                    get: { model.settings.voiceApprovesNeedsScreen },
+                    set: { on in if on { askNeedsScreen = 1 } else { model.settings.voiceApprovesNeedsScreen = false } }))
+                    .disabled(!model.settings.spokenHighRiskConfirmation)
+                Text("Off by default, and only available when voice confirmation of high-risk requests is on. Claude Code marks some requests as needing you at the screen (a safety check). With this on, the same deliberate phrase can allow them. Turning it on asks twice.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Ask for Touch ID or my password after the spoken phrase", isOn: $model.settings.macSecondConfirmation)
+                    .disabled(!model.settings.spokenHighRiskConfirmation)
+                Text("Off by default. When on, a high-risk request approved by voice also asks this Mac for Touch ID or your login password before it is allowed.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Load this project's own Claude Code settings, hooks and MCP servers", isOn: $model.settings.trustProjectConfiguration)
                 Text("Off by default. A repository you downloaded can include settings that run commands or approve tools without asking you. Turn this on only for projects you wrote or trust. Your own Claude Code settings and MCP servers always load.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .confirmationDialog("Let voice allow requests Claude Code says need you at the screen?", isPresented: Binding(get: { askNeedsScreen == 1 }, set: { if !$0 && askNeedsScreen == 1 { askNeedsScreen = 0 } }), titleVisibility: .visible) {
+            Button("Continue") { askNeedsScreen = 2 }
+            Button("Cancel", role: .cancel) { askNeedsScreen = 0 }
+        } message: { Text("These are the requests Claude Code itself flags for a person at the screen. A spoken phrase would be enough to allow them.") }
+        .confirmationDialog("Are you sure?", isPresented: Binding(get: { askNeedsScreen == 2 }, set: { if !$0 && askNeedsScreen == 2 { askNeedsScreen = 0 } }), titleVisibility: .visible) {
+            Button("Yes, allow by voice", role: .destructive) { model.settings.voiceApprovesNeedsScreen = true; askNeedsScreen = 0 }
+            Button("Cancel", role: .cancel) { askNeedsScreen = 0 }
+        } message: { Text("Speech from your speakers that the microphone hears could satisfy the phrase. Use headphones, or turn this back off.") }
     }
 }
 
@@ -466,7 +496,8 @@ private struct ProjectSettings: View {
                     TextField("Words to listen for (comma separated)", text: Binding(get: { prefs(path).vocabulary.joined(separator: ", ") }, set: { v in
                         update(path) { $0.vocabulary = v.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
                     }))
-                    Text("Changes to the model and the mode apply to the next session in this project.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Don't announce this project's requests aloud", isOn: Binding(get: { prefs(path).muteAnnouncements }, set: { v in update(path) { $0.muteAnnouncements = v } }))
+                    Text("A muted project's requests still appear in the list and badges. Changes to the model and the mode apply to the next session in this project.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)

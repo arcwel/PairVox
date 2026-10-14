@@ -123,11 +123,11 @@ final class PhoneModel: ObservableObject {
         guard !request.truncated else { notice = "Too long to read here. Approve it on the Mac."; return }
         Task {
             let auth = await Self.authenticate(reason: request.risk == "high" ? "Allow a high-risk action" : "Allow this action")
-            if let auth { send(.approve(requestID: request.requestID, method: .tap, auth: auth)) }
+            if let auth { send(.approve(requestID: request.requestID, method: .tap, auth: auth, projectID: request.projectID)) }
         }
     }
 
-    func deny(_ request: LinkRequest) { send(.deny(requestID: request.requestID)) }
+    func deny(_ request: LinkRequest) { send(.deny(requestID: request.requestID, projectID: request.projectID)) }
     func interrupt() { send(.interrupt) }
 
     private func send(_ message: ClientMessage) {
@@ -169,6 +169,18 @@ final class PhoneModel: ObservableObject {
         heard = ""
         guard !spoken.isEmpty else { return }
         let words = spoken.lowercased().split(separator: " ").map(String.init)
+        // The deliberate phrase for a request a plain yes may not approve. The Mac must have the switch on, and the
+        // phone asks for Face ID, Touch ID or the passcode as the second confirmation.
+        if let request = snapshot?.request, !request.voiceApprovable, spoken.lowercased().contains("confirm high risk") {
+            guard snapshot?.voiceHighRisk == true else { notice = "Voice for high-risk requests is off on the Mac. Tap Allow instead."; return }
+            guard !request.needsScreen || snapshot?.voiceNeedsScreen == true else { notice = "Claude Code says this needs you at the screen. Tap Allow instead."; return }
+            Task {
+                if let auth = await Self.authenticate(reason: "Allow a high-risk action"), auth != .none {
+                    send(.approve(requestID: request.requestID, method: .voice, auth: auth))
+                } else { notice = "Not confirmed. The request is still waiting." }
+            }
+            return
+        }
         if let request = snapshot?.request, words.count <= 3 {
             if ["yes", "allow", "approve", "okay", "ok", "go ahead"].contains(words.joined(separator: " ")) {
                 send(.approve(requestID: request.requestID, method: .voice, auth: .none)); return

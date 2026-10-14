@@ -44,4 +44,7 @@ See [SECURITY.md](../SECURITY.md).
 
 ## Phone link (v0.3, off by default)
 
-The Mac listens only when you switch it on, accepts connections only from Tailscale (and loopback) addresses, and lets a peer in only after a keyed handshake with a key created when you clicked Pair. Frames are encrypted and numbered; replays end the connection. The Mac, not the phone, decides what a spoken yes may approve. Known gaps until the M4 audit: phone keys live in a 0600 file, not the Keychain; a six-digit pairing code could be guessed offline from a captured exchange (it still needs your Pair click); the link has not been fuzzed or independently audited.
+The Mac listens only when you switch it on, accepts connections only from Tailscale (and loopback) addresses, and lets a peer in only after a keyed handshake with a key created when you clicked Pair. Frames are encrypted and numbered; replays end the connection. The Mac, not the phone, decides what a spoken yes may approve. Phone keys on the Mac live in the Keychain (not in the file), and a phone file carrying a key is trusted only once, on the first run. The `pairvox-link` tool talks to the app over a private socket (0600, same-user only); it can start a pairing offer but pairing still needs your click. Known gaps: a six-digit pairing code could be guessed offline from a captured exchange (it still needs your Pair click); the link has not been fuzzed or independently audited.
+
+
+Runs 3 and 4 of the audit cover the phone link, the iPhone app, cross-project approvals and the control channel: see `docs/security/2026-10-13-audit-run-3-phone-link.md` and `2026-10-13-audit-run-4-cross-project.md`.

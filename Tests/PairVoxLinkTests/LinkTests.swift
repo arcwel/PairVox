@@ -10,8 +10,8 @@ final class FakeEngine: LinkEngine, @unchecked Sendable {
     var calls: [String] { lock.lock(); defer { lock.unlock() }; return _calls }
     private func add(_ s: String) { lock.lock(); _calls.append(s); lock.unlock() }
     func submit(_ text: String) async { add("submit:\(text)") }
-    func approve(requestID: String) async { add("approve:\(requestID)") }
-    func deny(requestID: String) async { add("deny:\(requestID)") }
+    func approve(requestID: String, projectID: String?) async { add("approve:\(requestID)" + (projectID.map { "@\($0)" } ?? "")) }
+    func deny(requestID: String, projectID: String?) async { add("deny:\(requestID)" + (projectID.map { "@\($0)" } ?? "")) }
     func interrupt() async { add("interrupt") }
 }
 
@@ -551,5 +551,272 @@ final class PhoneHostRuleTests: XCTestCase {
             XCTAssertFalse(PairingPayload.isAllowedHost(bad), bad)
         }
         XCTAssertNil(PairingPayload.parse("pairvox://pair?h=8.8.8.8&p=47821&s=AAAAAAAAAAAAAAAAAAAAAA"))
+    }
+}
+
+final class DeviceKeyStoreTests: XCTestCase {
+    func testKeysLiveInTheKeyStoreNotInTheFile() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-keys-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("paired.json")
+        let keys = MemoryDeviceKeyStore()
+        let m = PairingManager(storeURL: url, keys: keys)
+        let offer = await m.createOffer(kind: .code)
+        let grant = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true })
+        _ = grant
+        let device = await m.pairedDevices()[0]
+        let file = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(file.contains(device.psk.base64EncodedString()), "the key is not in the file")
+        XCTAssertEqual(keys.key(for: device.id), device.psk)
+        let reloaded = PairingManager(storeURL: url, keys: keys)
+        let again = await reloaded.activeDevice(device.id)
+        XCTAssertEqual(again?.psk, device.psk)
+        try await reloaded.revoke(device.id)
+        XCTAssertNil(keys.key(for: device.id), "revoking destroys the key")
+    }
+
+    func testAnOlderFileWithKeysInsideIsConvertedAndAMissingKeyBlocksThePhone() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-mig-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("paired.json")
+        let psk = Handshake.randomBytes(32)
+        let d1id = UUID().uuidString, d2id = UUID().uuidString
+        let old = [PairedDevice(id: d1id, name: "Old", psk: psk, createdAt: Date(), revoked: false),
+                   PairedDevice(id: d2id, name: "Lost key", psk: Data(), createdAt: Date(), revoked: false)]
+        try JSONEncoder().encode(old).write(to: url)
+        let keys = MemoryDeviceKeyStore()
+        let m = PairingManager(storeURL: url, keys: keys)
+        let d1 = await m.activeDevice(d1id)
+        let d2 = await m.activeDevice(d2id)
+        XCTAssertEqual(d1?.psk, psk)
+        XCTAssertNil(d2, "no key, no access")
+        XCTAssertEqual(keys.key(for: d1id), psk)
+        XCTAssertFalse(try String(contentsOf: url, encoding: .utf8).contains(psk.base64EncodedString()), "the file was rewritten without the key")
+    }
+}
+
+final class ControlChannelTests: XCTestCase {
+    struct Echo: LinkCommandHandler {
+        func handle(_ r: LinkCommand) async -> LinkCommandReply {
+            var out = LinkCommandReply(ok: r.cmd != "fail", error: r.cmd == "fail" ? "nope" : nil)
+            out.status = "cmd=\(r.cmd) id=\(r.id ?? "-") kind=\(r.kind ?? "-")"
+            return out
+        }
+    }
+
+    func testRequestsRoundTripAndTheSocketIsPrivate() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pvc-\(Int.random(in: 0...99999))")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("c.sock").path
+        let server = LinkCommandServer(path: path, handler: Echo())
+        try server.start()
+        defer { server.stop() }
+        let mode = (try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(mode, 0o600)
+        let dirMode = (try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(dirMode, 0o700)
+        let ok = try LinkCommandClient.send(LinkCommand(cmd: "offer", id: nil, kind: "code"), path: path)
+        XCTAssertTrue(ok.ok)
+        XCTAssertEqual(ok.status, "cmd=offer id=- kind=code")
+        let bad = try LinkCommandClient.send(LinkCommand(cmd: "fail"), path: path)
+        XCTAssertFalse(bad.ok)
+        XCTAssertEqual(bad.error, "nope")
+    }
+
+    func testNothingListeningIsReportedAsNotRunning() {
+        XCTAssertThrowsError(try LinkCommandClient.send(LinkCommand(cmd: "status"), path: "/tmp/pv-nothing-\(Int.random(in: 0...99999)).sock")) {
+            XCTAssertEqual($0 as? LinkCommandError, .notRunning)
+        }
+    }
+
+    func testAStaleSocketFileIsReplacedButAForeignFileIsNeverDeleted() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pvs-\(Int.random(in: 0...99999))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("c.sock").path
+        try Data("not a socket".utf8).write(to: URL(fileURLWithPath: path))
+        XCTAssertThrowsError(try LinkCommandServer(path: path, handler: Echo()).start(), "a regular file is left alone")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
+        try FileManager.default.removeItem(atPath: path)
+        let first = LinkCommandServer(path: path, handler: Echo()); try first.start()
+        XCTAssertThrowsError(try LinkCommandServer(path: path, handler: Echo()).start(), "a live server is not replaced")
+        first.stop()
+        let again = LinkCommandServer(path: path, handler: Echo()); try again.start(); again.stop()
+    }
+}
+
+final class CrossProjectPhoneTests: XCTestCase {
+    func high(id: String = "H", project: String? = nil, name: String? = nil, screen: Bool = false) -> LinkRequest {
+        LinkRequest(requestID: id, summary: "Run: git push", spokenPrompt: "x", risk: "high", reasons: [], voiceApprovable: false,
+                    needsScreen: screen, projectID: project, projectName: name)
+    }
+
+    func connected(_ h: LinkTests, _ snap: LinkSnapshot) async throws -> (LinkHost, FakeEngine, LinkClient) {
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        await host.publish(snap)
+        _ = try await h.nextSnapshot(client)
+        return (host, engine, client)
+    }
+
+    func settle() async { try? await Task.sleep(nanoseconds: 150_000_000) }
+
+    func testHighRiskByVoiceNeedsTheMacSwitchAndASecondConfirmationOnThePhone() async throws {
+        let h = LinkTests()
+        var snap = h.snapshot(); snap.request = high()
+        // Switch off on the Mac: voice never works, a tap does.
+        var (host, engine, client) = try await connected(h, snap)
+        try await client.send(.approve(requestID: "H", method: .voice, auth: .faceID))
+        await settle(); XCTAssertTrue(engine.calls.isEmpty)
+        try await client.send(.approve(requestID: "H", method: .tap, auth: .none))
+        await settle(); XCTAssertEqual(engine.calls, ["approve:H"])
+        // Switch on: voice needs Face ID, Touch ID or the passcode as well.
+        snap.voiceHighRisk = true
+        (host, engine, client) = try await connected(h, snap)
+        try await client.send(.approve(requestID: "H", method: .voice, auth: .none))
+        await settle(); XCTAssertTrue(engine.calls.isEmpty, "the phrase alone is not enough on the phone")
+        try await client.send(.approve(requestID: "H", method: .voice, auth: .touchID))
+        await settle(); XCTAssertEqual(engine.calls, ["approve:H"])
+        _ = host
+    }
+
+    func testNeedsTheScreenRequestsHaveTheirOwnSwitchOnThePhoneToo() async throws {
+        let h = LinkTests()
+        var snap = h.snapshot(); snap.request = high(screen: true); snap.voiceHighRisk = true
+        var (_, engine, client) = try await connected(h, snap)
+        try await client.send(.approve(requestID: "H", method: .voice, auth: .passcode))
+        await settle(); XCTAssertTrue(engine.calls.isEmpty)
+        snap.voiceNeedsScreen = true
+        (_, engine, client) = try await connected(h, snap)
+        try await client.send(.approve(requestID: "H", method: .voice, auth: .passcode))
+        await settle(); XCTAssertEqual(engine.calls, ["approve:H"])
+    }
+
+    func testARequestInAnotherProjectIsAnsweredInThatProjectUnderTheSameRules() async throws {
+        let h = LinkTests()
+        var snap = h.snapshot()
+        snap.request = nil
+        snap.others = [LinkRequest(requestID: "W1", summary: "Edit pricing.html", spokenPrompt: "x", risk: "medium", reasons: [], voiceApprovable: true,
+                                   projectID: "web", projectName: "website"),
+                       high(id: "W2", project: "web", name: "website")]
+        let (_, engine, client) = try await connected(h, snap)
+        // Without the project the request does not exist.
+        try await client.send(.approve(requestID: "W1", method: .voice, auth: .none))
+        await settle(); XCTAssertTrue(engine.calls.isEmpty)
+        // With the project: medium by voice works and goes to that project.
+        try await client.send(.approve(requestID: "W1", method: .voice, auth: .none, projectID: "web"))
+        await settle(); XCTAssertEqual(engine.calls, ["approve:W1@web"])
+        // A wrong project does not match.
+        try await client.send(.approve(requestID: "W1", method: .tap, auth: .none, projectID: "api"))
+        // High risk elsewhere obeys the same rule: voice without the switch is refused.
+        try await client.send(.approve(requestID: "W2", method: .voice, auth: .faceID, projectID: "web"))
+        await settle(); XCTAssertEqual(engine.calls, ["approve:W1@web"])
+        try await client.send(.deny(requestID: "W2", projectID: "web"))
+        await settle(); XCTAssertEqual(engine.calls.last, "deny:W2@web")
+    }
+
+    func testOtherProjectRequestsAreBoundedToo() {
+        var s = LinkSnapshot(phase: "idle", project: "p", transcriptTail: [], request: nil, queuedRequests: 0)
+        s.others = (0..<50).map { LinkRequest(requestID: "r\($0)", summary: String(repeating: "x", count: 5000), spokenPrompt: "", risk: "low", reasons: [], voiceApprovable: true, projectID: "p", projectName: "n") }
+        let b = s.bounded()
+        XCTAssertEqual(b.others.count, 10)
+        XCTAssertTrue(b.others.allSatisfy { $0.truncated && $0.summary.utf8.count < 2200 })
+    }
+}
+
+final class AuditRun4LinkTests: XCTestCase {
+    func testAPlantedFileWithAKeyInsideIsNotTrustedAfterTheFirstRun() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-plant-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("paired.json")
+        let keys = MemoryDeviceKeyStore()
+        _ = PairingManager(storeURL: url, keys: keys)      // first run: closes the one-time import
+        XCTAssertTrue(keys.legacyImportClosed)
+        let planted = [PairedDevice(id: "evil", name: "Anthony's iPhone", psk: Handshake.randomBytes(32), createdAt: Date(), revoked: false)]
+        try JSONEncoder().encode(planted).write(to: url)
+        let m = PairingManager(storeURL: url, keys: keys)
+        let active = await m.activeDevice("evil")
+        XCTAssertNil(active, "no Accept click, no phone")
+        XCTAssertNil(keys.key(for: "evil"))
+    }
+
+    func testAMissingKeyDoesNotEraseThePairingForGood() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-miss-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("paired.json")
+        let keys = MemoryDeviceKeyStore()
+        let m = PairingManager(storeURL: url, keys: keys)
+        let offer = await m.createOffer(kind: .code)
+        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true })
+        let id = await m.pairedDevices()[0].id
+        let key = keys.key(for: id)!
+        keys.removeKey(for: id)                              // the Keychain is unreadable for a moment
+        let blind = PairingManager(storeURL: url, keys: keys)
+        let during = await blind.activeDevice(id)
+        XCTAssertNil(during)
+        try keys.setKey(key, for: id)                        // and comes back
+        let later = PairingManager(storeURL: url, keys: keys)
+        let after = await later.activeDevice(id)
+        XCTAssertNotNil(after, "the phone was not revoked, only unavailable")
+    }
+
+    func testAFailedSaveLeavesNoPhoneBehind() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-fail-\(UUID().uuidString)")
+        // The folder the file belongs in is a plain file, so the save cannot happen.
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dir.appendingPathComponent("blocker"))
+        let url = dir.appendingPathComponent("blocker/paired.json")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let keys = MemoryDeviceKeyStore()
+        let m = PairingManager(storeURL: url, keys: keys)
+        let offer = await m.createOffer(kind: .code)
+        do { _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true }); XCTFail("must fail") } catch {}
+        let list = await m.pairedDevices()
+        XCTAssertTrue(list.isEmpty)
+    }
+
+    func testTheSameRequestKeepsItsAgeWhenTheMacSwitchesProjects() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, clock) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var onScreen = h.snapshot(id: "R"); onScreen.request?.projectID = nil; onScreen.activeProjectID = "A"
+        await host.publish(onScreen)
+        _ = try await h.nextSnapshot(client)
+        clock.advance(290)
+        // The Mac switches to project B; the same request now sits under "other projects".
+        var moved = LinkSnapshot(phase: "idle", project: "b", transcriptTail: [], request: nil, queuedRequests: 0)
+        moved.activeProjectID = "B"
+        moved.others = [LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x", risk: "low", reasons: [], voiceApprovable: true, projectID: "A", projectName: "a")]
+        await host.publish(moved)
+        _ = try await h.nextSnapshot(client)
+        clock.advance(200)
+        try await client.send(.approve(requestID: "R", method: .voice, auth: .none, projectID: "A"))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "490 seconds old: not by voice")
+        try await client.send(.approve(requestID: "R", method: .tap, auth: .none, projectID: "A"))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(engine.calls, ["approve:R@A"])
+    }
+}
+
+final class AuditRun4MarkerTests: XCTestCase {
+    func testAFileCannotNameAnythingButAPhoneIdAndOnlyRealKeysCount() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-marker-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("paired.json")
+        let keys = MemoryDeviceKeyStore()
+        try keys.setKey(Data("1".utf8), for: "legacy-import-closed")   // a short value: not a key
+        XCTAssertNil(keys.key(for: "legacy-import-closed"), "only 32-byte keys are keys")
+        try keys.setKey(Handshake.randomBytes(32), for: "legacy-import-closed")
+        let planted = [PairedDevice(id: "legacy-import-closed", name: "Anthony's iPhone", psk: Data(), createdAt: Date(), revoked: false)]
+        try JSONEncoder().encode(planted).write(to: url)
+        let m = PairingManager(storeURL: url, keys: keys)
+        let active = await m.activeDevice("legacy-import-closed")
+        XCTAssertNil(active, "ids that are not UUIDs are never phones")
     }
 }

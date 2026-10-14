@@ -25,6 +25,8 @@ public actor ConversationEngine {
     private var isActive = true
     private var attendedThrough = 0
     private var catchUpOpen = false
+    private var secondConfirmation: (@Sendable () async -> Bool)?
+    private var utteranceInterceptor: (@Sendable (String) -> Bool)?
     /// The words of the utterance being handled, for the checks that need more than the parsed command.
     private var lastUtteranceWords: [String] = []
     /// Ids read out to the user after a first "allow all"; only these can be allowed by the second.
@@ -176,6 +178,7 @@ public actor ConversationEngine {
 
     /// A final transcript (or typed text) from the user.
     public func submit(_ rawText: String) {
+        if let intercept = utteranceInterceptor, intercept(rawText) { userIsSpeaking = false; transcribing = false; recomputePhase(); return }
         process(rawText, allowProjectSwitch: true)
     }
 
@@ -276,6 +279,26 @@ public actor ConversationEngine {
     /// Turns the "auto-approve read-only tools" setting on or off for the running session.
     public func setAutoApproveLowRisk(_ on: Bool) {
         config.autoApproveLowRisk = on
+    }
+
+    public func setVoiceApprovesNeedsScreen(_ on: Bool) { config.voiceApprovesNeedsScreen = on }
+
+    /// Set while the owner wants Touch ID or a password after a spoken high-risk approval; nil turns it off.
+    public func setSecondConfirmation(_ confirm: (@Sendable () async -> Bool)?) { secondConfirmation = confirm }
+
+    private func finishSecondConfirmation(requestID: String, confirmed: Bool) {
+        guard snapshot.pendingPermission?.request.requestID == requestID else { return }
+        if confirmed { approvePending(requestID: requestID) }
+        else { speak([make("Not confirmed. The request is still waiting.", .notice)], record: false, force: true) }
+    }
+
+    /// Lets the app answer for a request in another project, or switch, before the engine parses an utterance.
+    /// Return true to say the app handled it. Called for spoken or typed text from this Mac only.
+    public func setUtteranceInterceptor(_ f: (@Sendable (String) -> Bool)?) { utteranceInterceptor = f }
+
+    /// Speaks a short notice on this project's speakers now (used for announcements about other projects).
+    public func announce(_ text: String) {
+        speak([make(text, .notice)], record: false, force: true)
     }
 
     public func setExplainRequests(_ on: Bool) {
@@ -498,6 +521,14 @@ public actor ConversationEngine {
         let sentences = text.split(whereSeparator: { ".!?\n".contains($0) }).map { String($0).trimmingCharacters(in: .whitespaces) }
         let kept = sentences.filter { sentence in
             guard !sentence.isEmpty else { return false }
+            // Anything holding the high-risk phrase is dropped whatever its length: the announcement grammar accepts
+            // the phrase with a project name after it, which is longer than the engine's own limit.
+            let w = VoiceCommand.normalize(sentence)
+            if w.joined(separator: " ").contains("confirm high risk") { return false }
+            // "confirm, high risk" or "confirm high-risk": the same words with punctuation between them.
+            if let i = w.indices.first(where: { $0 + 1 < w.count && w[$0] == "high" && w[$0 + 1] == "risk" }),
+               w[max(0, i - 3)..<i].contains("confirm") { return false }
+            if AnnouncementReply.parse(sentence, projectNames: []) != .notForUs { return false }
             switch VoiceCommand.parse(sentence, context: context) {
             case .approve?, .approveAlways?, .confirmHighRisk?, .approveAllWaiting?: return false
             default: return true
@@ -571,9 +602,11 @@ public actor ConversationEngine {
 
     /// A high-risk request the user may confirm by saying the phrase. Anything Claude Code says needs the user at
     /// the screen stays a click.
+    /// Spoken confirmation applies to anything the policy would not let a plain yes approve: high risk, or too long
+    /// or complex to read out. Requests Claude Code says need the screen have their own switch.
     private func canConfirmHighRiskByVoice(_ p: PendingPermission) -> Bool {
-        config.spokenHighRiskConfirmation && p.assessment.risk == .high && !p.assessment.voiceApprovable
-            && !p.request.requiresUserInteraction
+        config.spokenHighRiskConfirmation && !p.assessment.voiceApprovable
+            && (!p.request.needsPersonAtScreen || config.voiceApprovesNeedsScreen)
     }
 
     public func interruptClaude() {
@@ -768,9 +801,18 @@ public actor ConversationEngine {
             default: speak([make("I don't have an explanation for this one. Say yes or no, or ask me a question.", .notice)], record: false, force: true)
             }
         case .confirmHighRisk:
-            guard let pending = snapshot.pendingPermission, canConfirmHighRiskByVoice(pending) else { break }
+            guard !catchUpOpen, let pending = snapshot.pendingPermission, canConfirmHighRiskByVoice(pending) else { break }
             log.log(.info, .policy, "permission.spokenHighRisk", ["tool": .string(pending.request.toolName)])
-            approvePending(requestID: pending.request.requestID)
+            if let confirm = secondConfirmation {
+                // Touch ID or the login password, asked after the spoken phrase.
+                let id = pending.request.requestID
+                Task { [weak self] in
+                    let ok = await confirm()
+                    await self?.finishSecondConfirmation(requestID: id, confirmed: ok)
+                }
+            } else {
+                approvePending(requestID: pending.request.requestID)
+            }
         case .deny:
             if snapshot.pendingPermission == nil, snapshot.grantOffer != nil { answerGrantOffer(yes: false); break }
             denyPending()
@@ -1060,8 +1102,11 @@ public actor ConversationEngine {
     private func permissionPrompt(for pending: PendingPermission) -> String {
         var prompt = pending.assessment.spokenPrompt
         if canConfirmHighRiskByVoice(pending) {
+            let lead = pending.assessment.risk == .high ? " This is high risk." : " This one needs care."
+            var tail = ""
+            if case .ready(let why) = pending.explanation { tail = " " + why }
             prompt = prompt.replacingOccurrences(of: " Please confirm on screen.",
-                                                 with: " This is high risk. Say confirm high risk to allow it, or use the button.")
+                                                 with: lead + tail + " Say confirm high risk to allow it, or use the button.")
         }
         return prompt
     }

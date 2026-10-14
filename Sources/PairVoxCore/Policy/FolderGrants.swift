@@ -76,7 +76,7 @@ public enum FolderScope {
         // Variables and command substitution expand to paths this check cannot see.
         guard !command.contains("$"), !command.contains("`"), !hasInlineCode(command) else { return nil }
         // Brace expansion, history expansion and bracket classes rewrite words after this check has read them.
-        guard command.rangeOfCharacter(from: CharacterSet(charactersIn: "{}[]!\\")) == nil else { return nil }
+        guard command.rangeOfCharacter(from: CharacterSet(charactersIn: "{}[]!*?\\")) == nil else { return nil }
         // Quote removal and substitution forms that rewrite a word after this check has read it: `.''./x`, `>(…)`, `=(…)`, heredocs.
         guard command.range(of: #"\.['"]|['"]\.|[>=*]\(|<<"#, options: .regularExpression) == nil else { return nil }
         guard directoryChangesStayInside(command, grant: grant, root: root) else { return nil }

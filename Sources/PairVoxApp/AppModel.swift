@@ -60,6 +60,8 @@ final class AppModel: ObservableObject {
     }
     private var activeSession: ProjectSession? { activeSessionID.flatMap { liveSessions[$0] } }
     private var engine: ConversationEngine? { activeSession?.engine }
+    var activeEngine: ConversationEngine? { activeSession?.engine }
+    func session(withID id: UUID) -> ProjectSession? { liveSessions[id] }
     /// The folder of the project the user is in.
     var project: URL? { activeSession?.url }
     private var loginEnvironment: [String: String] = ProcessInfo.processInfo.environment
@@ -71,6 +73,14 @@ final class AppModel: ObservableObject {
     private var syncingFromEngine = false
     /// Paired phones: the listener, pairing screen and list.
     let phone: PhoneLinkModel
+    /// Requests from other projects: the inbox, announcements and spoken answers.
+    private(set) lazy var crossProject: CrossProjectController = {
+        let c = CrossProjectController(model: self)
+        Self.sharedCross = c
+        return c
+    }()
+    /// The views that build before they can reach the model read the controller from here.
+    static var sharedCross: CrossProjectController!
     /// The settings window builds before it can reach the model, so it reads the one phone model from here.
     static var sharedPhone: PhoneLinkModel = PhoneLinkModel()
 
@@ -88,6 +98,8 @@ final class AppModel: ObservableObject {
         listeningMode = loaded.handsFree ? .handsFree : .pushToTalk
         voice.onWhisperState = { [weak self] s in Task { @MainActor in self?.whisperState = s } }
         voice.onKokoroStatus = { [weak self] s in Task { @MainActor in self?.kokoroStatus = s } }
+        _ = crossProject
+        phone.startControl()
         phone.apply(enabled: loaded.phoneLinkEnabled, port: loaded.phoneLinkPort)
         Task { await bootstrap() }
         watchMainWindowClosing()
@@ -208,6 +220,14 @@ final class AppModel: ObservableObject {
             return ClaudeCLISession(configuration: cfg)
         }
         let session = ProjectSession(url: url, engine: engine, gate: gate)
+        phone.engineBox.register(session.id.uuidString, engine)
+        let cross = crossProject
+        let interceptor: @Sendable (String) -> Bool = { text in cross.intercept(text) }
+        let secondConfirm = settings.macSecondConfirmation
+        Task {
+            await engine.setUtteranceInterceptor(interceptor)
+            if secondConfirm { await engine.setSecondConfirmation(Self.touchIDCheck) }
+        }
         let box = inputBox
         voiceOutput.onPlaybackActiveChange = { [weak gate] active in
             if gate?.isActive == true || !active { box.input?.setPlaybackActive(active) }
@@ -310,6 +330,7 @@ final class AppModel: ObservableObject {
         Task { await engine.setActive(true) }
         settings.noteProjectOpened(next.url.path)
         refreshSessions()
+        crossProject.activeProjectChanged()
         log.log(.info, .app, "project.switched", ["open": .int(sessionOrder.count)])
     }
 
@@ -340,6 +361,8 @@ final class AppModel: ObservableObject {
         Task { await engine.shutdown() }
         liveSessions.removeValue(forKey: id)
         sessionOrder.removeAll { $0 == id }
+        crossProject.sessionClosed(id)
+        phone.engineBox.unregister(id.uuidString)
         if wasActive {
             activeSessionID = nil
             snapshot = EngineSnapshot()
@@ -798,15 +821,25 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Sends the phone the active project's state plus every request waiting elsewhere.
+    private func republishToPhone() {
+        guard let active = activeSession else { return }
+        phone.publish(snapshot, project: active.url.path,
+                      others: crossProject.inbox.others(than: active.id.uuidString),
+                      voiceHighRisk: settings.spokenHighRiskConfirmation, voiceNeedsScreen: settings.voiceApprovesNeedsScreen,
+                      activeProjectID: active.id.uuidString)
+    }
+
     private func receive(_ snap: EngineSnapshot, from session: ProjectSession) {
         guard liveSessions[session.id] != nil else { return }
         let previous = session.snapshot
         session.snapshot = snap
         let isActive = session.id == activeSessionID
+        crossProject.sessionChanged(session, isActive: isActive)
+        republishToPhone()
         if isActive {
             snapshot = snap
-            phone.engineBox.set(session.engine)
-            phone.publish(snap, project: session.url.path)
+            phone.engineBox.setActive(session.engine)
             // Voice commands ("faster", "summary mode") change these inside the engine;
             // mirror them into settings (but not the engine's initial per-project values).
             if session.receivedFirstSnapshot {
@@ -840,6 +873,9 @@ final class AppModel: ObservableObject {
     }
 
     /// Applies a setting to every open project's engine, not just the one the user is in.
+    /// Touch ID or the login password, asked after a spoken high-risk approval when that option is on.
+    nonisolated static let touchIDCheck: @Sendable () async -> Bool = { await CrossProjectController.authenticate(reason: "Allow a high-risk action") }
+
     private func broadcast(_ body: @escaping @Sendable (ConversationEngine) async -> Void) {
         let engines = sessionOrder.compactMap { liveSessions[$0]?.engine }
         Task { for engine in engines { await body(engine) } }
@@ -893,6 +929,17 @@ final class AppModel: ObservableObject {
             let on = settings.spokenHighRiskConfirmation
             broadcast { await $0.setSpokenHighRiskConfirmation(on) }
         }
+        if old.voiceApprovesNeedsScreen != settings.voiceApprovesNeedsScreen {
+            let on = settings.voiceApprovesNeedsScreen
+            broadcast { await $0.setVoiceApprovesNeedsScreen(on) }
+        }
+        if old.macSecondConfirmation != settings.macSecondConfirmation {
+            let on = settings.macSecondConfirmation
+            if on { broadcast { await $0.setSecondConfirmation(Self.touchIDCheck) } }
+            else { broadcast { await $0.setSecondConfirmation(nil) } }
+        }
+        crossProject.settingsChanged()
+        republishToPhone()
         if old.autoApproveLowRisk != settings.autoApproveLowRisk {
             let on = settings.autoApproveLowRisk
             broadcast { await $0.setAutoApproveLowRisk(on) }

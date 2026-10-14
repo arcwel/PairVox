@@ -98,7 +98,7 @@ public struct PermissionPolicy: Sendable {
 
         case "Bash":
             let command = r.input["command"]?.stringValue ?? ""
-            let bash = BashRisk.classify(command)
+            let bash = BashRisk.classify(command, projectRoot: projectRoot)
             risk = bash.level
             reasons += bash.reasons
             summary = "Run: \(command)"
@@ -416,7 +416,66 @@ public enum BashRisk {
         }
     }
 
-    public static func classify(_ original: String) -> Result {
+    /// True if any word of the command, once `~`, `$HOME`, backslashes and quotes are resolved, is inside a folder
+    /// that holds the consent store (PairVox's settings) or Claude Code's configuration.
+    static func touchesProtectedFolder(_ command: String, projectRoot: String? = nil, depth: Int = 0) -> Bool {
+        let home = NSHomeDirectory()
+        let folders = PermissionPolicy.protectedFolders
+        func isProtected(_ path: String) -> Bool {
+            let resolved = FolderScope.resolved(path)
+            return folders.contains { resolved == $0 || resolved.hasPrefix($0 + "/") }
+        }
+        // `cd`, `pushd` or a bare `cd` change what a relative word means, so later words are read from there.
+        var base = projectRoot
+        var words = shellWords(command)
+        var i = 0
+        while i < words.count {
+            var w = words[i]; i += 1
+            if w == "cd" || w == "pushd" {
+                let next = i < words.count ? words[i] : "~"
+                base = (next.hasPrefix("-") || next == "~" || next.hasPrefix("~/") || next.hasPrefix("$HOME") || next == "${HOME}") ? home
+                     : (next.hasPrefix("/") ? next : (base.map { ($0 as NSString).appendingPathComponent(next) } ?? home))
+                continue
+            }
+            // A quoted word that is itself a command line (sh -c '...', eval '...') is read the same way.
+            if depth < 3, w.contains(" "), w.contains("/") || w.contains("~") || w.contains("HOME") {
+                if touchesProtectedFolder(w, projectRoot: base, depth: depth + 1) { return true }
+            }
+            guard w.contains("/") || w.hasPrefix("~") || w.contains("HOME") || w.contains(".") || w.contains("*") || w.contains("?") else { continue }
+            w = w.replacingOccurrences(of: "${HOME}", with: home).replacingOccurrences(of: "$HOME", with: home)
+            if w.hasPrefix("~") { w = (w as NSString).expandingTildeInPath }
+            let absolute = w.hasPrefix("/") ? w : (base.map { ($0 as NSString).appendingPathComponent(w) } ?? "")
+            guard !absolute.isEmpty else { continue }
+            if absolute.contains("*") || absolute.contains("?") || absolute.contains("[") {
+                // Expand the pattern for real and check what it can reach.
+                var g = glob_t()
+                defer { globfree(&g) }
+                if glob(absolute, GLOB_BRACE | GLOB_TILDE | GLOB_MARK, nil, &g) == 0 {
+                    for k in 0..<Int(g.gl_pathc) { if let c = g.gl_pathv[k], isProtected(String(cString: c)) { return true } }
+                }
+            } else if isProtected(absolute) { return true }
+        }
+        return false
+    }
+
+    /// Splits a command into words the way a shell does for quotes and backslashes (no expansion), treating `;`,
+    /// `&`, `|`, `<`, `>`, `(`, `)` and `=` as word breaks outside quotes.
+    static func shellWords(_ command: String) -> [String] {
+        var words: [String] = [], current = "", quote: Character?, escaped = false, started = false
+        func flush() { if started { words.append(current) }; current = ""; started = false }
+        for ch in command {
+            if escaped { current.append(ch); started = true; escaped = false; continue }
+            if ch == "\\", quote != "'" { escaped = true; continue }
+            if let q = quote { if ch == q { quote = nil } else { current.append(ch) }; continue }
+            if ch == "\"" || ch == "'" { quote = ch; started = true; continue }
+            if " \t\n;&|<>()=,".contains(ch) { flush(); continue }
+            current.append(ch); started = true
+        }
+        flush()
+        return words
+    }
+
+    public static func classify(_ original: String, projectRoot: String? = nil) -> Result {
         let command = normalizedForMatching(original)
         var level: RiskLevel = .low
         var reasons: [String] = []
@@ -442,6 +501,12 @@ public enum BashRisk {
             level = max(level, .medium)
             reasons.append("Mentions a file that looks sensitive (credentials, keys, shell or git config).")
         }
+        // Reaching PairVox's own settings or Claude Code's configuration by any spelling (`~`, `$HOME`, backslash or
+        // quoted paths) is as serious in a shell command as writing there with Edit: it is high risk.
+        if touchesProtectedFolder(original, projectRoot: projectRoot) {
+            level = .high
+            reasons.append("Touches PairVox's own settings or Claude Code's configuration.")
+        }
         // Anything not recognized as a plain read-only command is not "low": low means known-harmless.
         if level == .low, !isPlainReadOnly(command) {
             level = .medium
@@ -459,4 +524,11 @@ public enum BashRisk {
         }
         return Result(level: level, reasons: reasons)
     }
+}
+
+
+extension PermissionRequest {
+    /// Claude Code itself says this request needs the person at the screen (a safety check, a required interaction,
+    /// or a default-to-no). Its own flag always wins over PairVox's rating.
+    public var needsPersonAtScreen: Bool { requiresUserInteraction || decisionReasonType == "safetyCheck" || defaultToNo }
 }

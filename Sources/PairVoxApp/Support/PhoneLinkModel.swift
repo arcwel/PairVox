@@ -8,20 +8,28 @@ import PairVoxLink
 import PairVoxLinkKit
 import SwiftUI
 
-/// The engine the phone drives is whichever project is active on the Mac right now.
+/// The engines the phone can reach: the one on screen, and any open project by its ID (for answering a request
+/// that is waiting in another project).
 final class ActiveEngineBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var engine: ConversationEngine?
-    func set(_ e: ConversationEngine?) { lock.lock(); engine = e; lock.unlock() }
-    func get() -> ConversationEngine? { lock.lock(); defer { lock.unlock() }; return engine }
+    private var active: ConversationEngine?
+    private var byProject: [String: ConversationEngine] = [:]
+    func setActive(_ e: ConversationEngine?) { lock.lock(); active = e; lock.unlock() }
+    func register(_ id: String, _ e: ConversationEngine) { lock.lock(); byProject[id] = e; lock.unlock() }
+    func unregister(_ id: String) { lock.lock(); byProject[id] = nil; lock.unlock() }
+    func engine(for projectID: String?) -> ConversationEngine? {
+        lock.lock(); defer { lock.unlock() }
+        if let projectID { return byProject[projectID] }
+        return active
+    }
 }
 
 struct ActiveEngineLink: LinkEngine {
     let box: ActiveEngineBox
-    func submit(_ text: String) async { await box.get()?.submitFromRemote(text) }
-    func approve(requestID: String) async { await box.get()?.approvePending(always: false, requestID: requestID) }
-    func deny(requestID: String) async { await box.get()?.denyPending(requestID: requestID) }
-    func interrupt() async { await box.get()?.interruptClaude() }
+    func submit(_ text: String) async { await box.engine(for: nil)?.submitFromRemote(text) }
+    func approve(requestID: String, projectID: String?) async { await box.engine(for: projectID)?.approvePending(always: false, requestID: requestID) }
+    func deny(requestID: String, projectID: String?) async { await box.engine(for: projectID)?.denyPending(requestID: requestID) }
+    func interrupt() async { await box.engine(for: nil)?.interruptClaude() }
 }
 
 /// The Mac side of "phone link": the switch, the listener, the pairing screen and the list of paired phones.
@@ -35,6 +43,8 @@ final class PhoneLinkModel: ObservableObject {
     @Published private(set) var tailnetAddress: String?
     @Published private(set) var port: UInt16 = 0
     @Published var revokeError: String?
+    /// Where the open pairing offer came from, shown in the Accept dialog.
+    var offerSource = "Settings"
 
     let engineBox = ActiveEngineBox()
     private let pairing: PairingManager
@@ -44,8 +54,18 @@ final class PhoneLinkModel: ObservableObject {
     private var offerTimer: Task<Void, Never>?
     private let log = DiagnosticLog.shared
 
+    private var control: LinkCommandServer?
+
+    /// Starts the private control socket that `pairvox-link` talks to.
+    func startControl() {
+        guard control == nil else { return }
+        let path = LinkCommandPaths.defaultSocket(in: SettingsStore.defaultURL().deletingLastPathComponent())
+        let server = LinkCommandServer(path: path, handler: PhoneControl(model: self))
+        do { try server.start(); control = server } catch { log.log(.warning, .app, "phoneLink.control.failed", ["error": .string("\(error)")]) }
+    }
+
     nonisolated init(storeURL: URL = PhoneLinkModel.defaultStoreURL()) {
-        pairing = PairingManager(storeURL: storeURL)
+        pairing = PairingManager(storeURL: storeURL, keys: KeychainDeviceKeyStore())
         Task { await refreshDevices() }
     }
 
@@ -58,7 +78,8 @@ final class PhoneLinkModel: ObservableObject {
     func apply(enabled: Bool, port wanted: Int) {
         stop()
         guard enabled else { status = "Off"; return }
-        tailnetAddress = TailnetAddress.current()
+        // PAIRVOX_LINK_LOOPBACK=1 lets the link run on 127.0.0.1 for testing on a Mac without Tailscale.
+        tailnetAddress = TailnetAddress.current() ?? (ProcessInfo.processInfo.environment["PAIRVOX_LINK_LOOPBACK"] == "1" ? "127.0.0.1" : nil)
         guard tailnetAddress != nil else {
             status = "Tailscale is not running on this Mac. Start it, then turn the phone link off and on."
             return
@@ -113,9 +134,10 @@ final class PhoneLinkModel: ObservableObject {
 
     // MARK: Engine -> phone
 
-    func publish(_ snapshot: EngineSnapshot, project: String?) {
+    func publish(_ snapshot: EngineSnapshot, project: String?, others: [InboxItem] = [], voiceHighRisk: Bool = false, voiceNeedsScreen: Bool = false, activeProjectID: String? = nil) {
         guard let host else { return }
-        let link = EngineLink.snapshot(from: snapshot, project: project.map { ($0 as NSString).lastPathComponent } ?? "")
+        let link = EngineLink.snapshot(from: snapshot, project: project.map { ($0 as NSString).lastPathComponent } ?? "",
+                                       others: others, voiceHighRisk: voiceHighRisk, voiceNeedsScreen: voiceNeedsScreen, activeProjectID: activeProjectID)
         // One task chain keeps snapshots in the order the engine produced them.
         let previous = publishChain
         publishChain = Task { _ = await previous?.value; await host.publish(link) }
@@ -126,6 +148,7 @@ final class PhoneLinkModel: ObservableObject {
 
     func newOffer(_ kind: PairingOffer.Kind) {
         guard host != nil else { return }
+        offerSource = "Settings"
         Task {
             let made = await pairing.createOffer(kind: kind)
             offer = made
@@ -149,7 +172,7 @@ final class PhoneLinkModel: ObservableObject {
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.messageText = "Pair “\(name.prefix(64))” with this Mac?"
-            alert.informativeText = "This phone will be able to read your conversations and answer permission requests. Only pair a phone that you are holding and whose name you recognize."
+            alert.informativeText = "This phone will be able to read your conversations and answer permission requests. The pairing code was started from \(offerSource). Only pair a phone that you are holding and whose name you recognize."
             alert.addButton(withTitle: "Don’t Pair")
             alert.addButton(withTitle: "Pair")
             return alert.runModal() == .alertSecondButtonReturn
@@ -191,4 +214,71 @@ final class PhoneLinkModel: ObservableObject {
         image.addRepresentation(rep)
         return image
     }
+}
+
+
+/// Answers `pairvox-link` commands on behalf of the running app.
+struct PhoneControl: LinkCommandHandler {
+    let model: PhoneLinkModel
+
+    func handle(_ request: LinkCommand) async -> LinkCommandReply {
+        await MainActor.run { model.logControl(request.cmd) }
+        switch request.cmd {
+        case "status":
+            var r = LinkCommandReply(ok: true)
+            let s = await MainActor.run { (model.status, model.tailnetAddress, Int(model.port), model.connected, model.isListening) }
+            r.status = s.0; r.host = s.1; r.port = s.2; r.connected = s.3; r.enabled = s.4
+            return r
+        case "devices":
+            await model.refreshDevices()
+            var r = LinkCommandReply(ok: true)
+            r.devices = await MainActor.run { model.devices.map { LinkCommandDevice(id: $0.id, name: $0.name, pairedAt: $0.createdAt) } }
+            return r
+        case "remove":
+            guard let id = request.id, !id.isEmpty else { return LinkCommandReply(ok: false, error: "Missing phone id.") }
+            let known = await MainActor.run { model.devices.contains { $0.id == id } }
+            guard known else { return LinkCommandReply(ok: false, error: "No paired phone with that id.") }
+            await model.revokeNow(id)
+            return LinkCommandReply(ok: true)
+        case "offer":
+            let kind: PairingOffer.Kind = request.kind == "code" ? .code : .qr
+            if await model.hasOpenOfferNow {
+                return LinkCommandReply(ok: false, error: "A pairing offer is already open. Cancel it in Settings → Phone or wait for it to expire.")
+            }
+            guard let offer = await model.createOfferNow(kind) else {
+                return LinkCommandReply(ok: false, error: "The phone link is off. Switch it on in Settings → Phone first.")
+            }
+            var r = LinkCommandReply(ok: true)
+            r.offerKind = request.kind ?? "qr"; r.offerDisplay = offer.display; r.offerExpires = offer.expires
+            let hp = await MainActor.run { (model.tailnetAddress, Int(model.port)) }
+            r.host = hp.0; r.port = hp.1
+            return r
+        default:
+            return LinkCommandReply(ok: false, error: "Unknown command.")
+        }
+    }
+}
+
+extension PhoneLinkModel {
+    var isListening: Bool { host != nil && listener != nil }
+    func logControl(_ cmd: String) { log.log(.info, .app, "phoneLink.control", ["cmd": .string(cmd)]) }
+
+    /// Removes a phone and waits until it is done (used by the control channel).
+    func revokeNow(_ id: String) async {
+        do { try await pairing.revoke(id) }
+        catch { revokeError = "The phone is blocked now, but the change could not be saved: \(error.localizedDescription)" }
+        await host?.dropDevice(id)
+        await refreshDevices()
+    }
+
+    /// Creates a pairing offer and shows it in Settings too; nil when the link is off.
+    func createOfferNow(_ kind: PairingOffer.Kind) async -> PairingOffer? {
+        guard host != nil else { return nil }
+        let made = await pairing.createOffer(kind: kind)
+        offer = made; offerExpiry = made.expires
+        offerSource = "the command line"
+        return made
+    }
+
+    var hasOpenOfferNow: Bool { get async { await pairing.hasOpenOffer() } }
 }

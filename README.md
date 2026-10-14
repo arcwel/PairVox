@@ -120,3 +120,16 @@ Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Security repo
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party components and model files are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## Phone link from the terminal
+
+`pairvox-link` talks to the running app (private socket in `~/Library/Application Support/PairVox/`). Every command has `--json`; exit codes are 0 done, 1 refused, 2 bad usage, 3 PairVox not running.
+
+```bash
+swift run pairvox-link status
+swift run pairvox-link pair --qr          # prints a QR code and its text; --code prints six digits
+swift run pairvox-link phones list
+swift run pairvox-link phones remove <id> --dry-run
+```
+
+A new phone still needs your click on the Mac ("Pair"). Removing a phone disconnects it at once and destroys its key.

@@ -176,6 +176,8 @@ public struct EngineConfiguration: Sendable {
     public var acknowledgements: Bool
     public var autoApproveLowRisk: Bool
     public var spokenHighRiskConfirmation: Bool
+    /// Voice may also confirm requests Claude Code says need the screen (only with spoken confirmation on).
+    public var voiceApprovesNeedsScreen: Bool
     /// Ask a separate read-only Claude call to explain each request in plain words (uses a small amount of usage).
     public var explainRequests: Bool
     public var folderGrants: [FolderGrant]
@@ -187,7 +189,7 @@ public struct EngineConfiguration: Sendable {
     public init(projectRoot: String? = nil, speechMode: SpeechMode = .skipCode,
                 conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
                 acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
-                spokenHighRiskConfirmation: Bool = false, explainRequests: Bool = true,
+                spokenHighRiskConfirmation: Bool = false, voiceApprovesNeedsScreen: Bool = false, explainRequests: Bool = true,
                 folderGrants: [FolderGrant] = [], pronunciation: [String: String] = [:],
                 speechRate: Double = 1.0, acknowledgementDelay: TimeInterval = 1.2) {
         self.projectRoot = projectRoot
@@ -197,6 +199,7 @@ public struct EngineConfiguration: Sendable {
         self.acknowledgements = acknowledgements
         self.autoApproveLowRisk = autoApproveLowRisk
         self.spokenHighRiskConfirmation = spokenHighRiskConfirmation
+        self.voiceApprovesNeedsScreen = voiceApprovesNeedsScreen
         self.explainRequests = explainRequests
         self.folderGrants = folderGrants
         self.pronunciation = pronunciation
@@ -212,6 +215,7 @@ public struct EngineConfiguration: Sendable {
                   acknowledgements: settings.acknowledgements,
                   autoApproveLowRisk: settings.autoApproveLowRisk,
                   spokenHighRiskConfirmation: settings.spokenHighRiskConfirmation,
+                  voiceApprovesNeedsScreen: settings.voiceApprovesNeedsScreen,
                   explainRequests: settings.explainRequests,
                   folderGrants: settings.folderGrants,
                   pronunciation: settings.pronunciation,

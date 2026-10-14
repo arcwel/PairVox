@@ -15,6 +15,7 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
     }
 
     public init(connection: NWConnection) {
+        signal(SIGPIPE, SIG_IGN)
         self.connection = connection
         connection.start(queue: queue)
     }
