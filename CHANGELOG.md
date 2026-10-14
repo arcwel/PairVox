@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pairing: the phone now waits up to 130 seconds (it gave up after 15, before you could click Pair on the Mac) and shows that it is waiting. The phone confirms that it received its key; a Mac that gets no confirmation removes the phone again, so a failed attempt no longer leaves a phone on the list. The phone app must be updated together with the Mac app.
+
 - Development builds no longer ask for Keychain access after every rebuild: phone keys live in a private file in builds without a team identity, and in the Keychain in signed builds. The app no longer reads the Keychain at launch, and the key store is read off the main thread.
 - Screech recording: when the microphone hears a loud single tone while PairVox is speaking, the last ten seconds of microphone and playback audio are saved to the log folder (private files, newest ten kept, switch in Settings, Logs).
 - New tools: `scripts/restart-app.sh` (swap in the last build and reopen), `pairvox-link doctor` (checks Tailscale, the forward and the link), and `docs/DEV_ENVIRONMENT.md` (notes on this Mac's build and signing quirks).

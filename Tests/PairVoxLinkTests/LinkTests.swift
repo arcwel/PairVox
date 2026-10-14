@@ -216,6 +216,42 @@ final class LinkTests: XCTestCase {
     }
 }
 
+final class UndeliveredPairingTests: XCTestCase {
+    private func harness(approvalDelay: UInt64) async throws -> (PairingManager, TCPListener, Data) {
+        let pairing = PairingManager(storeURL: nil)
+        let host = LinkHost(pairing: pairing, engine: FakeEngine())
+        await host.setPairingApproval { _ in try? await Task.sleep(nanoseconds: approvalDelay); return true }
+        let listener = try TCPListener { transport in Task { await host.serve(transport) } }
+        try await listener.start()
+        let offer = await pairing.createOffer(kind: .qr)
+        return (pairing, listener, PairingClient.material(fromQR: offer.display)!)
+    }
+
+    /// The phone gives up while the owner is still deciding, and the owner clicks Pair afterwards.
+    func testAPhoneThatGaveUpBeforeTheClickIsNotLeftPaired() async throws {
+        let (pairing, listener, material) = try await harness(approvalDelay: 800_000_000)
+        defer { listener.stop() }
+        let transport = TCPTransport.connect(host: "127.0.0.1", port: listener.port)
+        let attempt = Task { try await LinkClient.pair(over: transport, material: material, deviceName: "Impatient") }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        await transport.close()
+        attempt.cancel()
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let left = await pairing.pairedDevices()
+        XCTAssertTrue(left.filter { !$0.revoked }.isEmpty, "a phone that never received its key must not stay paired")
+    }
+
+    func testAPhoneThatWaitsAndConfirmsStaysPaired() async throws {
+        let (pairing, listener, material) = try await harness(approvalDelay: 600_000_000)
+        defer { listener.stop() }
+        let creds = try await LinkClient.pair(over: TCPTransport.connect(host: "127.0.0.1", port: listener.port),
+                                              material: material, deviceName: "Patient")
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let active = await pairing.activeDevice(creds.deviceID)
+        XCTAssertNotNil(active)
+    }
+}
+
 final class TCPLoopbackTests: XCTestCase {
     func testPairConnectAndApproveOverRealSockets() async throws {
         let pairing = PairingManager(storeURL: nil)

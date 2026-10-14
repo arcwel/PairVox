@@ -37,22 +37,28 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Pairing
 
+    static let pairingTimeout: Double = 130
+
     func pair(host: String, port: UInt16, material: Data) async {
         guard PairingPayload.isAllowedHost(host) else {
             state = .failed("That address is not on your Tailscale network, so I won't pair with it.")
             return
         }
         state = .connecting
-        notice = nil
+        notice = "Waiting for you to click Pair on the Mac. This can take up to two minutes."
         let transport = TCPTransport.connect(host: host, port: port)
         do {
             let name = UIDevice.current.name
-            let creds = try await withTimeout(15, closing: transport) { try await LinkClient.pair(over: transport, material: material, deviceName: name) }
+            // The Mac asks its owner to click Pair before it answers, so this must outlast the walk to the Mac.
+            // A pairing code is valid for two minutes.
+            let creds = try await withTimeout(Self.pairingTimeout, closing: transport) { try await LinkClient.pair(over: transport, material: material, deviceName: name) }
             await transport.close()
+            notice = nil
             try store.save(PhoneCredentials(deviceID: creds.deviceID, psk: creds.psk, host: host, port: port))
             connect()
         } catch {
             await transport.close()
+            notice = nil
             print("pair failed: \(error)")
             state = .failed("Pairing did not complete (\(Self.describe(error)); network: \(transport.stateDescription)). Check the code and that you clicked Pair on the Mac. If it stays on \"connecting\", Tailscale may be off on this phone, or your tailnet rules may block port \(port) from this phone to the Mac.")
         }

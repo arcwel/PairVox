@@ -28,6 +28,7 @@ public actor LinkClient {
         try await transport.send(try JSONEncoder().encode(Opening.pair(request)))
         guard case .grant(let grant) = try JSONDecoder().decode(PairReply.self, from: try await transport.receive()),
               let opened = PairingClient.open(grant, material: material, request: request) else { throw LinkError.authFailed }
+        try await transport.send(try JSONEncoder().encode(PairAck()))
         return opened
     }
 

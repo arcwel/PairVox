@@ -77,6 +77,8 @@ public actor LinkHost {
     public static let maxPreAuth = 8
     public static let maxConnectionsPerDevice = 3
     public static let preAuthTimeout: TimeInterval = 10
+    /// How long the Mac waits for a phone to confirm that it received its key.
+    public static let ackTimeout: TimeInterval = 10
 
     /// Closes every connection and refuses new ones. Used when the link is switched off.
     public func shutdown() async {
@@ -164,8 +166,19 @@ public actor LinkHost {
         let accept = acceptPairing
         defer { pairingEnded() }
         do {
+            let before = Set(await pairing.pairedDevices().map(\.id))
             let grant = try await pairing.redeem(request, peer: transport.peer ?? "unknown", now: clock(), accept: accept)
-            try await transport.send(try JSONEncoder().encode(PairReply.grant(grant)))
+            do {
+                try await transport.send(try JSONEncoder().encode(PairReply.grant(grant)))
+                let reply = try await Self.within(Self.ackTimeout, transport) { try await transport.receive() }
+                guard (try? JSONDecoder().decode(PairAck.self, from: reply))?.ack == true else { throw LinkError.authFailed }
+            } catch {
+                // The phone is gone (it gave up waiting for the click) or never confirmed: a phone that did not
+                // receive its key must not stay on the list as paired.
+                for added in await pairing.pairedDevices() where !before.contains(added.id) { try? await pairing.revoke(added.id) }
+                log("pairing.undelivered \(request.name)")
+                throw error
+            }
             log("pairing.granted \(request.name)")
         } catch {
             try? await transport.send(try JSONEncoder().encode(PairReply.failed("Pairing was not accepted.")))

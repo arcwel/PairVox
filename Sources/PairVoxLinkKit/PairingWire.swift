@@ -17,6 +17,13 @@ public struct PairGrant: Codable, Sendable, Equatable {
     public init(sealed: Data) { self.sealed = sealed }
 }
 
+/// Sent by the phone once it has opened and kept its key. A Mac that does not get it removes the phone again, so a
+/// phone that gave up before the owner clicked Pair does not stay on the list with a key it never received.
+public struct PairAck: Codable, Sendable, Equatable {
+    public var ack = true
+    public init() {}
+}
+
 public struct GrantContents: Codable { public var deviceID: String; public var psk: Data
     public init(deviceID: String, psk: Data) { self.deviceID = deviceID; self.psk = psk } }
 
