@@ -911,6 +911,10 @@ final class AppModel: ObservableObject {
         }
         input?.setBargeInEnabled(settings.bargeInEnabled)
         input?.setEndSilence(settings.endOfTurnSilence)
+        if old.spokenReplyLimit != settings.spokenReplyLimit {
+            let limit = settings.spokenReplyLimit
+            broadcast { await $0.setSpokenReplyLimit(limit) }
+        }
         if !syncingFromEngine, old.speechRate != settings.speechRate {
             let rate = settings.speechRate
             broadcast { await $0.setSpeechRate(rate) }

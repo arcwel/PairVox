@@ -597,7 +597,33 @@ public final class AudioIO: @unchecked Sendable {
             player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 self?.playerQueue.async { self?.bufferFinished(token: token, generation: generation) }
             }
-            if !player.isPlaying { player.play() }
+            if !player.isPlaying, !playbackPaused { player.play() }
+        }
+    }
+
+    /// True between `pausePlayback()` and `resumePlayback()`. Touched only on `playerQueue`.
+    private var playbackPaused = false
+
+    /// Holds playback where it is (the user started talking and we don't yet know whether it is for us). Buffers
+    /// scheduled meanwhile wait behind it.
+    public func pausePlayback() {
+        playerQueue.async { [self] in
+            guard player.isPlaying, !playbackPaused else { return }
+            playbackPaused = true
+            player.pause()
+            log.log(.info, .audio, "playback.paused")
+        }
+    }
+
+    /// Carries on from the exact sample where `pausePlayback()` stopped.
+    public func resumePlayback() {
+        playerQueue.async { [self] in
+            guard playbackPaused else { return }
+            playbackPaused = false
+            playbackEstimateEnd = nil   // the pause would otherwise be logged as an underrun
+            lock.lock(); let up = isRunning; lock.unlock()
+            if up, engine.isRunning, !inFlight.isEmpty { player.play() }
+            log.log(.info, .audio, "playback.resumed")
         }
     }
 
@@ -621,6 +647,7 @@ public final class AudioIO: @unchecked Sendable {
             let discarded = inFlight.map(\.completion) + held.map(\.completion)
             inFlight.removeAll()
             held.removeAll()
+            playbackPaused = false
             player.stop()
             playbackEstimateEnd = nil
             for completion in discarded { completion() }
@@ -645,6 +672,7 @@ public final class AudioIO: @unchecked Sendable {
     private func finishRestart(succeeded: Bool) {
         lock.lock(); restartInFlight = false; lock.unlock()
         playerQueue.async { [self] in
+            playbackPaused = false   // a restart replays everything from the start; a stale pause must not hold it
             // Interrupted buffers go first (they were queued before anything held), each replayed from its start.
             let waiting = inFlight.map { (buffer: $0.buffer, completion: $0.completion) } + held
             inFlight.removeAll()

@@ -290,3 +290,47 @@ final class SpeechPlannerTests: XCTestCase {
         XCTAssertEqual(out.map(\.text), ["Something went wrong: Overloaded"])
     }
 }
+
+final class SpokenReplyLimitTests: XCTestCase {
+    private let reply = "One here. Two here. Three here. Four here. Five here. Six here. "
+
+    func testRepliesOverTheLimitAreReadInPartAndTheRestIsHeld() {
+        var planner = SpeechPlanner(mode: .skipCode, spokenLimit: 3)
+        var spoken = planner.textDelta(reply)
+        spoken += planner.textBlockEnded()
+        spoken += planner.finishTurn(TurnResult(outcome: .success))
+        let sentences = spoken.filter { $0.kind == .prose }.map(\.text)
+        XCTAssertEqual(sentences, ["One here.", "Two here.", "Three here."])
+        XCTAssertEqual(planner.heldBack.map(\.text), ["Four here.", "Five here.", "Six here."])
+        XCTAssertTrue(spoken.contains { $0.kind == .prompt && $0.text.contains("first part") })
+    }
+
+    func testNoLimitReadsEverythingAndSaysNothingExtra() {
+        var planner = SpeechPlanner(mode: .skipCode)
+        var spoken = planner.textDelta(reply)
+        spoken += planner.textBlockEnded()
+        spoken += planner.finishTurn(TurnResult(outcome: .success))
+        XCTAssertEqual(spoken.filter { $0.kind == .prose }.count, 6)
+        XCTAssertTrue(planner.heldBack.isEmpty)
+        XCTAssertFalse(spoken.contains { $0.kind == .prompt })
+    }
+
+    func testCodeAfterTheLimitIsHeldToo() {
+        var planner = SpeechPlanner(mode: .skipCode, spokenLimit: 2)
+        var spoken = planner.textDelta("Intro one. Intro two.\n\n```swift\nlet x = 1\n```\n\nAfter the code.\n")
+        spoken += planner.textBlockEnded()
+        spoken += planner.finishTurn(TurnResult(outcome: .success))
+        XCTAssertEqual(spoken.filter { $0.kind == .prose || $0.kind == .code }.count, 2)
+        XCTAssertTrue(planner.heldBack.contains { $0.kind == .code })
+        XCTAssertTrue(planner.heldBack.contains { $0.text.contains("After the code") })
+    }
+
+    func testSummaryModeKeepsItsOwnPrompt() {
+        var planner = SpeechPlanner(mode: .summary, spokenLimit: 50)
+        var spoken = planner.textDelta("The summary sentence.\n\nMore detail follows here.\n")
+        spoken += planner.textBlockEnded()
+        spoken += planner.finishTurn(TurnResult(outcome: .success))
+        XCTAssertTrue(spoken.contains { $0.text.contains("There's more detail") })
+        XCTAssertFalse(spoken.contains { $0.text.contains("first part") })
+    }
+}

@@ -109,6 +109,8 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var kokoroVoice = "af_heart"
     public var systemVoiceIdentifier: String? = nil
     public var speechRate: Double = 1.0
+    /// The most sentences read aloud in one reply; the rest is kept for "details". 0 reads everything.
+    public var spokenReplyLimit = 15
     public var bargeInEnabled = true
     public var handsFree = true
     public var endOfTurnSilence: Double = 0.65
@@ -217,6 +219,7 @@ public struct AppSettings: Sendable, Codable, Equatable {
         kokoroVoice = (try? c.decode(String.self, forKey: .kokoroVoice)) ?? d.kokoroVoice
         systemVoiceIdentifier = try? c.decode(String.self, forKey: .systemVoiceIdentifier)
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
+        spokenReplyLimit = max(0, (try? c.decode(Int.self, forKey: .spokenReplyLimit)) ?? d.spokenReplyLimit)
         bargeInEnabled = (try? c.decode(Bool.self, forKey: .bargeInEnabled)) ?? d.bargeInEnabled
         handsFree = (try? c.decode(Bool.self, forKey: .handsFree)) ?? d.handsFree
         endOfTurnSilence = (try? c.decode(Double.self, forKey: .endOfTurnSilence)) ?? d.endOfTurnSilence

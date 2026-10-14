@@ -64,6 +64,14 @@ public actor ConversationEngine {
     private var measuredIDs: Set<Int> = []
     private var holdSpeech = false
     private var interruptedRemainder: [Utterance] = []
+    /// While the user is talking over us and the output can hold its place, speech is paused rather than discarded, so a
+    /// noise, a cough or an echo that turns out to be nothing carries on from the same spot instead of replaying.
+    private var pausedBargeIn = false
+    private var pausedRemaining: [Utterance] = []
+    private var pauseToken = 0
+    /// If no transcript arrives (a stuck decode), speech carries on after this long.
+    private var pauseWatchdogSeconds: Double = 12
+    func setPauseWatchdog(seconds: Double) { pauseWatchdogSeconds = seconds }
     private var nextEntryID = 1
     private var spokenAuthProblem = false
     private var userIsSpeaking = false
@@ -82,7 +90,7 @@ public actor ConversationEngine {
         self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation,
                                        grants: configuration.folderGrants)
         self.planner = SpeechPlanner(mode: configuration.speechMode, verbosity: configuration.verbosity,
-                                     pronunciation: pronunciation, ids: ids)
+                                     pronunciation: pronunciation, ids: ids, spokenLimit: configuration.spokenReplyLimit)
         var cont: AsyncStream<EngineSnapshot>.Continuation!
         self.snapshots = AsyncStream(bufferingPolicy: .bufferingNewest(1)) { cont = $0 }
         self.snapshotContinuation = cont
@@ -145,7 +153,21 @@ public actor ConversationEngine {
     public func userStartedSpeaking() {
         log.log(.info, .engine, "user.speech.start",
                 ["bargeIn": .bool(snapshot.isSpeaking || !queueOrder.isEmpty), "phase": "\(snapshot.phase)"])
-        if snapshot.isSpeaking || !queueOrder.isEmpty {
+        if (snapshot.isSpeaking || !queueOrder.isEmpty), output.supportsPause {
+            if !pausedBargeIn {
+                pausedBargeIn = true
+                pausedRemaining = queueOrder.compactMap { queued[$0] }
+                output.pause()
+                holdSpeech = true
+                pauseToken += 1
+                let token = pauseToken
+                let wait = pauseWatchdogSeconds
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    await self?.pauseExpired(token)
+                }
+            }
+        } else if snapshot.isSpeaking || !queueOrder.isEmpty {
             let remaining = queueOrder.compactMap { queued[$0] }
             output.stopAll()
             queued.removeAll()
@@ -157,6 +179,43 @@ public actor ConversationEngine {
         userIsSpeaking = true
         transcribing = false
         recomputePhase()
+    }
+
+    private func pauseExpired(_ token: Int) {
+        guard pausedBargeIn, token == pauseToken else { return }
+        log.log(.warning, .engine, "bargeIn.pauseExpired")
+        userIsSpeaking = false
+        transcribing = false
+        resumePausedInPlace()
+        recomputePhase()
+    }
+
+    /// What was said was not for us (or was an acknowledgement): carry on from the exact spot, then speak anything
+    /// that arrived while paused.
+    private func resumePausedInPlace() {
+        guard pausedBargeIn else { return }
+        pausedBargeIn = false
+        pausedRemaining = []
+        holdSpeech = false
+        output.resume()
+        let held = interruptedRemainder
+        interruptedRemainder = []
+        if !held.isEmpty { speak(held.map { make($0.text, $0.kind) }, record: false) }
+    }
+
+    /// What was said is for us: do what a barge-in always did. Stop, and keep what was not finished so a command can
+    /// resume it.
+    private func commitPausedBargeIn() {
+        guard pausedBargeIn else { return }
+        pausedBargeIn = false
+        let remaining = queueOrder.compactMap { queued[$0] }
+        output.stopAll()
+        queued.removeAll()
+        queueOrder.removeAll()
+        interruptedRemainder = remaining + interruptedRemainder
+        pausedRemaining = []
+        snapshot.isSpeaking = false
+        holdSpeech = true
     }
 
     /// The user stopped talking; a transcript will follow.
@@ -207,6 +266,8 @@ public actor ConversationEngine {
                                            awaitingCatchUpChoice: catchUpOpen && answersPermissions,
                                            hasQueuedRequests: answersPermissions && !permissionQueue.isEmpty)
         var parsed = VoiceCommand.parse(text, context: context)
+        // A bare acknowledgement ("okay", "mm-hmm") carries on from where speech was paused; anything else is meant for us.
+        if pausedBargeIn { if parsed == .backchannel { resumePausedInPlace() } else { commitPausedBargeIn() } }
         // Text from a phone is an instruction for Claude. Only "stop" and a bare acknowledgement keep their command
         // meaning: it must not switch Brainstorm to Execute, restart the session or change settings on the Mac.
         if !answersPermissions {
@@ -617,6 +678,12 @@ public actor ConversationEngine {
         perform(.stopSpeaking)
     }
 
+    /// Applies from the next reply.
+    public func setSpokenReplyLimit(_ limit: Int) {
+        config.spokenReplyLimit = max(0, limit)
+        planner.spokenLimit = config.spokenReplyLimit
+    }
+
     public func setSpeechMode(_ mode: SpeechMode) {
         config.speechMode = mode
         planner.mode = mode
@@ -667,6 +734,8 @@ public actor ConversationEngine {
     }
 
     private func restart(resume: String?) {
+        pausedBargeIn = false
+        pausedRemaining = []
         output.stopAll()
         queued.removeAll()
         queueOrder.removeAll()
@@ -687,6 +756,7 @@ public actor ConversationEngine {
     // MARK: - Commands
 
     public func perform(_ command: VoiceCommand) {
+        if command != .backchannel { commitPausedBargeIn() }
         log.log(.info, .engine, "command", ["name": "\(command)"])
         switch command {
         case .stopSpeaking:
@@ -984,7 +1054,8 @@ public actor ConversationEngine {
     }
 
     private func resetTurnState() {
-        planner = SpeechPlanner(mode: config.speechMode, verbosity: config.verbosity, pronunciation: pronunciation, ids: ids)
+        planner = SpeechPlanner(mode: config.speechMode, verbosity: config.verbosity, pronunciation: pronunciation, ids: ids,
+                                spokenLimit: config.spokenReplyLimit)
         assistantEntryID = nil
         turnMuted = false
         latency = TurnLatency()
@@ -1156,6 +1227,7 @@ public actor ConversationEngine {
 
     /// The user made a noise but said nothing: carry on where we stopped.
     private func resumeAfterFalseBargeIn() {
+        if pausedBargeIn { resumePausedInPlace(); return }
         guard !interruptedRemainder.isEmpty || holdSpeech else { return }
         resumeRemainder()
     }

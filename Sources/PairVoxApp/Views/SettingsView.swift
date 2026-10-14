@@ -195,6 +195,14 @@ private struct VoiceSettings: View {
                         Text(String(format: "%.2f×", model.settings.speechRate)).monospacedDigit().frame(width: 48)
                     }
                 }
+                Picker("Long replies", selection: $model.settings.spokenReplyLimit) {
+                    Text("Read everything").tag(0)
+                    Text("First 10 sentences").tag(10)
+                    Text("First 15 sentences").tag(15)
+                    Text("First 25 sentences").tag(25)
+                }
+                Text("Longer replies are read in part. The full text stays on screen, and saying “details” reads the rest.")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Kokoro model") {
                     HStack {
                         Text(kokoroStatus).foregroundStyle(.secondary)

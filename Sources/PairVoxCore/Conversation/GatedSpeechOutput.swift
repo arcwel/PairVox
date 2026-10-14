@@ -66,6 +66,10 @@ public final class GatedSpeechOutput: SpeechOutput, @unchecked Sendable {
 
     public func setRate(_ rate: Double) { inner.setRate(rate) }
 
+    public var supportsPause: Bool { inner.supportsPause }
+    public func pause() { if isActive { inner.pause() } }
+    public func resume() { if isActive { inner.resume() } }
+
     /// Turns this project's voice on or off. Turning it off cuts any playback and tells the engine everything it
     /// had queued is finished, so it does not wait for audio that will never come.
     public func setActive(_ on: Bool) {

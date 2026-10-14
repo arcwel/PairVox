@@ -22,6 +22,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
     private var synthesizing = false
     private var generation = 0
     private var rate: Double = 1.0
+    private var paused = false
     /// How many utterances to synthesize ahead of the one playing.
     private let lookahead = 2
 
@@ -47,6 +48,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
     public func stopAll() -> [Int] {
         lock.lock()
         generation += 1
+        paused = false
         let hadAudio = playing != nil
         var ids: [Int] = []
         if let p = playing { ids.append(p.id) }
@@ -66,6 +68,28 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         lock.lock(); self.rate = rate; lock.unlock()
     }
 
+    public var supportsPause: Bool { true }
+
+    /// Holds playback where it is. Synthesis carries on, so nothing is lost; the next sentence waits.
+    public func pause() {
+        lock.lock()
+        paused = true
+        let hasAudio = playing != nil
+        lock.unlock()
+        if hasAudio { audio.pausePlayback() }
+    }
+
+    /// Carries on from the same spot, then starts whatever was synthesized meanwhile.
+    public func resume() {
+        lock.lock()
+        let was = paused
+        paused = false
+        lock.unlock()
+        guard was else { return }
+        audio.resumePlayback()
+        pump()
+    }
+
     // MARK: Pipeline
 
     private func pump() {
@@ -75,7 +99,8 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
 
     private func startSynthesisIfNeeded() {
         lock.lock()
-        guard !synthesizing, !waiting.isEmpty, ready.count < lookahead else {
+        // While paused the user is talking and the transcriber needs the GPU; synthesis catches up after resume.
+        guard !synthesizing, !waiting.isEmpty, ready.count < lookahead, !paused else {
             lock.unlock()
             return
         }
@@ -164,8 +189,8 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
 
     private func startPlaybackIfNeeded() {
         lock.lock()
-        guard playing == nil, !ready.isEmpty else {
-            let idle = playing == nil && ready.isEmpty && waiting.isEmpty && !synthesizing
+        guard playing == nil, !ready.isEmpty, !paused else {
+            let idle = playing == nil && ready.isEmpty && !paused && waiting.isEmpty && !synthesizing
             lock.unlock()
             if idle {
                 onPlaybackActiveChange?(false)

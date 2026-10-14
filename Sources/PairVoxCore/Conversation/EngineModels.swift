@@ -14,6 +14,17 @@ public protocol SpeechOutput: AnyObject, Sendable {
     /// not finish (the one playing first), so speech can resume later.
     @discardableResult func stopAll() -> [Int]
     func setRate(_ rate: Double)
+    /// True when `pause()` holds playback in place and `resume()` carries on from the same spot. An output that cannot
+    /// do this keeps the default (false) and the engine stops speech at a barge-in instead.
+    var supportsPause: Bool { get }
+    func pause()
+    func resume()
+}
+
+public extension SpeechOutput {
+    var supportsPause: Bool { false }
+    func pause() {}
+    func resume() {}
 }
 
 public enum SpeechOutputEvent: Sendable, Equatable {
@@ -183,6 +194,8 @@ public struct EngineConfiguration: Sendable {
     public var folderGrants: [FolderGrant]
     public var pronunciation: [String: String]
     public var speechRate: Double
+    /// The most sentences read aloud per reply; the rest waits for "details". 0 means everything.
+    public var spokenReplyLimit: Int
     /// Delay before a filler acknowledgement if nothing has been said yet.
     public var acknowledgementDelay: TimeInterval
 
@@ -191,7 +204,7 @@ public struct EngineConfiguration: Sendable {
                 acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
                 spokenHighRiskConfirmation: Bool = false, voiceApprovesNeedsScreen: Bool = false, explainRequests: Bool = true,
                 folderGrants: [FolderGrant] = [], pronunciation: [String: String] = [:],
-                speechRate: Double = 1.0, acknowledgementDelay: TimeInterval = 1.2) {
+                speechRate: Double = 1.0, spokenReplyLimit: Int = 0, acknowledgementDelay: TimeInterval = 1.2) {
         self.projectRoot = projectRoot
         self.speechMode = speechMode
         self.conversationMode = conversationMode
@@ -204,6 +217,7 @@ public struct EngineConfiguration: Sendable {
         self.folderGrants = folderGrants
         self.pronunciation = pronunciation
         self.speechRate = speechRate
+        self.spokenReplyLimit = spokenReplyLimit
         self.acknowledgementDelay = acknowledgementDelay
     }
 
@@ -219,6 +233,7 @@ public struct EngineConfiguration: Sendable {
                   explainRequests: settings.explainRequests,
                   folderGrants: settings.folderGrants,
                   pronunciation: settings.pronunciation,
-                  speechRate: settings.speechRate)
+                  speechRate: settings.speechRate,
+                  spokenReplyLimit: settings.spokenReplyLimit)
     }
 }

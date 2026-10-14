@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Talking over PairVox no longer makes it repeat itself. Speech now pauses in place when you start talking. If what you said turns out to be nothing (a cough, noise, an echo of its own voice) it carries on from the exact spot instead of discarding the sentence and reading it again. A bare "okay" does the same. Anything you mean for PairVox still stops it, as before. A stuck transcription cannot leave it paused: speech resumes after 12 seconds.
+- While speech is paused, no new sentence is synthesized, so the transcriber has the GPU to itself. In the mic test, one decode took 4.8 s while speech was queued behind it.
+- Long replies are read in part. After 15 sentences (Settings, Speech, Long replies: read everything, 10, 15 or 25) the rest is held and PairVox says "That's the first part. Say details to hear the rest." The full text stays on screen.
+
 - Pairing: the phone now waits up to 130 seconds (it gave up after 15, before you could click Pair on the Mac) and shows that it is waiting. The phone confirms that it received its key; a Mac that gets no confirmation removes the phone again, so a failed attempt no longer leaves a phone on the list. The phone app must be updated together with the Mac app.
 
 - Development builds no longer ask for Keychain access after every rebuild: phone keys live in a private file in builds without a team identity, and in the Keychain in signed builds. The app no longer reads the Keychain at launch, and the key store is read off the main thread.

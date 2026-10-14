@@ -47,6 +47,15 @@ final class FakeOutput: SpeechOutput, @unchecked Sendable {
     private var _played: [Utterance] = []
     private var _stops = 0
     private var _rate = 1.0
+    private var _pauses = 0
+    private var _resumes = 0
+    var pausable = false
+
+    var supportsPause: Bool { pausable }
+    func pause() { lock.lock(); _pauses += 1; lock.unlock() }
+    func resume() { lock.lock(); _resumes += 1; lock.unlock() }
+    var pauses: Int { lock.lock(); defer { lock.unlock() }; return _pauses }
+    var resumes: Int { lock.lock(); defer { lock.unlock() }; return _resumes }
 
     init() {
         var c: AsyncStream<SpeechOutputEvent>.Continuation!
@@ -164,6 +173,102 @@ final class ConversationEngineTests: XCTestCase {
         await engine.userStoppedSpeaking()
         await engine.submit("")
         XCTAssertEqual(output.queue.map(\.text), ["First point here.", "Second point here.", "Third point here.", "Fourth point."])
+    }
+
+    // MARK: Pausing instead of stopping
+
+    private func startSpeaking() async {
+        output.pausable = true
+        await engine.submit("Explain")
+        backend.emit(.textDelta("First point here. Second point here. Third point here. "))
+        await settle()
+        output.playNext(finish: false)
+        await settle()
+    }
+
+    func testNoiseOverSpeechResumesInPlaceWithoutReplaying() async {
+        await startSpeaking()
+        let before = output.queue.map(\.text)
+        await engine.userStartedSpeaking()
+        XCTAssertEqual(output.pauses, 1)
+        XCTAssertEqual(output.stops, 0, "nothing is discarded while we find out whether the user meant it")
+        XCTAssertEqual(output.queue.map(\.text), before)
+        backend.emit(.textDelta("Fourth point. "))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.text), before, "new text waits while the user talks")
+        await engine.userStoppedSpeaking()
+        await engine.submit("")   // transcribed to nothing
+        XCTAssertEqual(output.resumes, 1)
+        XCTAssertEqual(output.stops, 0)
+        XCTAssertEqual(output.queue.map(\.text), before + ["Fourth point."], "carries on where it was, then the held text")
+    }
+
+    func testBackchannelOverSpeechResumesInPlace() async {
+        await startSpeaking()
+        let before = output.queue.map(\.text)
+        await engine.userStartedSpeaking()
+        await engine.submit("okay")
+        XCTAssertEqual(output.resumes, 1)
+        XCTAssertEqual(output.stops, 0)
+        XCTAssertEqual(output.queue.map(\.text), before)
+        XCTAssertEqual(backend.interrupts, 0)
+    }
+
+    func testRealCommandOverPausedSpeechStopsIt() async {
+        await startSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.submit("stop")
+        XCTAssertGreaterThanOrEqual(output.stops, 1)
+        XCTAssertEqual(output.queue, [])
+        XCTAssertEqual(output.resumes, 0)
+    }
+
+    func testNewInstructionOverPausedSpeechStopsItAndIsSent() async {
+        await startSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.submit("Actually use SQLite instead")
+        XCTAssertEqual(output.stops, 1)
+        XCTAssertEqual(output.queue, [])
+        XCTAssertEqual(backend.sent.last, "Actually use SQLite instead")
+    }
+
+    func testStuckTranscriptionDoesNotLeaveSpeechPaused() async {
+        await engine.setPauseWatchdog(seconds: 0.2)
+        await startSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(output.resumes, 1, "a decode that never answers must not silence the reply")
+        let phase = await engine.snapshot.phase
+        XCTAssertNotEqual(phase, .transcribing)
+    }
+
+    func testOutputsThatCannotPauseKeepTheOldBehaviour() async {
+        await engine.submit("Explain")
+        backend.emit(.textDelta("One here. Two here. "))
+        await settle()
+        output.playNext(finish: false)
+        await engine.userStartedSpeaking()
+        XCTAssertEqual(output.pauses, 0)
+        XCTAssertEqual(output.stops, 1)
+    }
+
+    func testLongReplyIsReadInPartAndDetailsReadsTheRest() async {
+        await engine.setSpokenReplyLimit(3)
+        await engine.submit("Explain")
+        backend.emit(.textDelta("One here. Two here. Three here. Four here. Five here. Six here. "))
+        backend.emit(.turnCompleted(TurnResult(outcome: .success)))
+        await settle()
+        output.playAll()
+        await settle()
+        let first = output.played.map(\.text)
+        XCTAssertTrue(first.contains("Three here."))
+        XCTAssertFalse(first.contains("Four here."), "the reply was cut at the limit")
+        XCTAssertTrue(first.contains { $0.contains("first part") })
+        await engine.submit("details")
+        await settle()
+        output.playAll()
+        XCTAssertTrue(output.played.map(\.text).contains("Six here."), "details reads what was held back")
     }
 
     func testBackchannelWhileWorkingDoesNotInterrupt() async {
