@@ -81,7 +81,27 @@ Added 2026-10-13. These build on the security audit in `docs/security/2026-10-13
 - [x] Background projects do not speak on their own. They queue and notify.
   - Built: one `claude` process and engine per project (up to 8), a project list that appears with the second project and shows NEEDS OK / N NEW / WORKING, ⌘⌥1–9 and ⌘⌥[ ⌘⌥] to switch, "switch to project <name>" by voice (unambiguous matches only), open projects restored at launch. A `GatedSpeechOutput` per project keeps background projects silent. The one you left stops speaking at once and its replies are listed; on return a bar offers *Play from the first*, *Play the last one* or *Skip* (or say "catch me up", "play the last one", "skip"), then re-asks any request still waiting. Background projects raise notifications for requests and finished turns. Covered by `CatchUpTests` and `GatedSpeechOutputTests`.
 
+## v0.2c: cross-project approvals (specified, not built)
+
+Answer another project's request without leaving the conversation you are in. Spec and owner decisions: `docs/prd/cross-project-approvals-prd.md`.
+
+- [ ] A1 Inbox model across projects, answers bound to the announced request and its project
+- [ ] A2 Break detector and announcer (2 s quiet, after Claude's reply), settings, per-project mute, project-name option
+- [ ] A3 Answer in place by voice; switch; ask-again rules
+- [ ] A4 "Tell me more" overview (advisor with fallback)
+- [ ] A5 Inbox UI (project list, menu bar, mini window) and phone parity
+- [ ] A6 Voice for high risk and for requests marked "needs the screen" (separate switches), optional Mac second confirmation, phone second confirmation, security audit
+
 ## v0.3: iPhone client
+
+PRD and council verdict: `docs/prd/pairvox-iphone-prd.md`. The engine and the permission gate stay on the Mac; the phone is a remote front-end.
+
+- [x] M0: `PairVoxLink` host, pairing (QR or six-digit code, Mac-side accept, revoke), keyed handshake and encrypted frames, TCP transport, test client; approval rules enforced by the Mac (voice only if the Mac allows it, high risk needs a tap and Face ID, stale requests need a tap). Tested with no phone and no microphone
+- [ ] M0.5: locked-phone background-audio prototype on a real iPhone
+- [x] M1: Mac companion: Settings → Phone (off by default) starts a Tailscale-only listener, shows a QR code or six-digit code, asks you to click Pair for each new phone, lists and removes paired phones, and keeps the Mac awake while a phone is connected. High-risk requests need a deliberate tap on the phone (Face ID, Touch ID, passcode or plain tap). Built and launched; the screens were not yet checked by eye, and phone keys are stored in a 0600 file rather than the Keychain
+- [x] M2/M3 (first cut): `ios/` SwiftUI app (QR or code pairing, transcript, approvals with Face ID/Touch ID/passcode/tap, on-device speech, spoken replies); builds for the iOS Simulator SDK, not yet run on a device. `PairVoxLinkKit` is the iOS-ready wire library
+- [x] Audit run 3 of the phone link and app: `docs/security/2026-10-13-audit-run-3-phone-link.md`
+- [ ] Device testing with the microphone, background audio on a locked phone, Keychain for phone keys on the Mac, TestFlight
 
 The Mac keeps running Claude Code; the phone is a voice front-end.
 

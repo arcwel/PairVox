@@ -69,6 +69,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var openProjects: [String] = []
     /// Hide the Dock icon and window; PairVox lives in the menu bar (and the small floating window).
     public var menuBarOnly = false
+    /// Lets paired phones connect over Tailscale. Off until the owner turns it on.
+    public var phoneLinkEnabled = false
+    public var phoneLinkPort = 47821
     /// A short sound when Claude starts working and when it finishes.
     public var earcons = false
     /// The key held with ⌃⌥ to talk, from `pushToTalkKeys`.
@@ -167,6 +170,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
         declinedGrantFolders = (try? c.decode([String].self, forKey: .declinedGrantFolders)) ?? d.declinedGrantFolders
         openProjects = (try? c.decode([String].self, forKey: .openProjects)) ?? d.openProjects
         menuBarOnly = (try? c.decode(Bool.self, forKey: .menuBarOnly)) ?? d.menuBarOnly
+        phoneLinkEnabled = (try? c.decode(Bool.self, forKey: .phoneLinkEnabled)) ?? d.phoneLinkEnabled
+        let decodedPort = (try? c.decode(Int.self, forKey: .phoneLinkPort)) ?? d.phoneLinkPort
+        phoneLinkPort = (1024...65535).contains(decodedPort) ? decodedPort : d.phoneLinkPort
         earcons = (try? c.decode(Bool.self, forKey: .earcons)) ?? d.earcons
         let decodedKey = (try? c.decode(String.self, forKey: .pushToTalkKey)) ?? d.pushToTalkKey
         pushToTalkKey = AppSettings.pushToTalkKeys.contains(decodedKey) ? decodedKey : d.pushToTalkKey
@@ -223,6 +229,7 @@ public struct SettingsStore: Sendable {
             s.trustProjectConfiguration = false
             s.autoApproveLowRisk = false
             s.spokenHighRiskConfirmation = false
+            s.phoneLinkEnabled = false
         }
         return s
     }

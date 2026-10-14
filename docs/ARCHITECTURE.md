@@ -42,10 +42,16 @@
   - `Pronunciation` handles file names, identifiers, URLs, versions and symbols.
   - `CodeReader` and `ToolNarrator` describe code and tool use.
   - `SpeechPlanner` applies the speech mode.
-- `Policy/PermissionPolicy`: risk classification. High-risk actions are never voice-approvable.
+- `Policy/`
+  - `PermissionPolicy` classifies each permission request by program and subcommand (`BashRisk`), decides what voice may approve, builds the spoken prompt (every step of a compound command, or screen-only), and limits auto-approve to read-only tools inside the project. High-risk requests need a click unless the owner switches on spoken confirmation.
+  - `FolderGrants` holds the owner's standing folder permissions (edits, and a separate shell switch) and the checks that keep a command inside the folder.
+- `Advisor/`: a separate, read-only `claude -p` call that explains a request in plain words and answers questions about it. Advice only; it never approves anything.
+- `Session/SessionCatalog` lists earlier Claude Code sessions for resume.
 - `Conversation/`
   - `ConversationEngine` (an actor) runs the whole loop: barge-in, redirect, summary/details, permissions, acknowledgements, latency metrics, and transcript snapshots for the UI.
-  - `VoiceCommand` parses local commands.
+  - `VoiceCommand` parses local commands (approvals, refusals, catch-up, project switch).
+  - `GatedSpeechOutput` keeps background projects silent; `ProjectMatcher` resolves spoken project names.
+  - `submitFromRemote` takes text from a paired phone: it is an instruction for Claude, never an answer to a waiting request.
   - `VoiceActivityDetector` is an energy VAD with an adaptive noise floor.
 
 **PairVoxVoice** (macOS)
@@ -59,7 +65,13 @@
 - `VoiceSpeechOutput` synthesizes up to two sentences ahead of playback and stops within one buffer.
 - `ModelStore` downloads Kokoro and verifies its pinned SHA-256 hashes.
 
-**PairVoxApp**: SwiftUI views and `AppModel`, plus the Keychain (API key), a Carbon hotkey (hold-to-talk) and notifications.
+**PairVoxLinkKit** (macOS and iOS): the wire library shared by the Mac and the phone. Encrypted, numbered frames (`FrameCodec`), the keyed handshake, message types, the phone-side `LinkClient`, `TCPTransport`, and the phone's Keychain credential store. Has no dependency on `PairVoxCore`.
+
+**PairVoxLink** (macOS): the Mac side of the phone link. `LinkHost` serves paired phones and enforces every approval rule itself; `PairingManager` handles QR and six-digit-code pairing, the Accept step and revocation; `TailnetAddress` limits who may even start a handshake; `EngineLink` maps engine state to what the phone sees. See [prd/pairvox-iphone-prd.md](prd/pairvox-iphone-prd.md) and the Phone link section of [THREAT_MODEL.md](THREAT_MODEL.md).
+
+**PairVoxApp**: SwiftUI views and `AppModel` (one engine per open project, the project list, mini window and menu bar), plus the Keychain (API key), Carbon hotkeys (hold-to-talk, key configurable), notifications and `PhoneLinkModel` (Settings → Phone).
+
+**ios/PairVoxPhone**: the iPhone app (SwiftUI): pairs, shows the transcript, speaks replies, listens with on-device recognition, and answers requests. Built from `ios/project.yml` with XcodeGen.
 
 **PairVoxCLI**: `pairvox-cli`, the same engine with a terminal I/O shim (`say` on macOS).
 

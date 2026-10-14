@@ -37,6 +37,8 @@ targets:
         product: PairVoxCore
       - package: PairVoxKit
         product: PairVoxVoice
+      - package: PairVoxKit
+        product: PairVoxLink
     settings:
       base:
         PRODUCT_NAME: PairVox

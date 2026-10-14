@@ -19,7 +19,7 @@ PairVox puts a live voice loop in front of the [Claude Code](https://code.claude
   - *Skip code*: prose is read; code is described briefly ("a 12-line Swift snippet").
   - *Summary*: only the opening summary is read. Say "details" for the rest.
 - **Brainstorm or execute.** *Brainstorm* runs Claude Code in plan mode, so it discusses and plans but changes nothing. *Execute* lets it work.
-- **Approve by voice, safely.** "Yes", "no", "always allow", or "no, edit the other file instead". Destructive actions are never approved by voice and always need a click: deleting files, pushing, `sudo`, and edits outside the project.
+- **Approve by voice, safely.** "Yes", "no", "always allow", or "no, edit the other file instead". Destructive actions (deleting files, pushing, `sudo`, edits outside the project) need a click by default. If you choose, you can allow them by voice too, with a deliberate phrase (Settings → General → Permissions); that switch is off until you turn it on.
 - **Natural, local voices.** Speech recognition uses [WhisperKit](https://github.com/argmaxinc/WhisperKit), with Apple Speech as the fallback. The voice is [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), falling back to the macOS system voice. Speech never leaves your Mac.
 
 > PairVox is an independent open-source project. It works with Claude Code but is not affiliated with or endorsed by Anthropic. “Claude” and “Claude Code” are trademarks of Anthropic.
@@ -111,7 +111,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together.
 
 ## Roadmap
 
-The macOS app is v1. An **iPhone client** is next: the Mac hosts the session and the phone handles voice. The engine already sits behind a `SessionBackend` protocol so a remote host can be added without a rewrite. See [docs/ROADMAP.md](docs/ROADMAP.md).
+The macOS app is v1, with several projects at once, folder-level approvals, plain-language request summaries and a mini or menu-bar mode. An **iPhone client** is under way: the Mac hosts the session over Tailscale and the phone handles voice (`ios/`, first build; see [ios/README.md](ios/README.md)). Cross-project approvals, answering another project's request without switching, are specified in [docs/prd/cross-project-approvals-prd.md](docs/prd/cross-project-approvals-prd.md). See [docs/ROADMAP.md](docs/ROADMAP.md) for status and [docs/security/](docs/security/) for the audits.
 
 ## Contributing
 

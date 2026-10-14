@@ -3,6 +3,7 @@
 import AppKit
 import Foundation
 import PairVoxCore
+import PairVoxLink
 import PairVoxVoice
 import SwiftUI
 
@@ -68,8 +69,13 @@ final class AppModel: ObservableObject {
     private let notifier = Notifier()
     /// True while copying engine-originated values into settings (don't echo them back).
     private var syncingFromEngine = false
+    /// Paired phones: the listener, pairing screen and list.
+    let phone: PhoneLinkModel
+    /// The settings window builds before it can reach the model, so it reads the one phone model from here.
+    static var sharedPhone: PhoneLinkModel = PhoneLinkModel()
 
     init() {
+        phone = Self.sharedPhone
         let loaded = store.load()
         settings = loaded
         let stack = VoiceStack(settings: loaded)
@@ -82,6 +88,7 @@ final class AppModel: ObservableObject {
         listeningMode = loaded.handsFree ? .handsFree : .pushToTalk
         voice.onWhisperState = { [weak self] s in Task { @MainActor in self?.whisperState = s } }
         voice.onKokoroStatus = { [weak self] s in Task { @MainActor in self?.kokoroStatus = s } }
+        phone.apply(enabled: loaded.phoneLinkEnabled, port: loaded.phoneLinkPort)
         Task { await bootstrap() }
         watchMainWindowClosing()
         if loaded.menuBarOnly { DispatchQueue.main.async { [weak self] in self?.applyActivationPolicy() } }
@@ -798,6 +805,8 @@ final class AppModel: ObservableObject {
         let isActive = session.id == activeSessionID
         if isActive {
             snapshot = snap
+            phone.engineBox.set(session.engine)
+            phone.publish(snap, project: session.url.path)
             // Voice commands ("faster", "summary mode") change these inside the engine;
             // mirror them into settings (but not the engine's initial per-project values).
             if session.receivedFirstSnapshot {
@@ -839,6 +848,9 @@ final class AppModel: ObservableObject {
     private func settingsChanged(from old: AppSettings) {
         try? store.save(settings)
         logSettingChanges(from: old)
+        if old.phoneLinkEnabled != settings.phoneLinkEnabled || old.phoneLinkPort != settings.phoneLinkPort {
+            phone.apply(enabled: settings.phoneLinkEnabled, port: settings.phoneLinkPort)
+        }
         voice.apply(settings)
         if old.verboseLogging != settings.verboseLogging || old.logConversationText != settings.logConversationText {
             Self.configureDiagnostics(settings)

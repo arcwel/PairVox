@@ -179,7 +179,14 @@ public actor ConversationEngine {
         process(rawText, allowProjectSwitch: true)
     }
 
-    private func process(_ rawText: String, allowProjectSwitch: Bool) {
+    /// Text from a paired phone. It can be an instruction or a general voice command ("new session"), but never an
+    /// answer to a waiting request: approvals from the phone arrive as explicit, ID-bound commands that the host
+    /// checks first. Text said while a request waits is, as for speech, an instruction instead of it.
+    public func submitFromRemote(_ rawText: String) {
+        process(rawText, allowProjectSwitch: false, answersPermissions: false)
+    }
+
+    private func process(_ rawText: String, allowProjectSwitch: Bool, answersPermissions: Bool = true) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         userIsSpeaking = false
         transcribing = false
@@ -190,13 +197,21 @@ public actor ConversationEngine {
         }
         lastUtteranceWords = VoiceCommand.normalize(text)
         // While the catch-up question is open, the waiting request has not been announced yet, so a bare "okay" cannot answer it.
-        let context = VoiceCommand.Context(awaitingPermission: (snapshot.pendingPermission != nil || snapshot.grantOffer != nil) && !catchUpOpen,
+        let context = VoiceCommand.Context(awaitingPermission: answersPermissions && (snapshot.pendingPermission != nil || snapshot.grantOffer != nil) && !catchUpOpen,
                                            claudeIsWorking: !sendTimes.isEmpty,
                                            hasHeldBack: !(lastPlanner?.heldBack.isEmpty ?? true),
-                                           awaitingHighRiskConfirmation: snapshot.pendingPermission.map(canConfirmHighRiskByVoice) ?? false,
-                                           awaitingCatchUpChoice: catchUpOpen,
-                                           hasQueuedRequests: !permissionQueue.isEmpty)
+                                           awaitingHighRiskConfirmation: answersPermissions && (snapshot.pendingPermission.map(canConfirmHighRiskByVoice) ?? false),
+                                           awaitingCatchUpChoice: catchUpOpen && answersPermissions,
+                                           hasQueuedRequests: answersPermissions && !permissionQueue.isEmpty)
         var parsed = VoiceCommand.parse(text, context: context)
+        // Text from a phone is an instruction for Claude. Only "stop" and a bare acknowledgement keep their command
+        // meaning: it must not switch Brainstorm to Execute, restart the session or change settings on the Mac.
+        if !answersPermissions {
+            switch parsed {
+            case .interruptClaude?, .backchannel?: break
+            default: parsed = nil
+            }
+        }
         if parsed != .approveAllWaiting { approveAllArmed = nil }
         // "switch to X" is only a command when X is one of the open projects; otherwise it is an instruction for Claude.
         if case .switchProject(let name)? = parsed {

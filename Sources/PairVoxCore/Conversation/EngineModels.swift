@@ -109,6 +109,11 @@ public struct PendingPermission: Sendable, Equatable {
     public var explanation: Explanation = .none
     /// Questions the user asked about this request before deciding, and the answers.
     public var questions: [AdvisorTurn] = []
+
+    public init(request: PermissionRequest, assessment: PermissionAssessment) {
+        self.request = request
+        self.assessment = assessment
+    }
 }
 
 public struct UsageSnapshot: Sendable, Equatable {

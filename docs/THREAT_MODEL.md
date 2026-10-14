@@ -41,3 +41,7 @@ PairVox lets you steer an agent that can edit files and run commands, by voice. 
 ## Reporting
 
 See [SECURITY.md](../SECURITY.md).
+
+## Phone link (v0.3, off by default)
+
+The Mac listens only when you switch it on, accepts connections only from Tailscale (and loopback) addresses, and lets a peer in only after a keyed handshake with a key created when you clicked Pair. Frames are encrypted and numbered; replays end the connection. The Mac, not the phone, decides what a spoken yes may approve. Known gaps until the M4 audit: phone keys live in a 0600 file, not the Keychain; a six-digit pairing code could be guessed offline from a captured exchange (it still needs your Pair click); the link has not been fuzzed or independently audited.

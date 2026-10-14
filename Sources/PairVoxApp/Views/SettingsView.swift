@@ -9,6 +9,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
+            PhoneSettings().tabItem { Label("Phone", systemImage: "iphone") }
             ProjectSettings().tabItem { Label("Project", systemImage: "folder") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }
             AccountSettings().tabItem { Label("Account", systemImage: "person.badge.key") }
@@ -472,5 +473,62 @@ private struct ProjectSettings: View {
         } else {
             Text("Open a project to set options for it.").foregroundStyle(.secondary).padding()
         }
+    }
+}
+
+
+/// Lets a paired iPhone talk to the project that is open here. Off by default; nothing connects until a phone
+/// has been paired from this screen and you have clicked Pair.
+private struct PhoneSettings: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var phone: PhoneLinkModel
+
+    init() { _phone = ObservedObject(wrappedValue: AppModel.sharedPhone) }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Let paired phones connect over Tailscale", isOn: $model.settings.phoneLinkEnabled)
+                Text(phone.status).font(.caption).foregroundStyle(.secondary)
+                if let address = phone.tailnetAddress, model.settings.phoneLinkEnabled {
+                    Text("This Mac: \(address):\(String(phone.port))").font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                }
+                Text("Only devices on your tailnet can reach this Mac, and each phone must also prove it holds a key made when you paired it. A phone cannot approve a high-risk request by voice, and the Mac keeps all permission rules.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if model.settings.phoneLinkEnabled {
+                Section("Pair a new phone") {
+                    HStack {
+                        Button("Show QR code") { phone.newOffer(.qr) }
+                        Button("Show a 6-digit code") { phone.newOffer(.code) }
+                    }
+                    if let offer = phone.offer {
+                        if let payload = phone.qrPayload, let image = PhoneLinkModel.qrImage(payload) {
+                            Image(nsImage: image).interpolation(.none).resizable().frame(width: 180, height: 180)
+                        } else if offer.kind == .code {
+                            Text(offer.display).font(.system(size: 34, weight: .bold, design: .monospaced)).textSelection(.enabled)
+                        }
+                        Text("Valid for two minutes, once. You will be asked to click Pair on this Mac.").font(.caption).foregroundStyle(.secondary)
+                        Button("Cancel") { phone.cancelOffer() }
+                    }
+                }
+            }
+            Section("Paired phones") {
+                if let problem = phone.revokeError { Text(problem).font(.caption).foregroundStyle(.red) }
+                if phone.devices.isEmpty { Text("None").foregroundStyle(.secondary) }
+                ForEach(phone.devices) { device in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(device.name)
+                            Text("Paired \(device.createdAt.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Remove", role: .destructive) { phone.revoke(device.id) }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .task { await phone.refreshDevices() }
     }
 }

@@ -28,6 +28,21 @@ final class EngineApprovalTests: XCTestCase {
         .permissionRequested(PermissionRequest(requestID: id, toolName: "Edit", input: ["file_path": .string("/Users/dev/app/\(file)")]))
     }
 
+    func testTextFromAPairedPhoneNeverAnswersAWaitingRequest() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        await engine.submitFromRemote("yes")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "a yes typed on the phone is not an approval")
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "A", "the request still waits for an ID-bound answer")
+        await engine.submitFromRemote("do something else instead")
+        await settle()
+        snap = await engine.snapshot
+        if case .deny? = backend.responses.first?.1 {} else { XCTFail("an instruction while a request waits refuses it, as speech does") }
+    }
+
     func testSecondRequestQueuesInsteadOfReplacingTheFirst() async {
         await engine.submit("Fix it")
         backend.emit(edit("A", "a.swift"))
@@ -274,5 +289,24 @@ final class AllowAllByVoiceTests: XCTestCase {
         await settle()
         await engine.submit("allow all")
         XCTAssertEqual(backend.responses.map(\.0), ["A"])
+    }
+}
+
+final class RemoteTextCommandTests: XCTestCase {
+    func testTextFromAPhoneCannotChangeModesOrRestartTheSession() async throws {
+        let backend = FakeBackend(), output = FakeOutput()
+        let engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", speechMode: .skipCode,
+                                                                           conversationMode: .brainstorm, acknowledgementDelay: 0.15),
+                                        output: output, backendFactory: { _ in backend })
+        await engine.start()
+        defer { Task { await engine.shutdown() } }
+        for text in ["execute mode", "new session", "summary mode", "faster"] {
+            await engine.submitFromRemote(text)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.conversationMode, .brainstorm)
+        XCTAssertEqual(snap.speechMode, .skipCode)
+        XCTAssertFalse(snap.transcript.contains { $0.text == "New session started." })
     }
 }

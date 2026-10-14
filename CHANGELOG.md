@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Several projects at once with a project list, per-project sessions, catch-up controls and background silence; mini window and menu-bar-only mode.
+- Folder-level approvals (edits, and a separate shell switch), each with a two-step confirmation, listed and removable in Settings.
+- Plain-language request summaries and questions (a separate read-only advisor), "allow all" by voice, and an optional spoken confirmation for high-risk requests (off by default).
+- Approval gate hardened after two security audits: commands classified by program and subcommand, full-command spoken prompts, read scope limits, protected settings, safer refusals. Reports in `docs/security/`.
+- Settings: configurable hold-to-talk key, per-project overrides, optional start/finish sounds; File → Resume Earlier Session.
+- Phone link (off by default): Mac host over Tailscale with QR or code pairing, encrypted frames and Mac-enforced approvals; `PairVoxLinkKit`; first iPhone app in `ios/`.
+- Specs: `docs/prd/pairvox-iphone-prd.md` and `docs/prd/cross-project-approvals-prd.md`.
+
 ## 0.1.0 (unreleased)
 
 First public version.

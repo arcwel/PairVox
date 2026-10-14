@@ -61,11 +61,30 @@ dependencies += [
 
 products += [
     .library(name: "PairVoxVoice", targets: ["PairVoxVoice"]),
+    .library(name: "PairVoxLink", targets: ["PairVoxLink"]),
+    .library(name: "PairVoxLinkKit", targets: ["PairVoxLinkKit"]),
     // Dev convenience (`swift run pairvox-app`); the distributable app is built from project.yml.
     .executable(name: "pairvox-app", targets: ["PairVoxApp"]),
 ]
 
 targets += [
+    .target(
+        name: "PairVoxLinkKit",
+        path: "Sources/PairVoxLinkKit",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .target(
+        name: "PairVoxLink",
+        dependencies: ["PairVoxCore", "PairVoxLinkKit"],
+        path: "Sources/PairVoxLink",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .testTarget(
+        name: "PairVoxLinkTests",
+        dependencies: ["PairVoxLink", "PairVoxLinkKit", "PairVoxCore"],
+        path: "Tests/PairVoxLinkTests",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
     .target(
         name: "PairVoxVoice",
         dependencies: [
@@ -86,7 +105,7 @@ targets += [
     ),
     .executableTarget(
         name: "PairVoxApp",
-        dependencies: ["PairVoxCore", "PairVoxVoice"],
+        dependencies: ["PairVoxCore", "PairVoxVoice", "PairVoxLink", "PairVoxLinkKit"],
         path: "Sources/PairVoxApp",
         exclude: ["Info.plist", "PairVox.entitlements"],
         swiftSettings: [.swiftLanguageMode(.v5)],
@@ -106,7 +125,7 @@ targets += [
 
 let package = Package(
     name: "PairVox",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v15), .iOS(.v18)],
     products: products,
     dependencies: dependencies,
     targets: targets
