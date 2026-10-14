@@ -5,6 +5,7 @@
 //   pairvox-link phones list [--json]
 //   pairvox-link phones remove <id> [--dry-run] [--json]
 //   pairvox-link pair --qr | --code [--json] [--no-qr-art]
+//   pairvox-link doctor [--json]      checks Tailscale, the forward and the link; exit 1 if any check fails (PairVox not running included)
 // Exit codes: 0 done, 1 the app refused or failed, 2 bad usage, 3 PairVox is not running.
 
 import CoreImage
@@ -22,6 +23,7 @@ usage: pairvox-link status [--json]
        pairvox-link phones list [--json]
        pairvox-link phones remove <id> [--dry-run] [--json]
        pairvox-link pair --qr | --code [--json] [--no-qr-art]
+       pairvox-link doctor [--json]
        (add --socket PATH to use another control socket)
 """
 
@@ -75,6 +77,100 @@ func asciiQR(_ text: String) -> String {
     return out
 }
 
+
+/// One line of the doctor report.
+struct Check { let name: String; let level: String; let detail: String }
+
+/// Names and messages from other devices are printed to a terminal, so control characters (escape sequences) are removed.
+func printable(_ text: String) -> String { String(String.UnicodeScalarView(text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })) }
+
+func tailscaleCommand() -> (tool: String, extra: [String])? {
+    let home = NSHomeDirectory()
+    let socketPath = home + "/.config/tailscale/tailscaled.sock"
+    let extra = FileManager.default.fileExists(atPath: socketPath) ? ["--socket=" + socketPath] : []
+    for tool in ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
+    where FileManager.default.isExecutableFile(atPath: tool) { return (tool, extra) }
+    return nil
+}
+
+func tailscaleJSON(_ command: (tool: String, extra: [String]), _ arguments: [String]) -> [String: Any]? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: command.tool)
+    process.arguments = command.extra + arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return nil }
+    // A tailscale that never answers must not hang the doctor.
+    let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: watchdog)
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    watchdog.cancel()
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+}
+
+func runDoctor() -> Int32 {
+    var checks: [Check] = []
+    func add(_ name: String, _ level: String, _ detail: String) { checks.append(Check(name: name, level: level, detail: detail)) }
+
+    var port: Int?
+    do {
+        let r = try LinkCommandClient.send(LinkCommand(cmd: "status"), path: socket)
+        port = r.port
+        if !r.ok {
+            add("phone link", "fail", printable(r.error ?? "PairVox refused the status request."))
+        } else if r.enabled == true {
+            add("phone link", "ok", "listening on \(r.host ?? "?"):\(r.port ?? 0), \(r.connected ?? 0) connected")
+        } else {
+            add("phone link", "fail", r.status ?? "The phone link is off. Turn it on in Settings, Phone.")
+        }
+        let paired = (try? LinkCommandClient.send(LinkCommand(cmd: "devices"), path: socket))?.devices ?? []
+        add("paired phones", paired.isEmpty ? "warn" : "ok", paired.isEmpty ? "none; run pairvox-link pair --qr" : paired.map { printable($0.name) }.joined(separator: ", "))
+    } catch LinkCommandError.notRunning {
+        add("phone link", "fail", "PairVox is not running, or its phone link is off.")
+    } catch {
+        add("phone link", "fail", "PairVox did not answer properly: \(printable("\(error)"))")
+    }
+
+    if let tailscale = tailscaleCommand() {
+        if let status = tailscaleJSON(tailscale, ["status", "--json"]) {
+            let state = status["BackendState"] as? String ?? "unknown"
+            add("tailscale", state == "Running" ? "ok" : "fail", "backend \(state)")
+            let ips = (status["Self"] as? [String: Any])?["TailscaleIPs"] as? [String] ?? []
+            if let ip = ips.first(where: { $0.contains(".") }) { add("mac address", "ok", ip) } else { add("mac address", "fail", "no Tailscale address") }
+            if let health = status["Health"] as? [String], !health.isEmpty { add("tailscale health", "warn", printable(health.joined(separator: "; "))) }
+            let peers = (status["Peer"] as? [String: [String: Any]] ?? [:]).values
+            let online = peers.filter { $0["Online"] as? Bool == true }.compactMap { $0["HostName"] as? String }
+            add("peers online", online.isEmpty ? "warn" : "ok",
+                online.isEmpty ? "no other device is online; is Tailscale connected on the phone?" : online.map(printable).sorted().joined(separator: ", "))
+        } else {
+            add("tailscale", "fail", "the tailscale command did not answer; is Tailscale running?")
+        }
+        if TailnetAddress.current() == nil, let port {
+            let serve = tailscaleJSON(tailscale, ["serve", "status", "--json"])
+            let forward = ((serve?["TCP"] as? [String: [String: Any]])?[String(port)])?["TCPForward"] as? String
+            let correct = forward == "127.0.0.1:\(port)"
+            let fix = "tailscale --socket='\(NSHomeDirectory())/.config/tailscale/tailscaled.sock' serve --bg --tcp \(port) tcp://127.0.0.1:\(port)"
+            add("userspace forward", correct ? "ok" : "fail",
+                forward.map { correct ? "TCP \(port) forwards to \(printable($0))" : "TCP \(port) forwards to \(printable($0)), not to 127.0.0.1:\(port); run: \(fix)" }
+                    ?? "no forward for TCP \(port); run: \(fix)")
+        }
+    } else {
+        add("tailscale", "fail", "the tailscale command was not found")
+    }
+    if let port { add("tailnet access rule", "info", "TCP \(port) from the phone must be allowed in the tailnet policy; the Mac cannot check that. See docs/PHONE_LINK_SETUP.md") }
+
+    if json {
+        let list = checks.map { ["name": $0.name, "level": $0.level, "detail": $0.detail] }
+        let data = (try? JSONSerialization.data(withJSONObject: ["ok": !checks.contains { $0.level == "fail" }, "checks": list], options: [.prettyPrinted, .sortedKeys])) ?? Data()
+        print(String(decoding: data, as: UTF8.self))
+    } else {
+        for c in checks { print("\(c.level.uppercased().padding(toLength: 5, withPad: " ", startingAt: 0)) \(c.name): \(c.detail)") }
+    }
+    return checks.contains { $0.level == "fail" } ? 1 : 0
+}
+
 guard let command = args.first else { fail(usage, code: 2) }
 switch command {
 case "status":
@@ -83,6 +179,8 @@ case "status":
         print(r.status ?? "")
         if let host = r.host, let port = r.port, r.enabled == true { print("Listening on \(host):\(port); \(r.connected ?? 0) connected") }
     } else { fail(r.error ?? "Failed.", code: 1) }
+case "doctor":
+    exit(runDoctor())
 case "phones":
     guard args.count >= 2 else { fail(usage, code: 2) }
     switch args[1] {

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Development builds no longer ask for Keychain access after every rebuild: phone keys live in a private file in builds without a team identity, and in the Keychain in signed builds. The app no longer reads the Keychain at launch, and the key store is read off the main thread.
+- Screech recording: when the microphone hears a loud single tone while PairVox is speaking, the last ten seconds of microphone and playback audio are saved to the log folder (private files, newest ten kept, switch in Settings, Logs).
+- New tools: `scripts/restart-app.sh` (swap in the last build and reopen), `pairvox-link doctor` (checks Tailscale, the forward and the link), and `docs/DEV_ENVIRONMENT.md` (notes on this Mac's build and signing quirks).
+- `scripts/audio-report.py` reports echo cancellation as on or off with the reason, and lists captured screech recordings.
+
 - Several projects at once with a project list, per-project sessions, catch-up controls and background silence; mini window and menu-bar-only mode.
 - Folder-level approvals (edits, and a separate shell switch), each with a two-step confirmation, listed and removable in Settings.
 - Plain-language request summaries and questions (a separate read-only advisor), "allow all" by voice, and an optional spoken confirmation for high-risk requests (off by default).

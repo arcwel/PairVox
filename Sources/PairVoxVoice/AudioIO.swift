@@ -96,6 +96,7 @@ public final class AudioIO: @unchecked Sendable {
     private let log = DiagnosticLog.shared
     private let meter = OutputMeter()
     private let recorder = PlaybackRecorder()
+    private let feedback = FeedbackCatcher(directory: { DiagnosticLog.shared.directory }, runID: { DiagnosticLog.shared.runID })
     private let statsLock = NSLock()
     private var statsTimer: DispatchSourceTimer?
     private var capturedFrames = 0
@@ -106,6 +107,10 @@ public final class AudioIO: @unchecked Sendable {
     private var playbackEstimateEnd: DispatchTime?
     /// Opt-in: record exactly what PairVox plays into the log folder (see `PlaybackRecorder`).
     public var recordPlayback = false
+    /// Saves the last seconds of microphone and playback audio when the microphone hears a loud single-tone
+    /// howl (acoustic feedback), so it can be listened to afterwards. On by default; nothing is written
+    /// unless a howl is detected (see `FeedbackCatcher`).
+    public var captureFeedbackEvidence = true { didSet { feedback.setEnabled(captureFeedbackEvidence) } }
     /// Every player-node call goes through this queue, so the running check and `play()` can't be split by
     /// a device change or a stop, and a stop is always ordered before a later schedule.
     private let playerQueue = DispatchQueue(label: "app.pairvox.audio.player", qos: .userInteractive)
@@ -664,6 +669,7 @@ public final class AudioIO: @unchecked Sendable {
     private func noteCaptured(_ samples: UnsafeBufferPointer<Float>) {
         var sumSq: Float = 0, peak: Float = 0
         for v in samples { sumSq += v * v; peak = max(peak, abs(v)) }
+        feedback.noteMic(samples)
         statsLock.lock()
         capturedFrames += samples.count
         captureSumSq += sumSq
@@ -691,6 +697,7 @@ public final class AudioIO: @unchecked Sendable {
             guard let self else { return }
             let playing = self.player.isPlaying
             self.meter.process(buffer, playing: playing)
+            self.feedback.noteOutput(buffer)
             if playing, self.recordPlayback, let dir = self.log.directory {
                 self.recorder.write(buffer, directory: dir, runID: self.log.runID)
             }

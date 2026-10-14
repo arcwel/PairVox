@@ -78,3 +78,124 @@ public struct KeychainDeviceKeyStore: DeviceKeyStore {
         SecItemAdd(item as CFDictionary, nil)
     }
 }
+
+/// Phone keys in one private file (0600, in a 0700 folder). For development builds: the Keychain trusts an app by
+/// its code signature, and a build without a team identity gets a new signature on every build, so macOS asks again
+/// after each one. This is how the keys were kept before the Keychain was used. Release builds use the Keychain.
+public final class FileDeviceKeyStore: DeviceKeyStore, @unchecked Sendable {
+    private let directory: URL
+    private let lock = NSLock()
+    private var closedThisSession = false
+    private var keysFile: URL { directory.appendingPathComponent("phone-keys.json") }
+    private var markerFile: URL { directory.appendingPathComponent("phone-keys.legacy-import-closed") }
+
+    public init(directory: URL) {
+        self.directory = directory
+        removeStaleTemporaryFiles()
+    }
+
+    /// A crash between writing a temporary file and renaming it would leave a copy of every key behind.
+    private func removeStaleTemporaryFiles() {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        for name in names where name.hasPrefix("phone-keys.") && name.hasSuffix(".tmp") {
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
+        }
+    }
+
+    /// A missing file is an empty store. A file that cannot be read or decoded is moved aside (kept, not erased) and
+    /// the store starts empty, so one damaged file cannot make the next write silently drop every other phone's key
+    /// while destroying the evidence.
+    private func load() -> [String: Data] {
+        guard FileManager.default.fileExists(atPath: keysFile.path) else { return [:] }
+        if let data = try? Data(contentsOf: keysFile), let raw = try? JSONDecoder().decode([String: String].self, from: data) {
+            return raw.compactMapValues { Data(base64Encoded: $0) }
+        }
+        let aside = directory.appendingPathComponent("phone-keys.unreadable-\(Int(Date().timeIntervalSince1970)).json")
+        try? FileManager.default.moveItem(at: keysFile, to: aside)
+        return [:]
+    }
+
+    private func prepareDirectory() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // createDirectory leaves an existing folder as it is.
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+    }
+
+    private func save(_ keys: [String: Data]) throws {
+        try prepareDirectory()
+        let data = try JSONEncoder().encode(keys.mapValues { $0.base64EncodedString() })
+        let temp = directory.appendingPathComponent("phone-keys.\(UUID().uuidString).tmp")
+        guard FileManager.default.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        do {
+            _ = try FileManager.default.replaceItemAt(keysFile, withItemAt: temp)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keysFile.path)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+        // Keys are not copied to Time Machine or other backups.
+        var url = keysFile
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
+    }
+
+    public func key(for id: String) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return load()[id].flatMap { $0.count == 32 ? $0 : nil }
+    }
+
+    public func setKey(_ key: Data, for id: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        var all = load()
+        all[id] = key
+        try save(all)
+    }
+
+    @discardableResult public func removeKey(for id: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        var all = load()
+        guard all.removeValue(forKey: id) != nil else { return true }
+        return (try? save(all)) != nil
+    }
+
+    /// A marker that cannot be written still counts as closed for the rest of this run.
+    public var legacyImportClosed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return closedThisSession || FileManager.default.fileExists(atPath: markerFile.path)
+    }
+
+    public func closeLegacyImport() {
+        lock.lock(); defer { lock.unlock() }
+        closedThisSession = true
+        try? prepareDirectory()
+        FileManager.default.createFile(atPath: markerFile.path, contents: Data("1".utf8), attributes: [.posixPermissions: 0o600])
+    }
+}
+
+public enum DeviceKeyStores {
+    /// True when the running app is signed with a team identity (a release or a properly signed build), so its
+    /// Keychain access survives a rebuild. Ad-hoc and self-signed builds have none.
+    public static func runningBuildHasTeamIdentity() -> Bool {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        var info: CFDictionary?
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              let dict = info as? [String: Any] else { return false }
+        return (dict[kSecCodeInfoTeamIdentifier as String] as? String)?.isEmpty == false
+    }
+
+    /// The Keychain for a team-signed build, a private file otherwise. `PAIRVOX_KEYSTORE=keychain` forces the Keychain
+    /// in a build without a team identity; nothing can force the file in a team-signed build.
+    public static func automatic(directory: URL, environment: [String: String] = ProcessInfo.processInfo.environment,
+                                 hasTeamIdentity: () -> Bool = runningBuildHasTeamIdentity) -> (store: DeviceKeyStore, name: String) {
+        // A team-signed build always uses the Keychain: an environment variable set by another process must not be
+        // able to move its keys into a plain file.
+        if hasTeamIdentity() { return (KeychainDeviceKeyStore(), "keychain") }
+        return environment["PAIRVOX_KEYSTORE"] == "keychain" ? (KeychainDeviceKeyStore(), "keychain") : (FileDeviceKeyStore(directory: directory), "file")
+    }
+}

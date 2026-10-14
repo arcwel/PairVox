@@ -819,4 +819,126 @@ final class AuditRun4MarkerTests: XCTestCase {
         let active = await m.activeDevice("legacy-import-closed")
         XCTAssertNil(active, "ids that are not UUIDs are never phones")
     }
+
+    /// A Keychain permission prompt blocks the key store call. Creating the manager must not wait for it.
+    func testDeferredKeysDoNotBlockInit() async throws {
+        final class SlowKeys: DeviceKeyStore, @unchecked Sendable {
+            let gate = DispatchSemaphore(value: 0)
+            let id = UUID().uuidString
+            var reads = 0
+            var legacyImportClosed: Bool { true }
+            func closeLegacyImport() {}
+            func key(for id: String) -> Data? { reads += 1; gate.wait(); return Data(repeating: 7, count: 32) }
+            func setKey(_ key: Data, for id: String) throws {}
+            func removeKey(for id: String) -> Bool { true }
+        }
+        let keys = SlowKeys()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("paired-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let phone = PairedDevice(id: keys.id, name: "Phone", psk: Data(), createdAt: Date(), revoked: false)
+        try JSONEncoder().encode([phone]).write(to: url)
+
+        let started = Date()
+        let manager = PairingManager(storeURL: url, keys: keys, deferKeys: true)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "init waited for the key store")
+        XCTAssertEqual(keys.reads, 0)
+
+        let lookup = Task { await manager.activeDevice(keys.id) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        keys.gate.signal()
+        let device = await lookup.value
+        XCTAssertEqual(device?.psk, Data(repeating: 7, count: 32))
+        XCTAssertEqual(keys.reads, 1)
+    }
+}
+
+final class FileDeviceKeyStoreTests: XCTestCase {
+    private func folder() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent("pv-keys-\(UUID().uuidString)") }
+
+    func testKeysRoundTripAndSurviveANewInstance() throws {
+        let dir = folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        let key = Data(repeating: 9, count: 32)
+        try FileDeviceKeyStore(directory: dir).setKey(key, for: "a")
+        XCTAssertEqual(FileDeviceKeyStore(directory: dir).key(for: "a"), key)
+        XCTAssertNil(FileDeviceKeyStore(directory: dir).key(for: "b"))
+    }
+
+    func testFilesArePrivateAndRemovalDestroysTheKey() throws {
+        let dir = folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FileDeviceKeyStore(directory: dir)
+        try store.setKey(Data(repeating: 1, count: 32), for: "a")
+        let attrs = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("phone-keys.json").path)
+        XCTAssertEqual(attrs[.posixPermissions] as? Int, 0o600)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? Int, 0o700)
+        XCTAssertTrue(store.removeKey(for: "a"))
+        XCTAssertNil(store.key(for: "a"))
+        XCTAssertFalse(try String(contentsOf: dir.appendingPathComponent("phone-keys.json")).contains("AQEB"))
+    }
+
+    func testWrongSizedKeyIsNotReturnedAndMarkerPersists() throws {
+        let dir = folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FileDeviceKeyStore(directory: dir)
+        try store.setKey(Data(repeating: 1, count: 5), for: "short")
+        XCTAssertNil(store.key(for: "short"))
+        XCTAssertFalse(store.legacyImportClosed)
+        store.closeLegacyImport()
+        XCTAssertTrue(FileDeviceKeyStore(directory: dir).legacyImportClosed)
+    }
+
+    func testChoiceFollowsTheSigningIdentityAndTheOverride() {
+        let dir = folder()
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: [:], hasTeamIdentity: { false }).name, "file")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: [:], hasTeamIdentity: { true }).name, "keychain")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "file"], hasTeamIdentity: { true }).name, "keychain",
+                       "an environment variable must not move a team-signed build's keys into a file")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "file"], hasTeamIdentity: { false }).name, "file")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "keychain"], hasTeamIdentity: { false }).name, "keychain")
+    }
+
+    func testPairingWorksOnTheFileStoreAcrossARestart() async throws {
+        let dir = folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("paired-phones.json")
+        let keys = FileDeviceKeyStore(directory: dir)
+        let id = UUID().uuidString
+        try keys.setKey(Data(repeating: 5, count: 32), for: id)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try JSONEncoder().encode([PairedDevice(id: id, name: "Phone", psk: Data(), createdAt: Date(), revoked: false)]).write(to: url)
+        let manager = PairingManager(storeURL: url, keys: FileDeviceKeyStore(directory: dir), deferKeys: true)
+        let device = await manager.activeDevice(id)
+        XCTAssertEqual(device?.psk, Data(repeating: 5, count: 32))
+    }
+
+    func testDamagedKeyFileIsKeptAsideAndDoesNotEraseTheOtherPhonesSilently() throws {
+        let dir = folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        let store = FileDeviceKeyStore(directory: dir)
+        try store.setKey(Data(repeating: 1, count: 32), for: "a")
+        try Data("not json".utf8).write(to: dir.appendingPathComponent("phone-keys.json"))
+        try store.setKey(Data(repeating: 2, count: 32), for: "b")
+        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertTrue(names.contains { $0.hasPrefix("phone-keys.unreadable-") }, "the damaged file must be kept, not erased")
+        XCTAssertEqual(store.key(for: "b"), Data(repeating: 2, count: 32))
+    }
+
+    func testExistingLooseFolderIsTightenedAndStaleTempFilesAreRemoved() throws {
+        let dir = folder(); defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        let stale = dir.appendingPathComponent("phone-keys.\(UUID().uuidString).tmp")
+        try Data("secret".utf8).write(to: stale)
+        let store = FileDeviceKeyStore(directory: dir)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+        try store.setKey(Data(repeating: 3, count: 32), for: "a")
+        try store.setKey(Data(repeating: 4, count: 32), for: "a")   // the replace path
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? Int, 0o700)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent("phone-keys.json").path)[.posixPermissions] as? Int, 0o600)
+    }
+
+    func testClosingTheImportWindowHoldsEvenIfTheMarkerCannotBeWritten() throws {
+        let blocker = FileManager.default.temporaryDirectory.appendingPathComponent("pv-blocker-\(UUID().uuidString)")
+        try Data("a file, not a folder".utf8).write(to: blocker)
+        defer { try? FileManager.default.removeItem(at: blocker) }
+        let store = FileDeviceKeyStore(directory: blocker)
+        XCTAssertFalse(store.legacyImportClosed)
+        store.closeLegacyImport()
+        XCTAssertTrue(store.legacyImportClosed)
+    }
 }

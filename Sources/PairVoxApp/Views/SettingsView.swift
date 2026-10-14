@@ -328,6 +328,9 @@ private struct DiagnosticsSettings: View {
                 Toggle("Record the audio PairVox plays", isOn: $model.settings.recordPlaybackAudio)
                 Text("For tracking down crackle or static: saves what PairVox itself plays (not your microphone) to the log folder, up to 15 minutes per launch. It is audio of Claude's replies, so leave it off unless you are investigating a sound problem.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Save a recording when a screech is detected", isOn: $model.settings.captureFeedbackAudio)
+                Text("If your microphone hears a loud single tone while PairVox is speaking (a feedback howl), PairVox saves the last ten seconds of what the microphone heard and what PairVox played, so the sound can be listened to. Nothing is saved otherwise. The files can contain your voice; they stay in the log folder, readable only by you, and the newest ten are kept.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Share with someone reviewing a problem") {
                 HStack {

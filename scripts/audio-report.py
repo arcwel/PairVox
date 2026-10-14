@@ -39,7 +39,11 @@ def main():
     out = {
         "run": run,
         "route": (ev["input.defaultChanged"] or ev["engine.configChange"] or [{}])[-1],
+        "echoCancellation": ("on" if any(x.get("voiceProcessing") for x in stats) else
+                             "off (separate engines)" if ev["engine.started.separate"] else
+                             "off (" + "; ".join(x.get("reason") or "no reason logged" for x in ev["voiceProcessing.skipped"]) + ")" if ev["voiceProcessing.skipped"] else "off"),
         "voiceProcessingSkipped": [x.get("reason") for x in ev["voiceProcessing.skipped"]],
+        "feedbackCaptured": [{k: x.get(k) for k in ("frequencyHz", "agentSpeaking", "files")} for x in ev["feedback.captured"]],
         "utterances": len(t), "emptyTranscripts": len(empty),
         "decodeMsMedian": pct([x["decodeMs"] for x in t], 0.5), "decodeMsP90": pct([x["decodeMs"] for x in t], 0.9),
         "turns": len(turns), "interrupted": sum(1 for x in turns if x.get("outcome") == "interrupted"),
@@ -55,7 +59,10 @@ def main():
     if a.json: print(json.dumps(out, indent=1, default=str)); return
     print(f"run {run}")
     print(f"route: in={out['route'].get('in')} ({out['route'].get('inTransport')})  out={out['route'].get('out')} ({out['route'].get('outTransport')})")
-    print(f"voice processing skipped: {out['voiceProcessingSkipped'] or 'no'}")
+    print(f"echo cancellation: {out['echoCancellation']}")
+    for fb in out["feedbackCaptured"]:
+        print(f"HOWL captured: {fb['frequencyHz']} Hz, agent speaking: {fb['agentSpeaking']}, files: {fb['files']}")
+    if not out["feedbackCaptured"]: print("howls captured: none")
     print(f"speech: {out['utterances']} utterances, {out['emptyTranscripts']} empty; decode median {out['decodeMsMedian']} ms, p90 {out['decodeMsP90']} ms")
     print(f"turns: {out['turns']} ({out['interrupted']} interrupted); first audio median {out['firstAudioMsMedian']} ms, p90 {out['firstAudioMsP90']} ms")
     print(f"commands heard: {out['commands']}")

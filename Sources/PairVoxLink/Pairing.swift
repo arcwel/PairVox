@@ -72,7 +72,11 @@ public actor PairingManager {
 
     /// With a `keys` store, phone keys live there and the file holds only names and dates. A file written by an
     /// earlier version (keys inside) is converted on first load.
-    public init(storeURL: URL?, keys: DeviceKeyStore? = nil) {
+    ///
+    /// With `deferKeys`, the key store is not read in `init` but on the first use, off the caller's thread. The
+    /// Mac app uses this: the Keychain may show a permission prompt (a rebuilt app has a new code signature),
+    /// and a prompt during `init` would freeze the app at launch.
+    public init(storeURL: URL?, keys: DeviceKeyStore? = nil, deferKeys: Bool = false) {
         url = storeURL
         self.keys = keys
         devices = []
@@ -84,7 +88,17 @@ public actor PairingManager {
                 try? FileManager.default.moveItem(at: storeURL, to: aside)
             }
         }
+        if deferKeys, keys != nil { keysPending = true; return }
         if Self.attach(&devices, keys: keys) { try? Self.write(devices, to: storeURL, withKeysInFile: keys == nil) }
+    }
+
+    private var keysPending = false
+
+    /// Reads the key store once, before anything looks at a phone's key.
+    private func ensureKeys() {
+        guard keysPending else { return }
+        keysPending = false
+        if Self.attach(&devices, keys: keys) { try? Self.write(devices, to: url, withKeysInFile: keys == nil) }
     }
 
     /// Fills each device's key from the key store. A file written by an earlier version (keys inside) is converted
@@ -115,7 +129,7 @@ public actor PairingManager {
         return changed
     }
 
-    public func pairedDevices() -> [PairedDevice] { devices }
+    public func pairedDevices() -> [PairedDevice] { ensureKeys(); return devices }
 
     public func createOffer(kind: PairingOffer.Kind, now: Date = Date()) -> PairingOffer {
         let made: PairingOffer
@@ -140,6 +154,7 @@ public actor PairingManager {
     /// Wrong proofs are counted per peer (three and that peer is ignored) and overall (twelve burn the offer). The offer works once.
     public func redeem(_ request: PairRequest, peer: String = "unknown", now: Date = Date(),
                        accept: @Sendable (String) async -> Bool) async throws -> PairGrant {
+        ensureKeys()
         guard let current = offer else { throw PairingError.noOffer }
         guard now < current.expires else { offer = nil; throw PairingError.expired }
         // A peer that has already guessed wrong too often is ignored, without spending anyone else's chances.
@@ -175,6 +190,7 @@ public actor PairingManager {
     /// Marks a phone revoked. The block takes effect at once in memory even if saving fails; the error is thrown
     /// so the caller can tell the person that the block will not survive a restart.
     public func revoke(_ id: String) throws {
+        ensureKeys()
         guard let i = devices.firstIndex(where: { $0.id == id }) else { return }
         devices[i].revoked = true
         let destroyed = keys?.removeKey(for: id) ?? true   // the key is destroyed, not only flagged
@@ -183,7 +199,7 @@ public actor PairingManager {
         if !destroyed { throw PairingError.keyNotDestroyed }
     }
 
-    public func activeDevice(_ id: String) -> PairedDevice? { devices.first { $0.id == id && !$0.revoked && !$0.psk.isEmpty } }
+    public func activeDevice(_ id: String) -> PairedDevice? { ensureKeys(); return devices.first { $0.id == id && !$0.revoked && !$0.psk.isEmpty } }
 
     private func persist() throws { try Self.write(devices, to: url, withKeysInFile: keys == nil) }
 

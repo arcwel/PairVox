@@ -38,7 +38,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var pushToTalkActive = false
     /// A request explainer exists for the open project (questions about a request can be asked).
     @Published private(set) var advisorAvailable = false
-    @Published private(set) var hasAPIKey = KeychainStore.readAPIKey() != nil
+    @Published private(set) var hasAPIKey = KeychainStore.hasAPIKey()
     @Published private(set) var previewingVoice: String?
     /// False when no microphone is being captured (none plugged in, or permission not granted yet).
     /// PairVox still speaks, and typed messages still work.
@@ -93,6 +93,7 @@ final class AppModel: ObservableObject {
         stack.audio.separateEngines = loaded.separateAudioEngines
         stack.audio.voiceProcessingEnabled = loaded.echoCancellation
         stack.audio.recordPlayback = loaded.recordPlaybackAudio
+        stack.audio.captureFeedbackEvidence = loaded.captureFeedbackAudio
         voice = stack
         Self.configureDiagnostics(loaded)
         listeningMode = loaded.handsFree ? .handsFree : .pushToTalk
@@ -892,6 +893,7 @@ final class AppModel: ObservableObject {
             Self.configureDiagnostics(settings)
         }
         voice.audio.recordPlayback = settings.recordPlaybackAudio
+        voice.audio.captureFeedbackEvidence = settings.captureFeedbackAudio
         if old.echoCancellation != settings.echoCancellation {
             voice.audio.voiceProcessingEnabled = settings.echoCancellation
             restartAudioEngine()

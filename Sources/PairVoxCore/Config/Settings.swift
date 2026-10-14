@@ -132,6 +132,10 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var logConversationText = false
     /// Record the audio PairVox plays into the log folder, to diagnose crackle. Off by default.
     public var recordPlaybackAudio = false
+    /// Keep the last seconds of microphone and playback audio in memory and save them to the log folder when the
+    /// microphone hears a howl (acoustic feedback) while PairVox is speaking. On by default; nothing is written
+    /// unless a howl is detected.
+    public var captureFeedbackAudio = true
 
     public init() {}
 
@@ -224,6 +228,7 @@ public struct AppSettings: Sendable, Codable, Equatable {
         verboseLogging = (try? c.decode(Bool.self, forKey: .verboseLogging)) ?? d.verboseLogging
         logConversationText = (try? c.decode(Bool.self, forKey: .logConversationText)) ?? d.logConversationText
         recordPlaybackAudio = (try? c.decode(Bool.self, forKey: .recordPlaybackAudio)) ?? d.recordPlaybackAudio
+        captureFeedbackAudio = (try? c.decode(Bool.self, forKey: .captureFeedbackAudio)) ?? d.captureFeedbackAudio
     }
 }
 
