@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New app icon: an orange prompt chevron and three voice bars on near-black, flat colors, replacing the purple gradient. Eleven concepts and the generator are in `docs/icon-concepts/`; `scripts/make-app-icon.sh` turns any of them into the app's icon set.
 - Talking over PairVox no longer makes it repeat itself. Speech now pauses in place when you start talking. If what you said turns out to be nothing (a cough, noise, an echo of its own voice) it carries on from the exact spot instead of discarding the sentence and reading it again. A bare "okay" does the same. Anything you mean for PairVox still stops it, as before. A stuck transcription cannot leave it paused: speech resumes after 12 seconds.
 - While speech is paused, no new sentence is synthesized, so the transcriber has the GPU to itself. In the mic test, one decode took 4.8 s while speech was queued behind it.
 - Long replies are read in part. After 15 sentences (Settings, Speech, Long replies: read everything, 10, 15 or 25) the rest is held and PairVox says "That's the first part. Say details to hear the rest." The full text stays on screen.
