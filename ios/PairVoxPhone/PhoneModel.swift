@@ -94,6 +94,7 @@ final class PhoneModel: ObservableObject {
                     let c = try await withTimeout(15, closing: transport) { try await LinkClient.connect(over: transport, deviceID: creds.deviceID, psk: creds.psk) }
                     self.client = c
                     self.state = .connected
+                    await c.startKeepAlive()
                     delay = 1
                     while !Task.isCancelled { self.handle(try await c.receive()) }
                 } catch {

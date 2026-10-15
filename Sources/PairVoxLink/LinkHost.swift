@@ -46,8 +46,22 @@ public actor LinkHost {
         let transport: LinkTransport
         let deviceID: String
         var presented: [String: Date] = [:]
-        init(codec: FrameCodec, transport: LinkTransport, deviceID: String) { self.codec = codec; self.transport = transport; self.deviceID = deviceID }
+        /// What is waiting to go to this phone, and whether a writer is already sending it. A phone that stops reading
+        /// must only ever hold up itself, never `publish` and never the other phones.
+        var outbox: [Outgoing] = []
+        var writing = false
+        /// When anything last arrived from, and went to, this phone.
+        var lastHeard: Date
+        var lastSent: Date
+        /// True once the phone has pinged: only a phone that does has to keep talking. An older phone app that never
+        /// pings is not cut off for being quiet.
+        var keepAlive = false
+        init(codec: FrameCodec, transport: LinkTransport, deviceID: String, now: Date) {
+            self.codec = codec; self.transport = transport; self.deviceID = deviceID; lastHeard = now; lastSent = now
+        }
     }
+
+    struct Outgoing { var message: HostMessage; var presentedKeys: [String] }
 
     // MARK: Engine -> phone
 
@@ -66,7 +80,7 @@ public actor LinkHost {
         let text = LinkSnapshot.cut(rawText, 8192).text
         for (id, c) in connections {
             guard await pairing.activeDevice(c.deviceID) != nil else { await dropDevice(c.deviceID); continue }
-            try? await send(.speak(text), on: c, id: id)
+            enqueue(.speak(text), to: c, id: id)
         }
     }
 
@@ -80,9 +94,49 @@ public actor LinkHost {
     /// How long the Mac waits for a phone to confirm that it received its key.
     public static let ackTimeout: TimeInterval = 10
 
+    /// How the link notices a phone that has silently gone: while idle the Mac re-sends its latest state every
+    /// `heartbeat` seconds, and a phone that pings but then stays quiet for `idle` seconds is dropped.
+    public struct Timing: Sendable {
+        public var heartbeat: TimeInterval = 10
+        public var idle: TimeInterval = 35
+        public var tick: TimeInterval = 5
+        public init(heartbeat: TimeInterval = 10, idle: TimeInterval = 35, tick: TimeInterval = 5) { self.heartbeat = heartbeat; self.idle = idle; self.tick = tick }
+    }
+    private var timing = Timing()
+    private var watchdog: Task<Void, Never>?
+    public func setTiming(_ t: Timing) { timing = t }
+
+    private func startWatchdogIfNeeded() {
+        guard watchdog == nil else { return }
+        watchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let tick = await self.timing.tick
+                try? await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
+                if Task.isCancelled { return }
+                await self.watchdogTick()
+            }
+        }
+    }
+
+    private func watchdogTick() async {
+        let now = clock()
+        for (id, c) in connections {
+            if c.keepAlive, now.timeIntervalSince(c.lastHeard) > timing.idle {
+                connections[id] = nil
+                connectionsChanged(connections.count)
+                log("link.idleDropped")
+                await c.transport.close()
+            } else if let latest, now.timeIntervalSince(c.lastSent) >= timing.heartbeat, !c.writing {
+                await push(latest, to: c, id: id)
+            }
+        }
+    }
+
     /// Closes every connection and refuses new ones. Used when the link is switched off.
     public func shutdown() async {
         closed = true
+        watchdog?.cancel()
         let all = Array(connections.values)
         connections.removeAll()
         for c in all { await c.transport.close() }
@@ -114,14 +168,46 @@ public actor LinkHost {
         }
         out.request = out.request.map(aged)
         out.others = out.others.map(aged)
-        guard (try? await send(.snapshot(out), on: c, id: id)) != nil else { return }
-        // Only a request that really went out counts as shown on this phone.
-        for r in ([out.request].compactMap { $0 } + out.others) { c.presented[key(r.projectID, r.requestID)] = clock() }
+        // Only a request that really went out counts as shown on this phone: the writer marks it after the send.
+        let keys = ([out.request].compactMap { $0 } + out.others).map { key($0.projectID, $0.requestID) }
+        enqueue(.snapshot(out), presented: keys, to: c, id: id)
     }
 
-    private func send(_ m: HostMessage, on c: Connection, id: UUID) async throws {
-        do { try await c.transport.send(try c.codec.seal(try JSONEncoder().encode(m))) }
-        catch { connections[id] = nil; connectionsChanged(connections.count); await c.transport.close(); throw error }
+    /// How long one send to a phone may take before the phone is considered gone.
+    public static let sendTimeout: TimeInterval = 10
+    static let maxOutbox = 32
+
+    /// Queues a message for a phone and returns at once. A newer snapshot replaces an older one that has not gone out
+    /// yet, so a slow phone sees the latest state instead of a backlog.
+    private func enqueue(_ m: HostMessage, presented: [String] = [], to c: Connection, id: UUID) {
+        if case .snapshot = m { c.outbox.removeAll { if case .snapshot = $0.message { return true }; return false } }
+        c.outbox.append(Outgoing(message: m, presentedKeys: presented))
+        if c.outbox.count > Self.maxOutbox { c.outbox.removeFirst(c.outbox.count - Self.maxOutbox) }
+        guard !c.writing else { return }
+        c.writing = true
+        Task { await self.drain(c, id: id) }
+    }
+
+    /// The one writer for a phone: sends in order, and cuts a phone off that cannot take data.
+    private func drain(_ c: Connection, id: UUID) async {
+        while !c.outbox.isEmpty {
+            let item = c.outbox.removeFirst()
+            do {
+                let frame = try c.codec.seal(try JSONEncoder().encode(item.message))
+                let transport = c.transport
+                try await Self.within(Self.sendTimeout, transport) { try await transport.send(frame) }
+            } catch {
+                c.outbox.removeAll()
+                c.writing = false
+                if connections[id] != nil { connections[id] = nil; connectionsChanged(connections.count) }
+                log("link.slowPhoneDropped")
+                await c.transport.close()
+                return
+            }
+            c.lastSent = clock()
+            for k in item.presentedKeys { c.presented[k] = clock() }
+        }
+        c.writing = false
     }
 
     // MARK: Phone -> engine
@@ -198,7 +284,7 @@ public actor LinkHost {
             throw LinkError.authFailed
         }
         let keys = LinkKeys.derive(psk: device.psk, clientNonce: cNonce, hostNonce: hNonce, isHost: true)
-        let connection = Connection(codec: FrameCodec(keys: keys), transport: transport, deviceID: deviceID)
+        let connection = Connection(codec: FrameCodec(keys: keys), transport: transport, deviceID: deviceID, now: clock())
         guard !closed else { throw LinkError.closed }
         guard connections.values.filter({ $0.deviceID == deviceID }).count < Self.maxConnectionsPerDevice else { throw LinkError.closed }
         authenticated()
@@ -206,6 +292,7 @@ public actor LinkHost {
         connections[id] = connection
         connectionsChanged(connections.count)
         log("link.connected \(device.name)")
+        startWatchdogIfNeeded()
         if let latest { await push(latest, to: connection, id: id) }
         do {
             while true {
@@ -213,6 +300,7 @@ public actor LinkHost {
                 let frame = try await transport.receive()
                 guard await pairing.activeDevice(deviceID) != nil else { throw LinkError.revoked }
                 let message = try JSONDecoder().decode(ClientMessage.self, from: try connection.codec.open(frame))
+                connection.lastHeard = clock()
                 await handle(message, from: connection, id: id)
             }
         } catch {
@@ -224,7 +312,7 @@ public actor LinkHost {
 
     private func handle(_ message: ClientMessage, from c: Connection, id: UUID) async {
         switch message {
-        case .ping: break
+        case .ping: c.keepAlive = true
         case .interrupt: await engine.interrupt()
         case .submit(let text):
             guard !text.isEmpty, text.count <= 4000 else { return }
@@ -235,7 +323,7 @@ public actor LinkHost {
         case .approve(let requestID, let method, let auth, let projectID):
             if let reason = approvalRefusal(requestID, projectID, method, auth, c) {
                 log("link.approvalRefused \(reason)")
-                try? await send(.refused(reason), on: c, id: id)
+                enqueue(.refused(reason), to: c, id: id)
                 if let latest { await push(latest, to: c, id: id) }
                 return
             }

@@ -5,7 +5,7 @@
 // every pairing by itself, keeps its phones in memory only, listens on loopback only, and plays a scripted
 // conversation. It is a development tool: it is not part of the app and never talks to Claude.
 //
-//   pairvox-link-testhost [--port 47822]                      run the stand-in host
+//   pairvox-link-testhost [--port 47822] [--tick SECONDS]     run the stand-in host (--tick: publish a numbered snapshot every N seconds)
 //   pairvox-link-testhost --pair HOST:PORT --code 123456 [--name NAME] [--give-up SECONDS]
 //                                                             act as a phone: ask a Mac to pair, print the outcome
 // Prints a six-digit pairing code. After a phone connects it shows a permission request and prints what the phone does.
@@ -78,6 +78,18 @@ await host.setConnectionObserver { count in
 final class Published: @unchecked Sendable {
     private let lock = NSLock(); private var done = false
     func take() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+}
+
+if let tick = argument("--tick").flatMap(Double.init), tick > 0 {
+    Task {
+        var n = 0
+        while true {
+            try? await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
+            n += 1
+            await host.publish(LinkSnapshot(phase: "working", project: "scripted-project",
+                                            transcriptTail: [LinkEntry(id: n, role: "assistant", text: "Tick \(n)")], request: nil, queuedRequests: 0))
+        }
+    }
 }
 
 let listener = try TCPListener(port: port, allow: { host in

@@ -6,6 +6,8 @@ import Foundation
 public actor LinkClient {
     private let transport: LinkTransport
     private var codec: FrameCodec
+    private var lastReceived = Date()
+    private var keepAliveTask: Task<Void, Never>?
 
     private init(transport: LinkTransport, codec: FrameCodec) { self.transport = transport; self.codec = codec }
 
@@ -37,8 +39,29 @@ public actor LinkClient {
     }
 
     public func receive() async throws -> HostMessage {
-        try JSONDecoder().decode(HostMessage.self, from: try codec.open(try await transport.receive()))
+        let message = try JSONDecoder().decode(HostMessage.self, from: try codec.open(try await transport.receive()))
+        lastReceived = Date()
+        return message
     }
 
-    public func close() async { await transport.close() }
+    /// Pings the Mac every `interval` seconds, and closes the connection when nothing at all has come back for
+    /// `idleAfter` seconds. Without this, a link that dies silently (Tailscale dropping, the phone out of range) looks
+    /// connected until TCP finally gives up, which can take hours. Closing makes `receive()` throw, so the caller
+    /// reconnects. The Mac sends its latest state every few seconds while idle, so a healthy link is never quiet.
+    public func startKeepAlive(every interval: TimeInterval = 10, idleAfter: TimeInterval = 35) {
+        keepAliveTask?.cancel()
+        lastReceived = Date()
+        keepAliveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                guard !Task.isCancelled, let self else { return }
+                if await self.silence() > idleAfter { await self.transport.close(); return }
+                try? await self.send(.ping)
+            }
+        }
+    }
+
+    private func silence() -> TimeInterval { Date().timeIntervalSince(lastReceived) }
+
+    public func close() async { keepAliveTask?.cancel(); await transport.close() }
 }
