@@ -112,6 +112,18 @@ def brackets_chartreuse():
         art.append(bar(354 + i * 70, 512, 46, h, INK, r=5))
     return svg(CHARTREUSE, "\n".join(art), "PairVox 4c: Brackets on chartreuse")
 
+# iPhone icon from 2a: iOS draws its own rounded mask, so the icon is a full-bleed square and the art fills more of it.
+def prompt_ink_ios():
+    art = [CHEVRON.format(c=ORANGE)]
+    for i, h in enumerate([160, 340, 230]):
+        art.append(bar(494 + i * 100, 512, 60, h, PAPER, r=6))
+    group = '<g transform="translate(512 512) scale(1.22) translate(-512 -512)">' + "\n".join(art) + "</g>"
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img">\n'
+            f'<title>PairVox iPhone icon (2a)</title>\n<rect width="1024" height="1024" fill="{INK}"/>\n{group}\n</svg>\n')
+
+(OUT / "pairvox-icon-ios-2a.svg").write_text(prompt_ink_ios())
+print("wrote ios-2a")
+
 for name, make in [("1-pair", pair), ("2-prompt", prompt), ("3-vee", vee), ("4-brackets", brackets), ("5-quote", quote),
                    ("2a-prompt-ink", prompt_ink), ("2b-prompt-cursor", prompt_cursor), ("2c-prompt-ramp", prompt_ramp),
                    ("4a-brackets-orange", brackets_orange), ("4b-brackets-angle", brackets_angle), ("4c-brackets-chartreuse", brackets_chartreuse)]:
