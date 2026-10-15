@@ -43,3 +43,31 @@ final class DiagnosticsSettingsTests: XCTestCase {
         XCTAssertEqual(back, s)
     }
 }
+
+final class NewSettingsFieldTests: XCTestCase {
+    func testOldSettingsFilesGetTheDefaultsForTheNewFields() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(decoded.spokenReplyLimit, 15)
+        XCTAssertTrue(decoded.captureFeedbackAudio)
+    }
+
+    func testNewFieldsSurviveASaveAndLoad() throws {
+        var settings = AppSettings()
+        settings.spokenReplyLimit = 25
+        settings.captureFeedbackAudio = false
+        let back = try JSONDecoder().decode(AppSettings.self, from: try JSONEncoder().encode(settings))
+        XCTAssertEqual(back.spokenReplyLimit, 25)
+        XCTAssertFalse(back.captureFeedbackAudio)
+    }
+
+    func testANegativeReplyLimitIsTreatedAsNoLimit() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"spokenReplyLimit": -4}"#.utf8))
+        XCTAssertEqual(decoded.spokenReplyLimit, 0)
+    }
+
+    func testTheSettingsReachTheEngineConfiguration() {
+        var settings = AppSettings()
+        settings.spokenReplyLimit = 10
+        XCTAssertEqual(EngineConfiguration(settings: settings, project: nil).spokenReplyLimit, 10)
+    }
+}

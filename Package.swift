@@ -64,6 +64,7 @@ products += [
     .library(name: "PairVoxLink", targets: ["PairVoxLink"]),
     .library(name: "PairVoxLinkKit", targets: ["PairVoxLinkKit"]),
     .executable(name: "pairvox-link", targets: ["PairVoxLinkCLI"]),
+    .executable(name: "pairvox-link-testhost", targets: ["PairVoxLinkTestHost"]),
     // Dev convenience (`swift run pairvox-app`); the distributable app is built from project.yml.
     .executable(name: "pairvox-app", targets: ["PairVoxApp"]),
 ]
@@ -78,6 +79,12 @@ targets += [
         name: "PairVoxLink",
         dependencies: ["PairVoxCore", "PairVoxLinkKit"],
         path: "Sources/PairVoxLink",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .executableTarget(
+        name: "PairVoxLinkTestHost",
+        dependencies: ["PairVoxLink", "PairVoxLinkKit"],
+        path: "Sources/PairVoxLinkTestHost",
         swiftSettings: [.swiftLanguageMode(.v5)]
     ),
     .executableTarget(

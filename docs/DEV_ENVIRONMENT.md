@@ -60,3 +60,13 @@ To use the Keychain during development, sign with a stable identity (such as a D
 - **Known Limitations:** 
     - `separate-engines` mode does not include echo cancellation.
     - Bluetooth headsets in call mode operate at 16 kHz.
+
+## Testing the phone app without a phone (iOS Simulator)
+
+Verified 2026-10-14: pairing, the permission card, a Face ID approval and automatic reconnect, all in the simulator.
+
+- One-time: the iOS runtime (`xcodebuild -downloadPlatform iOS`, about 8 GB), then `xcrun simctl create "PairVox Test" com.apple.CoreSimulator.SimDeviceType.iPhone-17 com.apple.CoreSimulator.SimRuntime.iOS-27-0` and `xcrun simctl boot` it.
+- Build the app **ad-hoc signed**: `xcodebuild -project ios/PairVoxPhone.xcodeproj -scheme PairVoxPhone -destination "id=<udid>" -derivedDataPath .build/ios-sim CODE_SIGN_IDENTITY="-" build`. An unsigned build (`CODE_SIGNING_ALLOWED=NO`) cannot use the iOS Keychain, so the phone never saves its credentials.
+- A Mac's "Pair" click cannot be scripted while the screen is locked, and the test must not weaken that check. Use the stand-in host instead: stop the Mac app, run `.build/debug/pairvox-link-testhost --port 47821` (it prints a six-digit code, accepts the pairing by itself, listens on loopback only and plays a scripted permission request), pair the simulator with host `127.0.0.1`, then restart the Mac app with `scripts/restart-app.sh`.
+- Face ID in the simulator: `xcrun simctl spawn <udid> notifyutil -s com.apple.BiometricKit.enrollmentChanged 1 && notifyutil -p com.apple.BiometricKit.enrollmentChanged`, tap Allow, then `notifyutil -p com.apple.BiometricKit_Sim.pearl.match`.
+- Driving the simulator UI: screenshots from the control tool lag one action behind; `xcrun simctl io <udid> screenshot FILE` is current. The numeric keypad has no Done key and hides the Pair button, so scroll the form up twice (wait four seconds each time) before tapping Pair.

@@ -57,6 +57,7 @@ final class PhoneLinkModel: ObservableObject {
     private let log = DiagnosticLog.shared
 
     private var control: LinkCommandServer?
+    private let pairConfirmation = PairConfirmationPanel()
 
     /// Starts the private control socket that `pairvox-link` talks to.
     func startControl() {
@@ -183,11 +184,16 @@ final class PhoneLinkModel: ObservableObject {
             let made = await pairing.createOffer(kind: kind)
             offer = made
             offerExpiry = made.expires
-            offerTimer?.cancel()
-            offerTimer = Task {
-                try? await Task.sleep(nanoseconds: UInt64(PairingManager.offerLifetime * 1_000_000_000))
-                if !Task.isCancelled { offer = nil }
-            }
+            startOfferTimer()
+        }
+    }
+
+    /// Clears the on-screen offer when it expires, whoever started it (Settings or the command line).
+    private func startOfferTimer() {
+        offerTimer?.cancel()
+        offerTimer = Task {
+            try? await Task.sleep(nanoseconds: UInt64(PairingManager.offerLifetime * 1_000_000_000))
+            if !Task.isCancelled { offer = nil; offerExpiry = nil }
         }
     }
 
@@ -198,15 +204,7 @@ final class PhoneLinkModel: ObservableObject {
 
     /// Shown for every new pairing; nothing is granted unless the person at the Mac clicks Pair.
     private func askToAccept(_ name: String) async -> Bool {
-        let accepted: Bool = await MainActor.run {
-            NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.messageText = "Pair “\(name.prefix(64))” with this Mac?"
-            alert.informativeText = "This phone will be able to read your conversations and answer permission requests. The pairing code was started from \(offerSource). Only pair a phone that you are holding and whose name you recognize."
-            alert.addButton(withTitle: "Don’t Pair")
-            alert.addButton(withTitle: "Pair")
-            return alert.runModal() == .alertSecondButtonReturn
-        }
+        let accepted = await pairConfirmation.ask(name: name, source: offerSource)
         await refreshDevices()
         return accepted
     }
@@ -307,6 +305,7 @@ extension PhoneLinkModel {
         let made = await pairing.createOffer(kind: kind)
         offer = made; offerExpiry = made.expires
         offerSource = "the command line"
+        startOfferTimer()
         return made
     }
 

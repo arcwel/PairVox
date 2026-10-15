@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The "Pair this phone?" question is a regular window instead of a modal alert. The modal alert froze the whole app (phone link, command-line control, interface) until someone clicked. A newer request replaces one nobody answered, and an unanswered window withdraws itself after 150 seconds.
+- A pairing code created with `pairvox-link` now expires on screen like one created in Settings.
+- `pairvox-link-testhost`: a stand-in for the Mac side that auto-accepts pairing, for testing the phone app in the simulator. It is not part of the app.
 - New app icon: an orange prompt chevron and three voice bars on near-black, flat colors, replacing the purple gradient. Eleven concepts and the generator are in `docs/icon-concepts/`; `scripts/make-app-icon.sh` turns any of them into the app's icon set.
 - Talking over PairVox no longer makes it repeat itself. Speech now pauses in place when you start talking. If what you said turns out to be nothing (a cough, noise, an echo of its own voice) it carries on from the exact spot instead of discarding the sentence and reading it again. A bare "okay" does the same. Anything you mean for PairVox still stops it, as before. A stuck transcription cannot leave it paused: speech resumes after 12 seconds.
 - While speech is paused, no new sentence is synthesized, so the transcriber has the GPU to itself. In the mic test, one decode took 4.8 s while speech was queued behind it.

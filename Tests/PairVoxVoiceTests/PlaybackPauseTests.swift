@@ -60,15 +60,17 @@ final class LockedFlag: @unchecked Sendable {
 }
 
 final class PausedSynthesisTests: XCTestCase {
-    final class CountingSynth: SpeechSynthesizing, @unchecked Sendable {
+    /// A synthesizer that takes a quarter of a second per sentence, so a pause can land while one is being made.
+    final class SlowSynth: SpeechSynthesizing, @unchecked Sendable {
         let displayName = "test", isReady = true
         private let lock = NSLock()
         private var _calls = 0
         var calls: Int { lock.lock(); defer { lock.unlock() }; return _calls }
         func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
             lock.lock(); _calls += 1; lock.unlock()
+            try await Task.sleep(nanoseconds: 250_000_000)
             let format = AudioIO.playbackFormat
-            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(0.8 * format.sampleRate))!
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(0.6 * format.sampleRate))!
             buffer.frameLength = buffer.frameCapacity
             return buffer
         }
@@ -78,18 +80,16 @@ final class PausedSynthesisTests: XCTestCase {
         let audio = AudioIO()
         do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
         defer { audio.stop() }
-        let synth = CountingSynth()
+        let synth = SlowSynth()
         let output = VoiceSpeechOutput(audio: audio, synthesizer: synth)
         for i in 0..<8 { output.enqueue(Utterance(id: i, text: "Sentence number \(i).", kind: .prose)) }
-        try await Task.sleep(nanoseconds: 400_000_000)
+        try await Task.sleep(nanoseconds: 60_000_000)   // the first sentence is being synthesized
         output.pause()
-        try await Task.sleep(nanoseconds: 300_000_000)   // let any synthesis already running finish
-        let frozen = synth.calls
-        try await Task.sleep(nanoseconds: 900_000_000)
-        XCTAssertEqual(synth.calls, frozen, "the GPU is left to the transcriber while the user talks")
+        try await Task.sleep(nanoseconds: 1_300_000_000)   // room for several more, if the hold did not work
+        XCTAssertEqual(synth.calls, 1, "only the sentence already in progress may finish while the user is talking")
         output.resume()
         try await Task.sleep(nanoseconds: 1_200_000_000)
-        XCTAssertGreaterThan(synth.calls, frozen, "synthesis carries on after resume")
+        XCTAssertGreaterThan(synth.calls, 1, "synthesis carries on after resume")
         output.stopAll()
     }
 }
