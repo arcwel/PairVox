@@ -144,6 +144,8 @@ public final class VoiceInputController: @unchecked Sendable {
             // Without barge-in, ignore the mic while we're talking (half duplex).
             if playbackActive && !bargeInEnabled && !capturing { break }
             if capturing { utterance.append(contentsOf: frame) }
+            // Tell the detector how loud our own voice has been, so it can ignore the echo of it.
+            vad.playbackLevelDB = playbackActive ? audio.recentOutputLevelDB() : nil
             switch vad.process(frame) {
             case .speechStarted?:
                 capturing = true

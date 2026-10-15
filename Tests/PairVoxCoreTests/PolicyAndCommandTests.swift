@@ -217,3 +217,67 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(words.contains("Ignored"))
     }
 }
+
+final class VoiceActivityEchoTests: XCTestCase {
+    /// 30 ms of a steady tone at a level, standing in for speech or echo energy.
+    private func frame(_ db: Float) -> [Float] {
+        let amplitude = powf(10, db / 20) * 1.4142
+        return (0..<480).map { amplitude * sinf(Float($0) * 0.4) }
+    }
+
+    private func run(_ vad: inout VoiceActivityDetector, level: Float, frames: Int, playback: Float?) -> [VoiceActivityDetector.Event] {
+        var events: [VoiceActivityDetector.Event] = []
+        for _ in 0..<frames {
+            vad.playbackLevelDB = playback
+            if let e = vad.process(frame(level)) { events.append(e) }
+        }
+        return events
+    }
+
+    func testEchoAtTheLearnedCouplingIsNotSpeech() {
+        var vad = VoiceActivityDetector()
+        vad.playbackActive = true
+        // Quiet room first so the floor is low, then the speaker plays at -20 and is heard at -44 (24 dB down).
+        _ = run(&vad, level: -80, frames: 60, playback: nil)
+        let events = run(&vad, level: -44, frames: 200, playback: -20)
+        XCTAssertTrue(events.isEmpty, "echo must not start an utterance: \\(events)")
+    }
+
+    func testSpeechWellAboveTheEchoStillStarts() {
+        var vad = VoiceActivityDetector()
+        vad.playbackActive = true
+        _ = run(&vad, level: -80, frames: 60, playback: nil)
+        _ = run(&vad, level: -44, frames: 100, playback: -20)
+        let events = run(&vad, level: -28, frames: 20, playback: -20)
+        XCTAssertTrue(events.contains(.speechStarted))
+    }
+
+    func testWithoutAPlaybackLevelTheDetectorBehavesAsBefore() {
+        var vad = VoiceActivityDetector()
+        vad.playbackActive = true
+        _ = run(&vad, level: -80, frames: 60, playback: nil)
+        let events = run(&vad, level: -44, frames: 20, playback: nil)
+        XCTAssertTrue(events.contains(.speechStarted), "no reference, no echo gate")
+    }
+
+    func testTheCouplingEstimateFollowsTheEchoDownAndUpAgain() {
+        var vad = VoiceActivityDetector()
+        vad.playbackActive = true
+        _ = run(&vad, level: -80, frames: 60, playback: nil)
+        XCTAssertEqual(vad.couplingDB, VoiceActivityDetector.Config().initialCouplingDB, accuracy: 0.01)
+        _ = run(&vad, level: -52, frames: 400, playback: -20)   // heard 32 dB down
+        XCTAssertLessThan(vad.couplingDB, -26, "it should learn the real, lower coupling")
+        _ = run(&vad, level: -40, frames: 40, playback: -20)    // the headset moves: now 20 dB down
+        XCTAssertGreaterThan(vad.couplingDB, -26, "and rise quickly when the echo gets louder")
+    }
+
+    func testTheEchoGateEndsWhenPlaybackEnds() {
+        var vad = VoiceActivityDetector()
+        vad.playbackActive = true
+        _ = run(&vad, level: -80, frames: 60, playback: nil)
+        _ = run(&vad, level: -44, frames: 100, playback: -20)
+        vad.playbackActive = false
+        let events = run(&vad, level: -44, frames: 20, playback: nil)
+        XCTAssertTrue(events.contains(.speechStarted), "with the speaker silent the same sound is speech")
+    }
+}

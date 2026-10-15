@@ -209,6 +209,8 @@ final class OutputMeter: @unchecked Sendable {
     private let lock = NSLock()
     private var noisyRun = 0
     private var window = Window()
+    /// Per-buffer RMS of what was played, newest last, for `recentLevelDB`.
+    private var recent: [(time: DispatchTime, rms: Float)] = []
     private var lastBurstLog = DispatchTime(uptimeNanoseconds: 0)
     private let log = DiagnosticLog.shared
 
@@ -242,6 +244,10 @@ final class OutputMeter: @unchecked Sendable {
         lock.unlock()
 
         lock.lock()
+        if playing {
+            recent.append((.now(), rms))
+            if recent.count > 32 { recent.removeFirst(recent.count - 32) }
+        }
         window.buffers += 1
         if playing { window.playingBuffers += 1 }
         window.peak = max(window.peak, peak)
@@ -258,6 +264,16 @@ final class OutputMeter: @unchecked Sendable {
                     ["rms": .double(Double(rms)), "peak": .double(Double(peak)), "hfRatio": .double(Double(ratio)),
                      "clicks": .int(clicks), "corrupt": .bool(corrupt), "sustainedNoise": .bool(!corrupt && noiseLike)])
         }
+    }
+
+    /// The loudest buffer played in the last `seconds`, in dBFS; nil if nothing audible was played in that time. A
+    /// window, not the latest buffer, because the microphone hears the speaker a little later (a Bluetooth link adds
+    /// a few hundred milliseconds).
+    func recentLevelDB(seconds: Double = 0.5) -> Float? {
+        lock.lock(); defer { lock.unlock() }
+        let cutoff = DispatchTime.now().uptimeNanoseconds &- UInt64(seconds * 1_000_000_000)
+        let loudest = recent.filter { $0.time.uptimeNanoseconds >= cutoff }.map(\.rms).max() ?? 0
+        return loudest > 0.002 ? 20 * log10f(loudest) : nil
     }
 
     func takeWindow() -> Window {

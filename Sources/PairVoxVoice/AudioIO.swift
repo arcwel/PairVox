@@ -95,6 +95,8 @@ public final class AudioIO: @unchecked Sendable {
     private var inputWatcher: AudioRoute.DefaultInputWatcher?
     private let log = DiagnosticLog.shared
     private let meter = OutputMeter()
+    /// Tests replace the measured playback level with a simulated one.
+    var outputLevelOverride: (@Sendable () -> Float?)?
     private let recorder = PlaybackRecorder()
     private let feedback = FeedbackCatcher(directory: { DiagnosticLog.shared.directory }, runID: { DiagnosticLog.shared.runID })
     private let statsLock = NSLock()
@@ -693,6 +695,9 @@ public final class AudioIO: @unchecked Sendable {
     }
 
     // MARK: Diagnostics
+
+    /// How loud PairVox's own voice has been in the last half second (dBFS), for echo rejection; nil when silent.
+    public func recentOutputLevelDB() -> Float? { outputLevelOverride?() ?? meter.recentLevelDB() }
 
     private func noteCaptured(_ samples: UnsafeBufferPointer<Float>) {
         var sumSq: Float = 0, peak: Float = 0
