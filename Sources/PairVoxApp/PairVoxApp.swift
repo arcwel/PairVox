@@ -9,6 +9,7 @@ struct PairVoxApp: App {
     @StateObject private var model = AppModel()
 
     init() {
+        TTSProbe.runIfRequested()   // `--tts-probe`: a headless voice measurement, then exit
         // When launched as a bare executable (swift run / Xcode scheme) make sure
         // we still get a Dock icon, menu bar and key window.
         NSApplication.shared.setActivationPolicy(.regular)

@@ -94,6 +94,7 @@ final class AppModel: ObservableObject {
         stack.audio.voiceProcessingEnabled = loaded.echoCancellation
         stack.audio.recordPlayback = loaded.recordPlaybackAudio
         stack.audio.captureFeedbackEvidence = loaded.captureFeedbackAudio
+        VoiceSpeechOutput.setTrimSilenceByDefault(loaded.trimSentenceSilence)
         voice = stack
         Self.configureDiagnostics(loaded)
         listeningMode = loaded.handsFree ? .handsFree : .pushToTalk
@@ -894,6 +895,7 @@ final class AppModel: ObservableObject {
         }
         voice.audio.recordPlayback = settings.recordPlaybackAudio
         voice.audio.captureFeedbackEvidence = settings.captureFeedbackAudio
+        VoiceSpeechOutput.setTrimSilenceByDefault(settings.trimSentenceSilence)
         if old.echoCancellation != settings.echoCancellation {
             voice.audio.voiceProcessingEnabled = settings.echoCancellation
             restartAudioEngine()

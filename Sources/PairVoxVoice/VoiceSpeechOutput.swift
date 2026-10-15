@@ -23,6 +23,22 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
     private var generation = 0
     private var rate: Double = 1.0
     private var paused = false
+    private var enqueuedAt: [Int: DispatchTime] = [:]
+    /// The utterance being synthesized right now, and ones cancelled while that was happening.
+    private var synthesizingID: Int?
+    private var cancelledWhileSynthesizing: Set<Int> = []
+    /// Cut the silence a synthesizer puts around each sentence (see `AudioTrim`). Follows the app-wide setting unless a test
+    /// or caller sets it for this output.
+    public var trimSilence: Bool?
+    private static let defaultTrim = TrimDefault()
+    private final class TrimDefault: @unchecked Sendable {
+        private let lock = NSLock(); private var on = true
+        var value: Bool { get { lock.lock(); defer { lock.unlock() }; return on } set { lock.lock(); on = newValue; lock.unlock() } }
+    }
+    /// The app-wide setting ("Tighten pauses between sentences"): applies to every output from the next sentence on.
+    public static func setTrimSilenceByDefault(_ on: Bool) { defaultTrim.value = on }
+    /// Tool narration that waited longer than this to start is out of date and is skipped.
+    public var narrationMaxWaitSeconds: Double = 2.5
     /// How many utterances to synthesize ahead of the one playing.
     private let lookahead = 2
 
@@ -39,6 +55,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
 
     public func enqueue(_ utterance: Utterance) {
         lock.lock()
+        enqueuedAt[utterance.id] = .now()
         waiting.append(utterance)
         lock.unlock()
         pump()
@@ -49,6 +66,8 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         lock.lock()
         generation += 1
         paused = false
+        enqueuedAt.removeAll()
+        cancelledWhileSynthesizing.removeAll()
         let hadAudio = playing != nil
         var ids: [Int] = []
         if let p = playing { ids.append(p.id) }
@@ -66,6 +85,21 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
 
     public func setRate(_ rate: Double) {
         lock.lock(); self.rate = rate; lock.unlock()
+    }
+
+    @discardableResult
+    public func cancelQueued(_ ids: [Int]) -> [Int] {
+        lock.lock()
+        let wanted = Set(ids)
+        let removed = waiting.filter { wanted.contains($0.id) }.map(\.id) + ready.filter { wanted.contains($0.0.id) }.map(\.0.id)
+        waiting.removeAll { wanted.contains($0.id) }
+        ready.removeAll { wanted.contains($0.0.id) }
+        var all = removed
+        if let id = synthesizingID, wanted.contains(id) { cancelledWhileSynthesizing.insert(id); all.append(id) }
+        for id in all { enqueuedAt[id] = nil }
+        lock.unlock()
+        if !all.isEmpty { pump() }
+        return all
     }
 
     public var supportsPause: Bool { true }
@@ -106,6 +140,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         }
         synthesizing = true
         let next = waiting.removeFirst()
+        synthesizingID = next.id
         let gen = generation
         let r = rate
         lock.unlock()
@@ -157,6 +192,8 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
                 }
             }
             let synthMs = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
+            // Cut the synthesizer's own silence around the sentence (after the corruption checks above, which look at the raw audio).
+            if trimSilence ?? Self.defaultTrim.value, case .success(let raw) = result { result = .success(AudioTrim.trim(raw)) }
             switch result {
             case .success(let buffer):
                 let audioMs = Double(buffer.frameLength) / buffer.format.sampleRate * 1000
@@ -174,8 +211,10 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
             }
             let current = self.lock.withLock { () -> Bool in
                 self.synthesizing = false
+                self.synthesizingID = nil
                 let current = gen == self.generation
-                if current, case .success(let buffer) = result {
+                let cancelled = self.cancelledWhileSynthesizing.remove(next.id) != nil
+                if current, !cancelled, case .success(let buffer) = result {
                     self.ready.append((next, buffer))
                 }
                 return current
@@ -199,6 +238,16 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
             return
         }
         let (utterance, buffer) = ready.removeFirst()
+        let waited = enqueuedAt[utterance.id].map { Double(DispatchTime.now().uptimeNanoseconds - $0.uptimeNanoseconds) / 1_000_000_000 } ?? 0
+        enqueuedAt[utterance.id] = nil
+        if utterance.kind == .narration, waited > narrationMaxWaitSeconds {
+            // "Reading the file" said three seconds late is noise: skip it and go on with what matters.
+            lock.unlock()
+            log.log(.info, .tts, "narration.skipped", ["id": .int(utterance.id), "waitedMs": .int(Int(waited * 1000))])
+            continuation.yield(.finished(utterance.id))
+            pump()
+            return
+        }
         playing = utterance
         let gen = generation
         lock.unlock()

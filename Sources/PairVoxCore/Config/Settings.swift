@@ -111,6 +111,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var speechRate: Double = 1.0
     /// The most sentences read aloud in one reply; the rest is kept for "details". 0 reads everything.
     public var spokenReplyLimit = 15
+    /// Cut the silence the voice puts before and after each sentence, so replies start sooner and sentences follow each
+    /// other closely. On by default; turn it off if word endings sound clipped.
+    public var trimSentenceSilence = true
     public var bargeInEnabled = true
     public var handsFree = true
     public var endOfTurnSilence: Double = 0.65
@@ -220,6 +223,7 @@ public struct AppSettings: Sendable, Codable, Equatable {
         systemVoiceIdentifier = try? c.decode(String.self, forKey: .systemVoiceIdentifier)
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
         spokenReplyLimit = max(0, (try? c.decode(Int.self, forKey: .spokenReplyLimit)) ?? d.spokenReplyLimit)
+        trimSentenceSilence = (try? c.decode(Bool.self, forKey: .trimSentenceSilence)) ?? d.trimSentenceSilence
         bargeInEnabled = (try? c.decode(Bool.self, forKey: .bargeInEnabled)) ?? d.bargeInEnabled
         handsFree = (try? c.decode(Bool.self, forKey: .handsFree)) ?? d.handsFree
         endOfTurnSilence = (try? c.decode(Double.self, forKey: .endOfTurnSilence)) ?? d.endOfTurnSilence

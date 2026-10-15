@@ -67,6 +67,8 @@ public actor ConversationEngine {
     /// While the user is talking over us and the output can hold its place, speech is paused rather than discarded, so a
     /// noise, a cough or an echo that turns out to be nothing carries on from the same spot instead of replaying.
     private var pausedBargeIn = false
+    /// Utterances the speaker has begun playing, so a courtesy line that is still waiting can be told from one already out loud.
+    private var startedIDs: Set<Int> = []
     private var pausedRemaining: [Utterance] = []
     private var pauseToken = 0
     /// If no transcript arrives (a stuck decode), speech carries on after this long.
@@ -734,6 +736,7 @@ public actor ConversationEngine {
     }
 
     private func restart(resume: String?) {
+        startedIDs.removeAll()
         pausedBargeIn = false
         pausedRemaining = []
         output.stopAll()
@@ -1071,12 +1074,14 @@ public actor ConversationEngine {
         switch event {
         case .started(let id):
             log.log(.debug, .tts, "utterance.started", ["id": .int(id)])
+            startedIDs.insert(id)
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
             if measuredIDs.contains(id), latency.firstAudio == nil, let start = sendTimes.first {
                 latency.firstAudio = Date().timeIntervalSince(start)
             }
         case .finished(let id), .failed(let id, _):
+            startedIDs.remove(id)
             if case .failed(_, let why) = event {
                 log.log(.error, .tts, "utterance.failed", ["id": .int(id), "reason": .string(why)])
             } else {
@@ -1209,6 +1214,7 @@ public actor ConversationEngine {
             interruptedRemainder += utterances
             return
         }
+        dropCourtesyLinesBeforeSubstance(utterances)
         for u in utterances {
             queued[u.id] = u
             queueOrder.append(u.id)
@@ -1223,6 +1229,23 @@ public actor ConversationEngine {
             }
         }
         recomputePhase()
+    }
+
+    /// An acknowledgement ("On it.") or a line of tool narration that is still waiting to be spoken is only there to fill a
+    /// silence. Once the answer itself is ready it would just make the answer wait, so it is dropped. One that is already
+    /// being spoken finishes.
+    private func dropCourtesyLinesBeforeSubstance(_ incoming: [Utterance]) {
+        guard incoming.contains(where: { [.prose, .code, .prompt, .notice].contains($0.kind) }) else { return }
+        let courtesy = queueOrder.filter { id in
+            guard let u = queued[id], u.kind == .ack || u.kind == .narration else { return false }
+            return !startedIDs.contains(id)
+        }
+        guard !courtesy.isEmpty else { return }
+        let removed = Set(output.cancelQueued(courtesy))
+        guard !removed.isEmpty else { return }
+        for id in removed { queued[id] = nil }
+        queueOrder.removeAll { removed.contains($0) }
+        log.log(.info, .engine, "courtesy.dropped", ["count": .int(removed.count)])
     }
 
     /// The user made a noise but said nothing: carry on where we stopped.

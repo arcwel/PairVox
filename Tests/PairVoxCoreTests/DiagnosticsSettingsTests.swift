@@ -49,15 +49,18 @@ final class NewSettingsFieldTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
         XCTAssertEqual(decoded.spokenReplyLimit, 15)
         XCTAssertTrue(decoded.captureFeedbackAudio)
+        XCTAssertTrue(decoded.trimSentenceSilence, "old settings files get the faster behaviour")
     }
 
     func testNewFieldsSurviveASaveAndLoad() throws {
         var settings = AppSettings()
         settings.spokenReplyLimit = 25
         settings.captureFeedbackAudio = false
+        settings.trimSentenceSilence = false
         let back = try JSONDecoder().decode(AppSettings.self, from: try JSONEncoder().encode(settings))
         XCTAssertEqual(back.spokenReplyLimit, 25)
         XCTAssertFalse(back.captureFeedbackAudio)
+        XCTAssertFalse(back.trimSentenceSilence)
     }
 
     func testANegativeReplyLimitIsTreatedAsNoLimit() throws {

@@ -70,3 +70,30 @@ Verified 2026-10-14: pairing, the permission card, a Face ID approval and automa
 - A Mac's "Pair" click cannot be scripted while the screen is locked, and the test must not weaken that check. Use the stand-in host instead: stop the Mac app, run `.build/debug/pairvox-link-testhost --port 47821` (it prints a six-digit code, accepts the pairing by itself, listens on loopback only and plays a scripted permission request), pair the simulator with host `127.0.0.1`, then restart the Mac app with `scripts/restart-app.sh`.
 - Face ID in the simulator: `xcrun simctl spawn <udid> notifyutil -s com.apple.BiometricKit.enrollmentChanged 1 && notifyutil -p com.apple.BiometricKit.enrollmentChanged`, tap Allow, then `notifyutil -p com.apple.BiometricKit_Sim.pearl.match`.
 - Driving the simulator UI: screenshots from the control tool lag one action behind; `xcrun simctl io <udid> screenshot FILE` is current. The numeric keypad has no Done key and hides the Pair button, so scroll the form up twice (wait four seconds each time) before tapping Pair.
+
+## Replay harness (voice path without a microphone)
+
+`Tests/PairVoxVoiceTests/ReplayHarness.swift` pushes synthetic or recorded 16 kHz audio through the real `VoiceInputController` (energy VAD, then a transcriber, then the real `ConversationEngine`). A simulated speaker plays the agent's reply and leaks it into the microphone at a chosen level (`Scenario.leakDB`). Speech comes from macOS voices (`say`), so it needs a Mac but no network and no models. The transcriber is a stand-in that hears the scenario's own words when the audio overlaps a user's speech and nothing otherwise, so the tests measure the detector and the engine, not Whisper.
+
+- Run: `swift test --filter ReplayTests`. Exploration sweeps (they print tables of echo level against false triggers, and user level against barge-in) run with `PAIRVOX_REPLAY_EXPLORE=1 swift test --filter "ReplayExploreTests|ReplaySensitivityExplore"`.
+- Measured with it (2026-10-14): a user needs to be about 10 dB above the echo to barge in; echo alone triggered 7 false barge-ins in 14 s at 26 dB down and 14 at 20 dB down before the VAD knew the playback level, and none after. Noise bursts of -46 dBFS and louder over speech still pause it, and it resumes in place (pauses equal resumes, nothing is discarded, nothing reaches Claude).
+- Not covered: Whisper itself (a different test), real Bluetooth timing, and how a real room sounds.
+
+## Soak and fault tests
+
+- `PAIRVOX_SOAK_SECONDS=60 swift test --filter EngineSoakTests` runs thousands of mixed cycles (turns, long replies, barge-ins, approvals, interruptions, failures, new sessions) through a real engine with a fake Claude and speaker. Measured 2026-10-14: about 140 cycles per second, memory flat (+0.1 MB over 10 s), transcript capped at 600.
+- `swift test --filter "LinkSoakTests|LinkFaultTests"`: connection churn and hostile clients, a snapshot storm with a phone that never reads, and a freeze, resume and kill of the real stand-in host process (`.build/debug/pairvox-link-testhost` must be built first; the fault test skips without it).
+- Always run a test you suspect can hang with `timeout 120 swift test ...`: a hung test process (`xctest`) does not exit on its own.
+
+## Where the time goes between you speaking and hearing an answer
+
+Measured 2026-10-14 from 79 real voice turns, plus real probes (medians):
+
+| Stage | Time | Notes |
+|---|---|---|
+| Silence wait before PairVox decides you are done | 0.65 s | `endOfTurnSilence` setting |
+| Speech to text | 0.85 s | Whisper; scales with clip length |
+| Claude's first text | about 2.0 s | `scripts/claude-latency-probe.py`: 2.0 s as PairVox runs it, 1.8 s with all hooks off, 2.1 s with thinking off, 2.0 s on Haiku. Settings do not move it; it is the model and API. |
+| First sentence ready to first sound | was 0.8 s, now about 0.2 s | Kokoro's own silence (0.4 s before, 0.5 s after each sentence) and the acknowledgement holding the speaker. See `AudioTrim`. |
+
+`PairVox --tts-probe "text|text"` prints a voice's lengths and silences. `LatencyTimelineTests` replays one turn on the real engine and speaker and measures when the answer becomes audible.

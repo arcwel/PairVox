@@ -52,6 +52,14 @@ final class FakeOutput: SpeechOutput, @unchecked Sendable {
     var pausable = false
 
     var supportsPause: Bool { pausable }
+    var cancellable = false
+    @discardableResult func cancelQueued(_ ids: [Int]) -> [Int] {
+        guard cancellable else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        let removed = _queue.filter { ids.contains($0.id) }.map(\.id)
+        _queue.removeAll { ids.contains($0.id) }
+        return removed
+    }
     func pause() { lock.lock(); _pauses += 1; lock.unlock() }
     func resume() { lock.lock(); _resumes += 1; lock.unlock() }
     var pauses: Int { lock.lock(); defer { lock.unlock() }; return _pauses }
@@ -269,6 +277,28 @@ final class ConversationEngineTests: XCTestCase {
         await settle()
         output.playAll()
         XCTAssertTrue(output.played.map(\.text).contains("Six here."), "details reads what was held back")
+    }
+
+    // MARK: Courtesy lines never delay the answer
+
+    func testAQueuedAcknowledgementIsDroppedWhenTheAnswerIsReady() async {
+        output.cancellable = true
+        await engine.submit("Refactor the parser")
+        await settle(300)                                   // the acknowledgement is queued, not started
+        XCTAssertEqual(output.queue.first?.kind, .ack)
+        backend.emit(.textDelta("The parser has three stages. "))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.text), ["The parser has three stages."], "the answer must not wait behind \"On it.\"")
+    }
+
+    func testAnAcknowledgementAlreadyBeingSpokenFinishes() async {
+        output.cancellable = true
+        await engine.submit("Refactor the parser")
+        await settle(300)
+        output.playNext(finish: false)                      // it has started
+        backend.emit(.textDelta("The parser has three stages. "))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.kind), [.ack, .prose], "what is already out loud is not cut off")
     }
 
     func testBackchannelWhileWorkingDoesNotInterrupt() async {

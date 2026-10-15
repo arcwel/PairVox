@@ -203,6 +203,9 @@ private struct VoiceSettings: View {
                 }
                 Text("Longer replies are read in part. The full text stays on screen, and saying “details” reads the rest.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Tighten pauses between sentences", isOn: $model.settings.trimSentenceSilence)
+                Text("The voice leaves about half a second of silence around every sentence. Trimming it makes replies start about a second sooner and keeps sentences close together. Turn it off if word endings sound clipped.")
+                    .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Kokoro model") {
                     HStack {
                         Text(kokoroStatus).foregroundStyle(.secondary)

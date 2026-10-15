@@ -19,12 +19,16 @@ public protocol SpeechOutput: AnyObject, Sendable {
     var supportsPause: Bool { get }
     func pause()
     func resume()
+    /// Removes utterances that are queued but have not started playing. Returns the ids that were removed; one that is
+    /// already playing stays. An output that cannot do this returns nothing and the engine leaves the queue alone.
+    @discardableResult func cancelQueued(_ ids: [Int]) -> [Int]
 }
 
 public extension SpeechOutput {
     var supportsPause: Bool { false }
     func pause() {}
     func resume() {}
+    func cancelQueued(_ ids: [Int]) -> [Int] { [] }
 }
 
 public enum SpeechOutputEvent: Sendable, Equatable {

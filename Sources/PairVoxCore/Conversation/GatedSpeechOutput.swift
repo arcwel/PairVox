@@ -70,6 +70,14 @@ public final class GatedSpeechOutput: SpeechOutput, @unchecked Sendable {
     public func pause() { if isActive { inner.pause() } }
     public func resume() { if isActive { inner.resume() } }
 
+    @discardableResult
+    public func cancelQueued(_ ids: [Int]) -> [Int] {
+        guard isActive else { return [] }
+        let removed = inner.cancelQueued(ids)
+        lock.withLock { for id in removed { inFlight.remove(id) } }
+        return removed
+    }
+
     /// Turns this project's voice on or off. Turning it off cuts any playback and tells the engine everything it
     /// had queued is finished, so it does not wait for audio that will never come.
     public func setActive(_ on: Bool) {
