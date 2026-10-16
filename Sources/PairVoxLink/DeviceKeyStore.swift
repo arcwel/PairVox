@@ -176,26 +176,38 @@ public final class FileDeviceKeyStore: DeviceKeyStore, @unchecked Sendable {
 }
 
 public enum DeviceKeyStores {
-    /// True when the running app is signed with a team identity (a release or a properly signed build), so its
-    /// Keychain access survives a rebuild. Ad-hoc and self-signed builds have none.
-    public static func runningBuildHasTeamIdentity() -> Bool {
+    /// Certificate names that mean a build was signed for distribution, so its Keychain items belong to an identity
+    /// that does not change between builds. An `Apple Development` certificate is stable too, but a development
+    /// build keeps the key file: the day local builds moved to that certificate, the first one looked in the
+    /// Keychain, found no key for the paired phone and told it "revoked".
+    static let distributionCertificatePrefixes = ["Developer ID Application:", "Apple Distribution:", "3rd Party Mac Developer Application:"]
+
+    /// True when the running app is signed for distribution (see `distributionCertificatePrefixes`) with a team.
+    public static func runningBuildIsDistributionSigned() -> Bool {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
         var info: CFDictionary?
         guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let dict = info as? [String: Any] else { return false }
-        return (dict[kSecCodeInfoTeamIdentifier as String] as? String)?.isEmpty == false
+              let dict = info as? [String: Any],
+              (dict[kSecCodeInfoTeamIdentifier as String] as? String)?.isEmpty == false,
+              let leaf = (dict[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first,
+              let name = SecCertificateCopySubjectSummary(leaf) as String? else { return false }
+        return isDistributionCertificate(name)
     }
 
-    /// The Keychain for a team-signed build, a private file otherwise. `PAIRVOX_KEYSTORE=keychain` forces the Keychain
-    /// in a build without a team identity; nothing can force the file in a team-signed build.
+    static func isDistributionCertificate(_ subjectSummary: String) -> Bool {
+        distributionCertificatePrefixes.contains { subjectSummary.hasPrefix($0) }
+    }
+
+    /// The Keychain for a distribution-signed build, a private file otherwise. `PAIRVOX_KEYSTORE=keychain` forces the
+    /// Keychain in a development build; nothing can force the file in a distribution build.
     public static func automatic(directory: URL, environment: [String: String] = ProcessInfo.processInfo.environment,
-                                 hasTeamIdentity: () -> Bool = runningBuildHasTeamIdentity) -> (store: DeviceKeyStore, name: String) {
-        // A team-signed build always uses the Keychain: an environment variable set by another process must not be
+                                 isDistributionSigned: () -> Bool = runningBuildIsDistributionSigned) -> (store: DeviceKeyStore, name: String) {
+        // A distribution build always uses the Keychain: an environment variable set by another process must not be
         // able to move its keys into a plain file.
-        if hasTeamIdentity() { return (KeychainDeviceKeyStore(), "keychain") }
+        if isDistributionSigned() { return (KeychainDeviceKeyStore(), "keychain") }
         return environment["PAIRVOX_KEYSTORE"] == "keychain" ? (KeychainDeviceKeyStore(), "keychain") : (FileDeviceKeyStore(directory: directory), "file")
     }
 }

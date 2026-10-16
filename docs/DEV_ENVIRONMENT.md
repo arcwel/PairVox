@@ -14,18 +14,21 @@ The following tasks cannot be automated due to macOS security constraints:
 
 The following sections explain how to minimize these manual interruptions.
 
-## Keychain Prompts After Rebuilds
+## Permission and Keychain Prompts After Rebuilds
 
 **Cause**
-The Keychain identifies apps by their code signature. Local builds use ad-hoc signing, where the signature is a hash of that specific binary. Because every build produces a new hash, the Keychain treats every rebuild as a different application and prompts for permission to access existing items.
+macOS identifies an app by its code signature's designated requirement. An ad-hoc signature's requirement is the hash of that one binary, so every ad-hoc rebuild is a different application: the microphone permission is asked again (and `bootstrap` waits in that prompt until someone clicks: 31 s in one run, 3 hours in another, which looked like a hang), and the Keychain prompts for existing items.
+
+**Fix (2026-10-16)**
+`scripts/build-app.sh` signs with an `Apple Development` certificate when the keychain has one: it reads the team from the certificates and lets Xcode pick the valid copy (`security find-identity -v` also lists old copies Xcode rejects as "not valid for code signing", and `codesign` cannot tell them apart). The designated requirement is then `identifier "app.pairvox.PairVox" and ... certificate leaf = "Apple Development: ..."`, the same for every build, so the microphone grant is asked once per certificate and kept. Measured: first launch with the certificate asked once; the next rebuild registered its hotkeys at 1.2 s with no prompt. `SIGN_IDENTITY=-` forces ad-hoc. Builds signed this way run with the hardened runtime on macOS 27.0.1 (an earlier note that such a binary was killed at launch no longer holds).
 
 **Testing History (2026-10-14)**
 - Ad-hoc builds attempting to read items from previous builds: Resulted in read-blocking prompts.
-- Using a self-signed local identity (`DraftFi Local Signing`): Still resulted in prompts across different builds.
-- Using an `Apple Development` identity: The signed binary was killed at launch on this Mac, making it unusable for local development.
+- Using a self-signed local identity (`DraftFi Local Signing`): Still resulted in Keychain prompts across different builds.
+- Using an `Apple Development` identity: killed at launch that day; works on 2026-10-16 (see above).
 
 **PairVox Implementation**
-- **Key Storage:** In builds without a team identity, phone keys are stored in `~/Library/Application Support/PairVox/phone-keys.json` (file permissions `0600`, directory `0700`). Release builds with a team identity use the Keychain.
+- **Key Storage:** In development builds (ad-hoc, self-signed or `Apple Development`), phone keys are stored in `~/Library/Application Support/PairVox/phone-keys.json` (file permissions `0600`, directory `0700`). Builds signed for distribution (`Developer ID Application`, `Apple Distribution`) use the Keychain. The choice follows the certificate type, not the mere presence of a team: on 2026-10-16 the first `Apple Development`-signed local build looked in the Keychain, found no key for the paired phone and told it "revoked".
 - **Configuration:** Use `PAIRVOX_KEYSTORE=file|keychain` to override the storage method. The default logic is defined in `DeviceKeyStores.automatic`.
 - **Launch Behavior:** The app does not read the Keychain at launch. The saved-API-key check only requests attributes (which does not trigger a prompt); the actual key is only read when a session starts.
 - **Threading:** The key store is read on a background thread so that a Keychain prompt cannot freeze the main UI.
@@ -34,7 +37,7 @@ The Keychain identifies apps by their code signature. Local builds use ad-hoc si
 In development builds, any process running as the same user can read the phone keys, and can also plant a new phone: it can write a key and a matching list entry, which skips the Pair click. Release builds keep the Keychain's per-app protection and ignore `PAIRVOX_KEYSTORE=file`. The key file is excluded from backups.
 
 **Restoring Keychain usage in development**
-To use the Keychain during development, sign with a stable identity (such as a Developer ID certificate once a paid Apple team is available). When the build has a team identity, it will default to the Keychain automatically.
+Run a development build with `PAIRVOX_KEYSTORE=keychain`. Keys already in the file are not moved, so the phone has to pair again once. A distribution-signed build uses the Keychain and ignores the variable.
 
 ## Build and Restart
 
@@ -44,10 +47,14 @@ To use the Keychain during development, sign with a stable identity (such as a D
     - `--json`: Outputs the result in JSON format.
 - To compile without touching a running app, run `xcodegen generate` and then the `xcodebuild` line from `scripts/build-app.sh` (with its signing arguments): it writes to `.build/xcode`. The rest of that script replaces `dist/PairVox.app`.
 - `pairvox-link doctor`: Diagnoses the phone link, Tailscale status, userspace forwarder, and online device status.
+- `scripts/launch-check.sh [RUNID] [--json] [--max-seconds N]`: reads the newest launch from the log and exits 1 when the shortcuts registered later than N seconds (default 5: the launch waited, usually in a permission dialog) or the audio engine never started; the `engine.start.failed` error is printed when there is one. Run it after every restart.
 - **Repository Path:** `/Users/anthonyguidry/HD Projects/PairVox`.
 - **SwiftPM Cache Issues:** If SwiftPM reports errors regarding the module cache path, move `.build/arm64-apple-macosx/debug/ModuleCache` to a different location; this folder stores absolute paths from previous builds.
 
 ## Tests
+
+- **Audio tests that start the real engine** (`PlaybackPauseTests`, `LatencyTimelineTests`, `AudioStopDeadlockTests`, parts of `AudioTrimTests`) skip when the engine cannot start. On 2026-10-16 the first `engine.start()` in the test process failed now and then with `kAudioHardwareUnspecifiedError` ('what') from `kAUStartIO` while the same code in a fresh process, and the app, started at once; nothing in the unified log, not the sandbox, not the running app, not any one file (bisected). `startAudioOrSkip` in `Tests/PairVoxVoiceTests/AudioTestSupport.swift` tries three times, half a second apart, before it skips. A run whose audio tests all skipped verified nothing about audio: read the skip counts.
+- **A hung test run** (no output for minutes) was once a three-way deadlock in `AudioIO.stop()` between the output tap (`player.isPlaying`), the player queue and the engine lock, fixed by keeping the playing state in a flag the tap reads. `sample <pid>` on the `xctest` process shows where a hang is; `run-job status` reports the stall.
 
 - **Running Tests:** `swift test --build-system native`. 
     - *Note:* MLX produces "Class ... is implemented in both" noise. Filter output using: `grep -E "error:|failed|Executed"`.

@@ -3,7 +3,8 @@
 #
 # Builds dist/PairVox.app with Xcode (needed for MLX Metal shaders).
 #
-#   scripts/build-app.sh                       # ad-hoc signed, runs on this Mac
+#   scripts/build-app.sh                       # signed with the Mac's Apple Development certificate (ad-hoc without one)
+#   SIGN_IDENTITY=- scripts/build-app.sh       # ad-hoc: macOS asks for the microphone again after every such build
 #   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
 #   DEVELOPMENT_TEAM=TEAMID scripts/build-app.sh   # distributable build
 set -euo pipefail
@@ -19,15 +20,38 @@ fi
 command -v xcodegen >/dev/null || { echo "Install XcodeGen first: brew install xcodegen" >&2; exit 1; }
 
 CONFIG="${CONFIG:-Release}"
+# A local build needs a signature that stays the same from one build to the next: macOS keys the microphone
+# permission (and the Keychain) on the code identity, and an ad-hoc signature is the hash of that one binary, so
+# every ad-hoc rebuild is a new app that asks for the microphone again and sits in that prompt until someone
+# clicks. An Apple Development certificate (free account, from Xcode) gives a stable identity; it is picked up
+# when present. SIGN_IDENTITY="-" forces ad-hoc; see docs/DEV_ENVIRONMENT.md.
+AUTO_TEAM=""
+if [[ -z "${SIGN_IDENTITY:-}" ]]; then
+  # The keychain keeps old copies of the certificate that Xcode rejects as "not valid for code signing" (revoked
+  # when it issued the next one), and `codesign` cannot tell them apart. So the script only finds the team (the
+  # certificate's OU) and lets Xcode pick the valid copy, as it does for the iPhone build.
+  AUTO_TEAM=$(security find-certificate -a -c "Apple Development:" -p 2>/dev/null \
+    | awk '/BEGIN CERT/{c=""} {c=c $0 "\n"} /END CERT/{print c | "openssl x509 -noout -subject 2>/dev/null"; close("openssl x509 -noout -subject 2>/dev/null")}' \
+    | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' | sort | uniq -c | sort -rn | awk 'NR==1 {print $2}')
+  if [[ -n "$AUTO_TEAM" ]]; then
+    echo "Signing with the Apple Development certificate of team $AUTO_TEAM (set SIGN_IDENTITY=- for ad-hoc)."
+  else
+    echo "Warning: no Apple Development certificate; ad-hoc signing, and macOS will ask for the microphone again after this build." >&2
+  fi
+fi
 IDENTITY="${SIGN_IDENTITY:--}"
-TEAM="${DEVELOPMENT_TEAM:-}"
+TEAM="${DEVELOPMENT_TEAM:-$AUTO_TEAM}"
 VERSION_ARGS=()
 [[ -n "${MARKETING_VERSION:-}" ]] && VERSION_ARGS+=(MARKETING_VERSION="$MARKETING_VERSION")
+# CFBundleVersion: updates are ordered by it, so a release passes a number that grows (scripts/release.sh does).
+[[ -n "${BUILD_NUMBER:-}" ]] && VERSION_ARGS+=(CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
 
 xcodegen generate --quiet
 
 SIGN_ARGS=(CODE_SIGN_IDENTITY="$IDENTITY")
-if [[ "$IDENTITY" == "-" ]]; then
+if [[ -n "$AUTO_TEAM" ]]; then
+  SIGN_ARGS=(CODE_SIGN_IDENTITY="Apple Development" CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM")
+elif [[ "$IDENTITY" == "-" ]]; then
   # Hardened runtime enforces library validation, and ad-hoc signatures have no Team ID,
   # so dyld refuses the embedded frameworks. Local builds run without it.
   SIGN_ARGS+=(ENABLE_HARDENED_RUNTIME=NO)

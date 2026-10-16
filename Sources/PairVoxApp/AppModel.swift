@@ -44,6 +44,7 @@ final class AppModel: ObservableObject {
     /// PairVox still speaks, and typed messages still work.
     @Published private(set) var microphoneAvailable = true
     @Published var showSetup = false
+    private var microphoneRequestInFlight = false
     /// Bumped by the "Type Instead of Talking" shortcut; the control bar focuses its text field.
     @Published private(set) var focusInputTick = 0
     @Published var errorMessage: String?
@@ -120,9 +121,6 @@ final class AppModel: ObservableObject {
 
         loginEnvironment = await ShellEnvironment.loginShellEnvironment()
         await refreshSetup()
-
-        if VoicePermissions.microphone == .notDetermined { _ = await VoicePermissions.requestMicrophone() }
-        if VoicePermissions.speechRecognition == .notDetermined { _ = await VoicePermissions.requestSpeechRecognition() }
         setup.microphone = VoicePermissions.microphone
         setup.speechRecognition = VoicePermissions.speechRecognition
         notifier.requestAuthorization()
@@ -134,7 +132,10 @@ final class AppModel: ObservableObject {
             log.log(ok ? .info : .warning, .hotkey, "register", ["key": .string(key.display), "action": .string(key.title), "ok": .bool(ok)])
         }
 
-        if !setup.claudeFound || setup.microphone != .granted {
+        // A microphone that has not been asked for yet is asked by `startAudio`, after playback is up. Waiting for
+        // the answer here kept replies, hotkeys, the projects and the phone link behind a dialog nobody was at the
+        // Mac to click (measured: 31 s in one launch, three hours in another).
+        if !setup.claudeFound || setup.microphone == .denied {
             showSetup = true
         } else {
             // Bring back the projects that were open, with the one the user was in last.
@@ -142,6 +143,10 @@ final class AppModel: ObservableObject {
             let others = settings.openProjects.filter { $0 != last && FileManager.default.fileExists(atPath: $0) }
             for path in others.prefix(Self.maxOpenProjects - 1) { openProject(URL(fileURLWithPath: path)) }
             if let last, FileManager.default.fileExists(atPath: last) { openProject(URL(fileURLWithPath: last)) }
+        }
+        if VoicePermissions.speechRecognition == .notDetermined {
+            _ = await VoicePermissions.requestSpeechRecognition()
+            setup.speechRecognition = VoicePermissions.speechRecognition
         }
     }
 
@@ -413,9 +418,13 @@ final class AppModel: ObservableObject {
             startAudioEngine(capture: false)
         case .notDetermined:
             startAudioEngine(capture: false)
+            // Every project reopened at launch comes through here; one request, then one restart with capture.
+            guard !microphoneRequestInFlight else { return }
+            microphoneRequestInFlight = true
             Task {
                 _ = await VoicePermissions.requestMicrophone()
                 await refreshSetup()
+                microphoneRequestInFlight = false
                 startAudio()
             }
         case .granted:
@@ -442,6 +451,8 @@ final class AppModel: ObservableObject {
                 }
             }
         } catch {
+            // The banner is gone with the window; the log is what a report is read from.
+            log.log(.error, .audio, "engine.start.failed", ["capture": .bool(capture), "error": .string(error.localizedDescription)])
             setup.audioError = error.localizedDescription
             errorMessage = "Audio unavailable: \(error.localizedDescription)"
         }

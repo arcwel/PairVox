@@ -1048,12 +1048,24 @@ final class FileDeviceKeyStoreTests: XCTestCase {
 
     func testChoiceFollowsTheSigningIdentityAndTheOverride() {
         let dir = folder()
-        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: [:], hasTeamIdentity: { false }).name, "file")
-        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: [:], hasTeamIdentity: { true }).name, "keychain")
-        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "file"], hasTeamIdentity: { true }).name, "keychain",
-                       "an environment variable must not move a team-signed build's keys into a file")
-        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "file"], hasTeamIdentity: { false }).name, "file")
-        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "keychain"], hasTeamIdentity: { false }).name, "keychain")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: [:], isDistributionSigned: { false }).name, "file")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: [:], isDistributionSigned: { true }).name, "keychain")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "file"], isDistributionSigned: { true }).name, "keychain",
+                       "an environment variable must not move a distribution build's keys into a file")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "file"], isDistributionSigned: { false }).name, "file")
+        XCTAssertEqual(DeviceKeyStores.automatic(directory: dir, environment: ["PAIRVOX_KEYSTORE": "keychain"], isDistributionSigned: { false }).name, "keychain")
+    }
+
+    func testOnlyADistributionCertificateMovesTheKeysToTheKeychain() {
+        // A development certificate is stable across builds too, but a development build keeps the key file so a
+        // change of signing never makes the Mac tell a paired phone it was revoked.
+        XCTAssertTrue(DeviceKeyStores.isDistributionCertificate("Developer ID Application: Anthony Guidry (JXNXBK2X9V)"))
+        XCTAssertTrue(DeviceKeyStores.isDistributionCertificate("Apple Distribution: Anthony Guidry (JXNXBK2X9V)"))
+        XCTAssertTrue(DeviceKeyStores.isDistributionCertificate("3rd Party Mac Developer Application: Anthony Guidry (JXNXBK2X9V)"))
+        XCTAssertFalse(DeviceKeyStores.isDistributionCertificate("Apple Development: Anthony Guidry (MW9S7Y9BYY)"))
+        XCTAssertFalse(DeviceKeyStores.isDistributionCertificate("DraftFi Local Signing"))
+        // The real check, on the test host (Apple's xctest runner or an unsigned build): never "distribution".
+        XCTAssertFalse(DeviceKeyStores.runningBuildIsDistributionSigned())
     }
 
     func testPairingWorksOnTheFileStoreAcrossARestart() async throws {
