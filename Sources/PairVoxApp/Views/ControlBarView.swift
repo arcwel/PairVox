@@ -51,7 +51,7 @@ struct ControlBarView: View {
 
             HStack {
                 TextField("Type instead of talking… (\(Shortcuts.of(.focusInput).display))", text: $typed)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(RoundedFieldStyle())
                     .focused($typingFocused)
                     .onChange(of: model.focusInputTick) { typingFocused = true }
                     .onSubmit {

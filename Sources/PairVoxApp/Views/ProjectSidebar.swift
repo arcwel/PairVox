@@ -66,7 +66,7 @@ private struct ProjectRow: View {
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .foregroundStyle(status.strong ? Color.white : Color.secondary)
                             .background(status.strong ? Color.orange : Color.clear)
-                            .overlay(Rectangle().stroke(status.strong ? Color.orange : Color.secondary.opacity(0.5), lineWidth: 1))
+                            .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(status.strong ? Color.orange : Color.secondary.opacity(0.5), lineWidth: 1))
                     }
                 }
                 Text((session.path as NSString).abbreviatingWithTildeInPath)
@@ -126,7 +126,7 @@ struct CatchUpBar: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor))
-        .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Color.primary.opacity(0.5), lineWidth: 1))
     }
 }
 
@@ -163,7 +163,7 @@ struct ApprovalTray: View {
                         }.controlSize(.small)
                     }
                     .padding(8)
-                    .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Color.primary.opacity(0.5), lineWidth: 1))
                 }
             }
             .padding(10)

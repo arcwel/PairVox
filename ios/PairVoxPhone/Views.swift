@@ -183,8 +183,9 @@ struct SessionView: View {
             Spacer()
             if let n = model.notice { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
-        .background(color.opacity(0.15))
+        .padding(.vertical, PhoneStyle.fieldVertical).padding(.horizontal, PhoneStyle.fieldHorizontal)
+        .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: PhoneStyle.radius))
+        .padding(.horizontal, 14).padding(.top, 12)
         .accessibilityElement(children: .combine)
     }
 
@@ -243,7 +244,7 @@ struct SessionView: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-            TextField("Type to Claude", text: $model.typed).textFieldStyle(.roundedBorder).submitLabel(.send).onSubmit { model.submitTyped() }
+            TextField("Type to Claude", text: $model.typed).textFieldStyle(PhoneFieldStyle()).submitLabel(.send).onSubmit { model.submitTyped() }
             Button { model.toggleListening() } label: {
                 Image(systemName: model.listening ? "stop.circle.fill" : "mic.circle.fill").font(.system(size: 38))
                     .symbolEffect(.pulse, isActive: model.listening)
@@ -369,12 +370,16 @@ struct RequestCard: View {
                     Button(request.risk == "high" ? "Allow (confirm)" : "Allow") { model.approveByTap(request) }.buttonStyle(.borderedProminent)
                 }
             }
-            .disabled(model.state != .connected)
+            .controlSize(.large)
+            .buttonBorderShape(.roundedRectangle(radius: PhoneStyle.radius))
+            .padding(.top, 4)
+            .disabled(!model.isLive)
         }
-        .padding(12)
-        .opacity(model.state == .connected ? 1 : 0.6)
-        .overlay(Rectangle().stroke(Color.primary, lineWidth: 1))
-        .padding(.horizontal, 12)
+        .padding(.vertical, PhoneStyle.bannerVertical).padding(.horizontal, PhoneStyle.bannerHorizontal)
+        .opacity(model.isLive ? 1 : 0.6)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: PhoneStyle.cardRadius))
+        .overlay(RoundedRectangle(cornerRadius: PhoneStyle.cardRadius).stroke(request.risk == "high" ? Color.red.opacity(0.6) : Color.primary.opacity(0.35), lineWidth: 1))
+        .padding(.horizontal, 14)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(request.risk) risk request: \(request.summary)")
     }
@@ -436,12 +441,36 @@ struct OtherProjectsCard: View {
                         Spacer()
                         if r.truncated { Text("Approve on the Mac").font(.caption2).foregroundStyle(.secondary) }
                         else { Button(r.risk == "high" ? "Allow (confirm)" : "Allow") { model.approveByTap(r) }.buttonStyle(.bordered) }
-                    }.controlSize(.small)
+                    }.controlSize(.small).disabled(!model.isLive)
                 }
-                .padding(8)
-                .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+                .padding(.vertical, 10).padding(.horizontal, 12)
+                .opacity(model.isLive ? 1 : 0.6)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: PhoneStyle.innerRadius))
+                .overlay(RoundedRectangle(cornerRadius: PhoneStyle.innerRadius).stroke(Color.primary.opacity(0.35), lineWidth: 1))
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .padding(.horizontal, 14).padding(.vertical, 6)
+    }
+}
+
+/// The shapes the phone's cards, banners and fields share (variant B of the 2026-10-16 review).
+enum PhoneStyle {
+    static let radius: CGFloat = 12
+    static let cardRadius: CGFloat = 14
+    static let innerRadius: CGFloat = 8
+    static let fieldVertical: CGFloat = 10
+    static let fieldHorizontal: CGFloat = 16
+    static let bannerVertical: CGFloat = 16
+    static let bannerHorizontal: CGFloat = 18
+}
+
+/// A text field with room around the text, so a sentence does not sit against the left edge.
+struct PhoneFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .padding(.vertical, PhoneStyle.fieldVertical)
+            .padding(.horizontal, PhoneStyle.fieldHorizontal)
+            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: PhoneStyle.radius))
+            .overlay(RoundedRectangle(cornerRadius: PhoneStyle.radius).stroke(Color.primary.opacity(0.18), lineWidth: 1))
     }
 }

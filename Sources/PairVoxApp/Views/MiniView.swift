@@ -79,6 +79,6 @@ struct MiniView: View {
         .padding(10)
         .frame(width: 330)
         .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(Rectangle().stroke(Color.primary.opacity(0.45), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Color.primary.opacity(0.45), lineWidth: 1))
     }
 }

@@ -38,9 +38,6 @@ struct GrantOfferBanner: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .overlay(Rectangle().stroke(Color.primary.opacity(0.5), lineWidth: 1))
+        .banner()
     }
 }

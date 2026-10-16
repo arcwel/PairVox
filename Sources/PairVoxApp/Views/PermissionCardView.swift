@@ -72,9 +72,10 @@ struct PermissionCardView: View {
                 }
             }
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(riskColor.opacity(0.5)))
+        .padding(.vertical, Style.bannerVertical)
+        .padding(.horizontal, Style.bannerHorizontal)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Style.radius))
+        .overlay(RoundedRectangle(cornerRadius: Style.radius).stroke(riskColor.opacity(0.5)))
     }
 
     @ViewBuilder private var explanationView: some View {
@@ -91,8 +92,8 @@ struct PermissionCardView: View {
                 Text(text).font(.callout).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
-            .overlay(Rectangle().stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Color.secondary.opacity(0.4), lineWidth: 1))
         default:
             EmptyView()
         }
@@ -113,7 +114,7 @@ struct PermissionCardView: View {
             }
             HStack {
                 TextField("Ask about this request, or say it out loud…", text: $question)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(RoundedFieldStyle())
                     .onSubmit(sendQuestion)
                 Button("Ask", action: sendQuestion)
                     .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -146,8 +147,8 @@ struct PermissionCardView: View {
                 }
                 .disabled(count == 0)
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
-            .overlay(Rectangle().stroke(Color.secondary.opacity(0.4), lineWidth: 1))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Color.secondary.opacity(0.4), lineWidth: 1))
         }
     }
 
