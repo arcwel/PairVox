@@ -274,8 +274,17 @@ public actor LinkHost {
 
     private func serveSession(_ version: Int, _ deviceID: String, _ cNonce: Data, on transport: LinkTransport,
                               authenticated: () -> Void) async throws {
-        guard version == Handshake.version else { throw LinkError.versionMismatch }
-        guard let device = await pairing.activeDevice(deviceID) else { log("link.unknownDevice"); throw LinkError.unknownDevice }
+        // A phone the Mac will not talk to is told why before the close, so it can stop retrying and say so.
+        func refuse(_ reason: HandshakeRefusal.Reason) async throws -> Never {
+            try? await transport.send(try JSONEncoder().encode(HandshakeRefusal(reason)))
+            log("link.\(reason.rawValue)")
+            throw HandshakeRefusal(reason).error
+        }
+        guard version == Handshake.version else { try await refuse(.versionMismatch) }
+        guard let device = await pairing.activeDevice(deviceID) else {
+            let known = await pairing.pairedDevices().contains { $0.id == deviceID }
+            try await refuse(known ? .revoked : .unknownDevice)
+        }
         let hNonce = Handshake.randomBytes(16)
         let challenge = Challenge(hostNonce: hNonce, proof: Handshake.proof(psk: device.psk, role: "host", first: cNonce, second: hNonce, deviceID: deviceID, version: version))
         try await transport.send(try JSONEncoder().encode(challenge))

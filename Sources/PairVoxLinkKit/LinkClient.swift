@@ -15,7 +15,9 @@ public actor LinkClient {
     public static func connect(over transport: LinkTransport, deviceID: String, psk: Data) async throws -> LinkClient {
         let cNonce = Handshake.randomBytes(16)
         try await transport.send(try JSONEncoder().encode(Opening.hello(version: Handshake.version, deviceID: deviceID, clientNonce: cNonce)))
-        let challenge = try JSONDecoder().decode(Challenge.self, from: try await transport.receive())
+        let reply = try await transport.receive()
+        if let refusal = try? JSONDecoder().decode(HandshakeRefusal.self, from: reply) { throw refusal.error }
+        let challenge = try JSONDecoder().decode(Challenge.self, from: reply)
         guard Handshake.constantTimeEqual(challenge.proof, Handshake.proof(psk: psk, role: "host", first: cNonce, second: challenge.hostNonce, deviceID: deviceID)) else {
             throw LinkError.authFailed
         }
@@ -56,12 +58,24 @@ public actor LinkClient {
                 try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 guard !Task.isCancelled, let self else { return }
                 if await self.silence() > idleAfter { await self.transport.close(); return }
-                try? await self.send(.ping)
+                // A ping that cannot be sent means the connection is already gone; say so now rather than at idleAfter.
+                do { try await self.send(.ping) } catch { await self.transport.close(); return }
             }
         }
     }
 
-    private func silence() -> TimeInterval { Date().timeIntervalSince(lastReceived) }
+    /// Seconds since the Mac last sent anything.
+    public func silence() -> TimeInterval { Date().timeIntervalSince(lastReceived) }
+
+    /// Closes the link when the Mac has been quiet for longer than `seconds`, so `receive()` throws and the caller
+    /// reconnects. Meant for the moment the app comes back to the front: iOS freezes a suspended app's sockets, and
+    /// the Mac, which sends something every few seconds while idle, has long since dropped it. Returns true if closed.
+    @discardableResult
+    public func closeIfSilent(longerThan seconds: TimeInterval) async -> Bool {
+        guard silence() > seconds else { return false }
+        await transport.close()
+        return true
+    }
 
     public func close() async { keepAliveTask?.cancel(); await transport.close() }
 }

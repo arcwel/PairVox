@@ -14,6 +14,7 @@ struct RootView: View {
         }
         .tint(.orange)
         .overlay { if scenePhase != .active { Color(.systemBackground).ignoresSafeArea().overlay(Text("PairVox").font(.title2)) } }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { model.becameActive() } }
     }
 }
 
@@ -107,6 +108,7 @@ struct SessionView: View {
         case .connected: return model.snapshot?.phase ?? "connected"
         case .connecting: return "connecting"
         case .failed: return "offline"
+        case .refused: return "not paired on the Mac"
         case .unpaired: return "not paired"
         }
     }
@@ -117,6 +119,10 @@ struct SessionView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     if case .failed(let why) = model.state { Text(why).font(.footnote).foregroundStyle(.red) }
+                    if case .refused(let why) = model.state {
+                        Text(why).font(.footnote).foregroundStyle(.red)
+                        Button("Forget this Mac and pair again") { model.forget() }.font(.footnote.weight(.semibold))
+                    }
                     ForEach(model.snapshot?.transcriptTail ?? [], id: \.id) { entry in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(entry.role.uppercased()).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)

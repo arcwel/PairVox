@@ -131,11 +131,21 @@ final class LinkTests: XCTestCase {
         XCTAssertEqual(s.request?.requestID, "R1")
         // Wrong key
         do { _ = try await connect(host, id, Handshake.randomBytes(32)); XCTFail() } catch {}
-        // Unknown device
-        do { _ = try await connect(host, UUID().uuidString, psk); XCTFail() } catch {}
+        // Unknown device: the phone is told, so it can stop retrying and ask to be paired again.
+        do { _ = try await connect(host, UUID().uuidString, psk); XCTFail() } catch { XCTAssertEqual(error as? LinkError, .unknownDevice) }
         // Revoked
         try await pairing.revoke(id)
-        do { _ = try await connect(host, id, psk); XCTFail() } catch {}
+        do { _ = try await connect(host, id, psk); XCTFail() } catch { XCTAssertEqual(error as? LinkError, .revoked) }
+    }
+
+    func testAPhoneSpeakingAnotherProtocolVersionIsToldSo() async throws {
+        let (host, _, pairing, _) = await makeHost()
+        let (id, _) = try await pairPhone(host, pairing)
+        let (a, b) = MemoryTransport.pair()
+        Task { await host.serve(b) }
+        try await a.send(try JSONEncoder().encode(Opening.hello(version: Handshake.version + 1, deviceID: id, clientNonce: Handshake.randomBytes(16))))
+        let refusal = try JSONDecoder().decode(HandshakeRefusal.self, from: try await a.receive())
+        XCTAssertEqual(refusal.refused, .versionMismatch)
     }
 
     func testRevokedWhileConnectedIsCutOffAtTheNextMessage() async throws {

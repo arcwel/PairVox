@@ -42,6 +42,25 @@ Remove it later with the same command ending `serve --tcp=47821 off`. Connection
 3. PairVox on the Mac: **Settings → Phone**, switch on "Let paired phones connect over Tailscale". It shows "This Mac: 100.x.y.z:47821".
 4. PairVox on the phone: scan the QR code or type the Mac's address, port and six-digit code. Click **Pair** in the dialog on the Mac.
 
+## Staying connected
+
+Pairing is a one-time process. Once paired, the phone reconnects automatically using saved credentials. You only need to pair again if you remove the Mac from the phone or the phone from the Mac.
+
+Because of how iOS manages background processes, a live connection cannot remain permanent. When the phone app moves to the background (e.g., you switch to another app or lock the screen), iOS freezes the app within seconds, which terminates the network connection. The Mac will drop the phone connection after 35 seconds of inactivity. 
+
+To manage these interruptions, the phone app performs the following actions:
+
+- **Reconnection on foregrounding:** When you bring the app to the front, it immediately checks the link. If the Mac has been silent for over 15 seconds, the phone drops the inactive link and establishes a new one.
+- **Network changes:** If the network changes (such as switching from Wi-Fi to cellular) or Tailscale reconnects, the app reconnects immediately rather than waiting for the next retry interval.
+- **Retry logic:** If a connection attempt fails while the app is open, the app retries after 1, 2, 4, 8, and 15 seconds.
+- **Dead link detection:** If a ping cannot be sent, the app closes the link immediately. This allows a dead connection to be replaced within 10 seconds while the app is in the foreground.
+
+To maintain a reliable connection, configure your devices as follows:
+
+- **On the phone:** In the Tailscale app, enable **VPN On Demand** so the tunnel reconnects automatically after sleep or a network change.
+- **On the Mac:** Ensure the Mac stays awake with Tailscale and PairVox running. Set your System Settings > Energy to prevent sleep (or use the `caffeinate` command) and ensure Tailscale is set to start at login.
+- **During use:** Keep the PairVox app in the foreground on your phone when you expect a request. This application does not currently support push notifications for approvals while the phone is locked.
+
 ## Troubleshooting
 
 | What you see | Likely cause | Fix |

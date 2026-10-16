@@ -2,13 +2,19 @@
 
 import Foundation
 import LocalAuthentication
+import Network
 import PairVoxLinkKit
 import SwiftUI
 
 /// Everything the phone knows about its link to the Mac. The Mac decides what may be approved; this only asks.
 @MainActor
 final class PhoneModel: ObservableObject {
-    enum LinkState: Equatable { case unpaired, connecting, connected, failed(String) }
+    enum LinkState: Equatable {
+        case unpaired, connecting, connected, failed(String)
+        /// The Mac refused this phone (not paired there any more, or a different app version). Nothing retries
+        /// until the app comes to the front again; the owner pairs again or updates.
+        case refused(String)
+    }
 
     @Published private(set) var state: LinkState = .unpaired
     @Published private(set) var snapshot: LinkSnapshot?
@@ -19,16 +25,24 @@ final class PhoneModel: ObservableObject {
 
     private let store: CredentialStore
     private var client: LinkClient?
-    private var loop: Task<Void, Never>?
-    private var generation = 0
+    private var reconnector: Reconnector<LinkClient>?
+    private let paths = NWPathMonitor()
+    private var pathWasUsable = true
+    private var pathInterfaces: [String] = []
     private let speaker = PhoneSpeaker()
     private let recognizer = PhoneRecognizer()
     private var lastSpokenRequest: String?
+
+    /// How long the Mac may be quiet before a link is taken as dead when the app comes back to the front. The Mac
+    /// sends its state every 10 s while idle, so this is well past one missed beat and well short of the 35 s
+    /// keep-alive limit.
+    static let staleAfterForeground: TimeInterval = 15
 
     init(store: CredentialStore = KeychainCredentialStore()) {
         self.store = store
         recognizer.onPartial = { [weak self] text in Task { @MainActor in self?.heard = text } }
         recognizer.onFinal = { [weak self] text in Task { @MainActor in self?.finishedListening(text) } }
+        watchNetwork()
         if store.load() != nil { connect() }
     }
 
@@ -71,43 +85,107 @@ final class PhoneModel: ObservableObject {
     }
 
     func forget() {
-        generation += 1
-        loop?.cancel(); loop = nil
-        Task { await client?.close() }
+        let r = reconnector; reconnector = nil; client = nil
+        Task { await r?.stop() }
         store.delete(); snapshot = nil; state = .unpaired
     }
 
     // MARK: Connection
 
+    /// Connects with the saved credentials and keeps reconnecting: after a failure with a wait that doubles from
+    /// 1 s to 15 s, and at once when the app comes to the front or the network comes back.
     func connect() {
-        loop?.cancel()
-        generation += 1
-        let mine = generation
         guard let creds = store.load() else { state = .unpaired; return }
-        loop = Task { [weak self] in
-            var delay: UInt64 = 1
-            while !Task.isCancelled {
-                guard let self, self.generation == mine else { return }
-                self.state = .connecting
+        let old = reconnector
+        Task { await old?.stop() }
+        let r = Reconnector<LinkClient>(
+            connect: {
                 let transport = TCPTransport.connect(host: creds.host, port: creds.port)
                 do {
                     let c = try await withTimeout(15, closing: transport) { try await LinkClient.connect(over: transport, deviceID: creds.deviceID, psk: creds.psk) }
-                    self.client = c
-                    self.state = .connected
                     await c.startKeepAlive()
-                    delay = 1
-                    while !Task.isCancelled { self.handle(try await c.receive()) }
+                    return c
                 } catch {
                     await transport.close()
-                    if Task.isCancelled || self.generation != mine { return }
-                    self.client = nil
-                    print("connect failed: \(error)")
-                    self.state = .failed("Can't reach your Mac (\(Self.describe(error)); network: \(transport.stateDescription)). Is Tailscale on, is the phone link switched on in PairVox, and do your tailnet rules allow this phone to reach the Mac on port \(creds.port)?")
+                    throw ConnectFailure(error: error, network: transport.stateDescription)
                 }
-                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
-                delay = min(delay * 2, 15)
+            },
+            run: { [weak self] c in
+                await MainActor.run { self?.client = c }
+                while true { let m = try await c.receive(); await MainActor.run { self?.handle(m) } }
+            },
+            check: { c in await c.closeIfSilent(longerThan: Self.staleAfterForeground) },
+            close: { [weak self] c in
+                await MainActor.run { if self?.client === c { self?.client = nil } }
+                await c.close()
+            },
+            isPermanent: { Self.refusal(in: $0) != nil },
+            onState: { [weak self] s in Task { @MainActor in self?.linkStateChanged(s, port: creds.port) } })
+        reconnector = r
+        Task { await r.start() }
+    }
+
+    /// A failed attempt with the Network framework's last word on the connection.
+    struct ConnectFailure: Error { let error: Error; let network: String }
+
+    /// The Mac's refusal inside a connect failure, if that is what it was.
+    nonisolated static func refusal(in error: Error) -> LinkError? {
+        let inner = (error as? ConnectFailure)?.error ?? error
+        switch inner as? LinkError {
+        case .unknownDevice, .revoked, .versionMismatch: return inner as? LinkError
+        default: return nil
+        }
+    }
+
+    static func refusalText(_ reason: LinkError) -> String {
+        switch reason {
+        case .unknownDevice: return "Your Mac no longer knows this phone. Forget this Mac from the menu, then pair again with a new code."
+        case .revoked: return "This phone was removed on the Mac. Forget this Mac from the menu, then pair again with a new code."
+        default: return "This phone app and PairVox on the Mac are different versions. Update the older one."
+        }
+    }
+
+    private func linkStateChanged(_ s: Reconnector<LinkClient>.State, port: UInt16) {
+        switch s {
+        case .stopped: break
+        case .connecting: state = .connecting
+        case .connected: state = .connected
+        case .gaveUp(let error):
+            print("link refused: \(error)")
+            snapshot = nil
+            state = .refused(Self.refusalText(Self.refusal(in: error) ?? .closed))
+        case .waiting(_, let error):
+            print("link ended: \(error)")
+            let (reason, network) = (error as? ConnectFailure).map { (Self.describe($0.error), $0.network) } ?? (Self.describe(error), "connection lost")
+            state = .failed("Can't reach your Mac (\(reason); network: \(network)). Is Tailscale on, is the phone link switched on in PairVox, and do your tailnet rules allow this phone to reach the Mac on port \(port)?")
+        }
+    }
+
+    /// The app came back to the front: a link that died while iOS had the app suspended is replaced now.
+    func becameActive() { nudge() }
+
+    private func nudge() {
+        guard let r = reconnector else { return }
+        Task { await r.nudge() }
+    }
+
+    /// Reconnects as soon as a usable network path appears (Tailscale reconnecting, Wi-Fi returning) rather than
+    /// at the end of the current wait.
+    private func watchNetwork() {
+        paths.pathUpdateHandler = { [weak self] path in
+            let usable = path.status == .satisfied
+            let interfaces = path.availableInterfaces.map(\.name).sorted()
+            Task { @MainActor in
+                guard let self else { return }
+                // Back from nothing, or a different set of interfaces (Wi-Fi to cellular, the VPN tunnel appearing):
+                // either way the old connection is suspect and a new one may now work.
+                let changed = usable && (!self.pathWasUsable || interfaces != self.pathInterfaces)
+                self.pathWasUsable = usable
+                self.pathInterfaces = interfaces
+                if changed { self.nudge() }
             }
         }
+        paths.start(queue: DispatchQueue(label: "pairvox.phone.paths"))
     }
 
     private func handle(_ message: HostMessage) {
@@ -203,18 +281,5 @@ final class PhoneModel: ObservableObject {
             if ["no", "deny", "don't", "stop", "cancel"].contains(words.joined(separator: " ")) { deny(request); return }
         }
         send(.submit(spoken))
-    }
-}
-
-func withTimeout<T: Sendable>(_ seconds: Double, closing transport: LinkTransport, _ body: @escaping @Sendable () async throws -> T) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await body() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            await transport.close()   // a read that is stuck only ends when its connection does
-            throw LinkError.closed
-        }
-        defer { group.cancelAll() }
-        return try await group.next()!
     }
 }
