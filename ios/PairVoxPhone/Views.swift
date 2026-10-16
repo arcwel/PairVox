@@ -44,7 +44,9 @@ struct PairView: View {
     @FocusState private var focus: Field?
     private enum Field { case host, port, code }
 
-    private var canPair: Bool { !host.isEmpty && code.count == 6 && UInt16(port) != nil }
+    /// The Mac's port is never below 1024 (the QR code is refused below that too).
+    private var portNumber: UInt16? { UInt16(port).flatMap { $0 >= 1024 ? $0 : nil } }
+    private var canPair: Bool { !host.isEmpty && code.count == 6 && portNumber != nil && model.state != .connecting }
 
     var body: some View {
         NavigationStack {
@@ -75,7 +77,7 @@ struct PairView: View {
             .navigationTitle("Pair with your Mac")
             .toolbar {
                 // The number pad has no Done key and covers the Pair button: both live up here as well.
-                ToolbarItem(placement: .topBarTrailing) { Button("Pair") { pair() }.disabled(!canPair || model.state == .connecting) }
+                ToolbarItem(placement: .topBarTrailing) { Button("Pair") { pair() }.disabled(!canPair) }
                 // Leading, so the floating pill does not sit over the focused field's clear button.
                 ToolbarItemGroup(placement: .keyboard) {
                     Button("Done") { focus = nil }
@@ -90,15 +92,19 @@ struct PairView: View {
             .sheet(isPresented: $scanning) {
                 QRScanner { text in
                     scanning = false
-                    if let payload = PairingPayload.parse(text) { pending = payload }
-                    else { scanProblem = "That QR code is not a PairVox code for a Mac on your Tailscale network." }
+                    // A dialog or alert raised while the scanner sheet is still dismissing is silently dropped, so
+                    // the result waits for the sheet to finish leaving.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if let payload = PairingPayload.parse(text) { pending = payload }
+                        else { scanProblem = "That QR code is not a PairVox code for a Mac on your Tailscale network." }
+                    }
                 }
             }
         }
     }
 
     private func pair() {
-        guard let p = UInt16(port), code.count == 6 else { return }
+        guard canPair, let p = portNumber else { return }
         focus = nil
         Task { await model.pair(host: host.trimmingCharacters(in: .whitespaces), port: p, material: PairingClient.material(fromCode: code)) }
     }
@@ -298,7 +304,7 @@ struct ConnectionSheet: View {
                     ClearableField("Mac's Tailscale address", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.numbersAndPunctuation)
                     ClearableField("Port", text: $port).keyboardType(.numberPad)
                     Button("Save and reconnect") {
-                        guard let p = UInt16(port) else { problem = "The port must be a number between 1 and 65535."; return }
+                        guard let p = UInt16(port), p >= 1024 else { problem = "The port must be a number between 1024 and 65535."; return }
                         problem = model.changeAddress(host: host.trimmingCharacters(in: .whitespaces), port: p)
                         if problem == nil { dismiss() }
                     }
@@ -350,11 +356,12 @@ struct RequestCard: View {
             if request.needsScreen {
                 Label("Claude Code says this one needs you at the Mac's screen.", systemImage: "display").font(.footnote).foregroundStyle(.secondary)
             }
-            if model.state != .connected {
-                Text("Shown as it was when the link dropped. Answer it once the Mac is back.").font(.footnote).foregroundStyle(.secondary)
+            if !model.isLive {
+                Text(model.state == .connected ? "Checking with your Mac…" : "Shown as it was when the link dropped. Answer it once the Mac is back.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
-            HStack {
-                Button("Deny", role: .destructive) { model.deny(request) }
+            HStack(spacing: 10) {
+                Button("Deny", role: .destructive) { model.deny(request) }.buttonStyle(.bordered)
                 Spacer()
                 if request.truncated {
                     Label("Too long to show here: approve it on the Mac, or deny it from here.", systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
