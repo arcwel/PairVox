@@ -29,6 +29,8 @@ final class PhoneSpeaker: NSObject {
 final class PhoneRecognizer {
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
+    /// Microphone level 0...1 for every buffer while listening, for a meter.
+    var onLevel: ((Double) -> Void)?
 
     private let recognizer = SFSpeechRecognizer()
     private let engine = AVAudioEngine()
@@ -54,7 +56,10 @@ final class PhoneRecognizer {
         request = req
         let input = engine.inputNode
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { [weak req] buffer, _ in req?.append(buffer) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { [weak req, weak self] buffer, _ in
+            req?.append(buffer)
+            if let onLevel = self?.onLevel { onLevel(Self.level(of: buffer)) }
+        }
         engine.prepare()
         try engine.start()
         last = ""
@@ -76,6 +81,16 @@ final class PhoneRecognizer {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
+    }
+
+    /// RMS of the buffer, mapped from -50 dBFS (silence) to 0 dBFS onto 0...1.
+    static func level(of buffer: AVAudioPCMBuffer) -> Double {
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+        var sum: Float = 0
+        for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }
+        let rms = (sum / Float(buffer.frameLength)).squareRoot()
+        let db = 20 * log10(max(rms, 1e-6))
+        return Double(min(max((db + 50) / 50, 0), 1))
     }
 
     private func finish() {

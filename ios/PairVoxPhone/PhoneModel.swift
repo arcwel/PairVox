@@ -22,6 +22,17 @@ final class PhoneModel: ObservableObject {
     @Published var typed = ""
     @Published private(set) var heard = ""
     @Published private(set) var listening = false
+    /// The technical reason behind a `.failed` state (the framework's error and the connection's last state), for
+    /// a "Details" disclosure; the state itself carries the plain sentence.
+    @Published private(set) var failureDetail: String?
+    /// The last plain failure sentence, kept through the retries (the state flips to `.connecting` for each
+    /// attempt) until a connection succeeds, so the screen explains what is wrong instead of only "connecting".
+    @Published private(set) var lastFailure: String?
+    /// What was just said, kept on screen for a few seconds after it was sent so it can be read.
+    @Published private(set) var lastHeard: String?
+    /// Microphone level while listening, 0...1.
+    @Published private(set) var inputLevel: Double = 0
+    private var heardClear: Task<Void, Never>?
 
     private let store: CredentialStore
     private var client: LinkClient?
@@ -42,6 +53,7 @@ final class PhoneModel: ObservableObject {
         self.store = store
         recognizer.onPartial = { [weak self] text in Task { @MainActor in self?.heard = text } }
         recognizer.onFinal = { [weak self] text in Task { @MainActor in self?.finishedListening(text) } }
+        recognizer.onLevel = { [weak self] level in Task { @MainActor in self?.inputLevel = level } }
         watchNetwork()
         if store.load() != nil { connect() }
     }
@@ -68,26 +80,89 @@ final class PhoneModel: ObservableObject {
             let creds = try await withTimeout(Self.pairingTimeout, closing: transport) { try await LinkClient.pair(over: transport, material: material, deviceName: name) }
             await transport.close()
             notice = nil
-            try store.save(PhoneCredentials(deviceID: creds.deviceID, psk: creds.psk, host: host, port: port))
+            do {
+                try store.save(PhoneCredentials(deviceID: creds.deviceID, psk: creds.psk, host: host, port: port))
+            } catch {
+                // The Mac now trusts a key this phone could not keep: say so plainly, since the next pairing needs a
+                // new code and the Mac will list a phone that never connects.
+                failureDetail = Self.describe(error)
+                state = .failed("The Mac accepted the pairing, but this phone could not save the key (Keychain error \((error as NSError).code)). Unlock the phone and pair again with a new code; remove the orphaned entry in Settings → Phone on the Mac.")
+                return
+            }
+            failureDetail = nil
             connect()
         } catch {
             await transport.close()
             notice = nil
             print("pair failed: \(error)")
-            state = .failed("Pairing did not complete (\(Self.describe(error)); network: \(transport.stateDescription)). Check the code and that you clicked Pair on the Mac. If it stays on \"connecting\", Tailscale may be off on this phone, or your tailnet rules may block port \(port) from this phone to the Mac.")
+            failureDetail = "\(Self.describe(error)); network: \(transport.stateDescription)"
+            state = .failed(Self.plainPairingFailure(error, network: transport.stateDescription, port: port))
         }
     }
 
-    /// A short reason for the screen: the Network framework's error, or ours.
+    /// A short reason for the details line: the Network framework's error, or ours.
     static func describe(_ error: Error) -> String {
         if let l = error as? LinkError { return "\(l)" }
         return (error as NSError).localizedDescription
     }
 
+    /// The handful of ways a connection fails, in plain words. The framework's own text goes to `failureDetail`.
+    static func plainConnectionFailure(_ error: Error, network: String, port: UInt16) -> String {
+        if error as? LinkError == .authFailed {
+            return "The Mac answered with a different key than this phone has. Forget this Mac from the menu and pair again."
+        }
+        if case .posix(let code)? = error as? NWError {
+            switch code {
+            case .ECONNREFUSED:
+                return "Your Mac is reachable but nothing answers on port \(port). Is PairVox open with the phone link switched on?"
+            case .EHOSTUNREACH, .ENETUNREACH, .ENETDOWN, .EADDRNOTAVAIL:
+                return "No path to your Mac. Check that Tailscale is on here (the VPN icon in the status bar) and on the Mac."
+            case .ETIMEDOUT:
+                return "Your Mac did not answer in time. If Tailscale is on, your tailnet rules may block port \(port) from this phone."
+            case .ECONNRESET, .ECONNABORTED, .EPIPE:
+                return "The connection to your Mac dropped. Trying again."
+            default: break
+            }
+        }
+        if let nw = error as? NWError, case .dns = nw {
+            return "The Mac's name could not be looked up. Use its Tailscale address (100.x.x.x) instead."
+        }
+        if error as? LinkError == .closed, network.hasPrefix("connecting") {
+            return "Your Mac did not answer in time. If Tailscale is on, your tailnet rules may block port \(port) from this phone."
+        }
+        return "The connection to your Mac dropped. Trying again."
+    }
+
+    static func plainPairingFailure(_ error: Error, network: String, port: UInt16) -> String {
+        if error as? LinkError == .authFailed {
+            return "The code did not match. Show a new code on the Mac and try again; each code works once and expires after two minutes."
+        }
+        if error as? LinkError == .closed, network == "connected" {
+            return "The Mac closed the connection before pairing finished. Either the code expired, or Pair was not clicked on the Mac in time. Show a new code and try again."
+        }
+        return plainConnectionFailure(error, network: network, port: port)
+    }
+
+    /// The Mac's engine phase, in words for the status bar.
+    static func phaseLabel(_ phase: String) -> String {
+        switch phase {
+        case "idle": return "Ready"
+        case "starting": return "Starting"
+        case "listening": return "Listening on the Mac"
+        case "transcribing": return "Transcribing"
+        case "thinking": return "Thinking"
+        case "working": return "Working"
+        case "speaking": return "Speaking"
+        case "awaitingPermission": return "Waiting for you"
+        case "needsSetup": return "Needs setup on the Mac"
+        default: return phase
+        }
+    }
+
     func forget() {
         let r = reconnector; reconnector = nil; client = nil
         Task { await r?.stop() }
-        store.delete(); snapshot = nil; state = .unpaired
+        store.delete(); snapshot = nil; state = .unpaired; lastFailure = nil; failureDetail = nil
     }
 
     // MARK: Connection
@@ -149,17 +224,35 @@ final class PhoneModel: ObservableObject {
         switch s {
         case .stopped: break
         case .connecting: state = .connecting
-        case .connected: state = .connected
+        case .connected: state = .connected; lastFailure = nil; failureDetail = nil
         case .gaveUp(let error):
             print("link refused: \(error)")
             snapshot = nil
+            failureDetail = nil
             state = .refused(Self.refusalText(Self.refusal(in: error) ?? .closed))
         case .waiting(_, let error):
             print("link ended: \(error)")
-            let (reason, network) = (error as? ConnectFailure).map { (Self.describe($0.error), $0.network) } ?? (Self.describe(error), "connection lost")
-            state = .failed("Can't reach your Mac (\(reason); network: \(network)). Is Tailscale on, is the phone link switched on in PairVox, and do your tailnet rules allow this phone to reach the Mac on port \(port)?")
+            let (inner, network) = (error as? ConnectFailure).map { ($0.error, $0.network) } ?? (error, "connection lost")
+            failureDetail = "\(Self.describe(inner)); network: \(network)"
+            let why = Self.plainConnectionFailure(inner, network: network, port: port)
+            lastFailure = why
+            state = .failed(why)
         }
     }
+
+    /// Changes where the phone looks for the Mac (a new Tailscale address or port) without pairing again; the key
+    /// stays. Returns a reason if the address is refused.
+    func changeAddress(host: String, port: UInt16) -> String? {
+        guard var creds = store.load() else { return "Not paired." }
+        guard PairingPayload.isAllowedHost(host) else { return "That address is not on your Tailscale network." }
+        creds.host = host; creds.port = port
+        do { try store.save(creds) } catch { return "Could not save the address: \(Self.describe(error))" }
+        connect()
+        return nil
+    }
+
+    /// Tries the Mac right now, without waiting out the current retry delay.
+    func testConnection() { nudge() }
 
     /// The app came back to the front: a link that died while iOS had the app suspended is replaced now.
     func becameActive() { nudge() }
@@ -195,6 +288,8 @@ final class PhoneModel: ObservableObject {
             snapshot = s
             if let r = s.request, isNew, lastSpokenRequest != r.requestID {
                 lastSpokenRequest = r.requestID
+                // A tap on the wrist as well as the voice, for a phone in a pocket or with the sound off.
+                UINotificationFeedbackGenerator().notificationOccurred(r.risk == "high" ? .warning : .success)
                 if !listening { speaker.say(r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen.") }
             }
         case .speak(let text): speaker.say(text)
@@ -258,9 +353,18 @@ final class PhoneModel: ObservableObject {
 
     private func finishedListening(_ text: String) {
         listening = false
+        inputLevel = 0
         let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
         heard = ""
-        guard !spoken.isEmpty else { return }
+        guard !spoken.isEmpty else { lastHeard = nil; return }
+        // Keep what was understood on screen long enough to read, then let it go.
+        lastHeard = spoken
+        heardClear?.cancel()
+        heardClear = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.lastHeard = nil
+        }
         let words = spoken.lowercased().split(separator: " ").map(String.init)
         // The deliberate phrase for a request a plain yes may not approve. The Mac must have the switch on, and the
         // phone asks for Face ID, Touch ID or the passcode as the second confirmation.

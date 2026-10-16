@@ -16,21 +16,38 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
 
     /// The latest connection state in words ("ready", "waiting: no route", "failed: ..."), for error messages.
     public private(set) var stateDescription = "starting"
+    /// The error behind a connection that could not be made (refused, no route). Reads and writes throw it instead
+    /// of the cancellation that followed, so the caller can say what went wrong.
+    private let lock = NSLock()
+    private var connectFailure: NWError?
 
     public init(connection: NWConnection) {
         signal(SIGPIPE, SIG_IGN)
         self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
             switch state {
-            case .ready: self?.stateDescription = "connected"
-            case .waiting(let e): self?.stateDescription = "waiting: \(e.localizedDescription)"
-            case .failed(let e): self?.stateDescription = "failed: \(e.localizedDescription)"
-            case .preparing: self?.stateDescription = "connecting"
-            case .cancelled: if self?.stateDescription != "connected" { self?.stateDescription += " (cancelled)" }
+            case .ready: self.stateDescription = "connected"
+            case .waiting(let e):
+                // The framework would wait for the network to change and try again on its own, for as long as it
+                // takes. The callers retry themselves, so a connection that cannot be made now fails now.
+                self.stateDescription = "failed: \(e.localizedDescription)"
+                self.lock.lock(); self.connectFailure = e; self.lock.unlock()
+                connection.cancel()
+            case .failed(let e):
+                self.stateDescription = "failed: \(e.localizedDescription)"
+                self.lock.lock(); if self.connectFailure == nil { self.connectFailure = e }; self.lock.unlock()
+            case .preparing: self.stateDescription = "connecting"
+            case .cancelled: if self.stateDescription == "connecting" || self.stateDescription == "starting" { self.stateDescription += " (cancelled)" }
             default: break
             }
         }
         connection.start(queue: queue)
+    }
+
+    private func failure(or error: Error) -> Error {
+        lock.lock(); defer { lock.unlock() }
+        return connectFailure ?? error
     }
 
     public static func connect(host: String, port: UInt16) -> TCPTransport {
@@ -42,8 +59,8 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
         var length = UInt32(data.count).bigEndian
         let framed = Data(bytes: &length, count: 4) + data
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            connection.send(content: framed, completion: .contentProcessed { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
+            connection.send(content: framed, completion: .contentProcessed { [weak self] error in
+                if let error { cont.resume(throwing: self?.failure(or: error) ?? error) } else { cont.resume() }
             })
         }
     }
@@ -57,10 +74,10 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
 
     private func read(_ count: Int) async throws -> Data {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-            connection.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
-                if let error { cont.resume(throwing: error) }
+            connection.receive(minimumIncompleteLength: count, maximumLength: count) { [weak self] data, _, _, error in
+                if let error { cont.resume(throwing: self?.failure(or: error) ?? error) }
                 else if let data, data.count == count { cont.resume(returning: data) }
-                else { cont.resume(throwing: LinkError.closed) }
+                else { cont.resume(throwing: self?.failure(or: LinkError.closed) ?? LinkError.closed) }
             }
         }
     }

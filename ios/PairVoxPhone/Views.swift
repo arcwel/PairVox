@@ -13,8 +13,23 @@ struct RootView: View {
             if model.isPaired { SessionView() } else { PairView() }
         }
         .tint(.orange)
-        .overlay { if scenePhase != .active { Color(.systemBackground).ignoresSafeArea().overlay(Text("PairVox").font(.title2)) } }
+        .overlay { if scenePhase != .active { Curtain() } }
         .onChange(of: scenePhase) { _, phase in if phase == .active { model.becameActive() } }
+    }
+}
+
+/// Shown over the app while it is not in front (the app switcher, the lock screen), so nothing from the
+/// conversation is visible there. Carries the state so a return does not look like a crash.
+private struct Curtain: View {
+    @EnvironmentObject var model: PhoneModel
+    var body: some View {
+        Color(.systemBackground).ignoresSafeArea().overlay {
+            VStack(spacing: 10) {
+                Image(systemName: "waveform.circle.fill").font(.system(size: 44)).foregroundStyle(.orange)
+                Text("PairVox").font(.title2.weight(.semibold))
+                Text(model.state == .connected ? "Connected to your Mac" : "Reconnecting when you return").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
@@ -26,6 +41,10 @@ struct PairView: View {
     @State private var code = ""
     @State private var pending: PairingPayload?
     @State private var scanProblem: String?
+    @FocusState private var focus: Field?
+    private enum Field { case host, port, code }
+
+    private var canPair: Bool { !host.isEmpty && code.count == 6 && UInt16(port) != nil }
 
     var body: some View {
         NavigationStack {
@@ -35,22 +54,34 @@ struct PairView: View {
                         .font(.footnote)
                 }
                 Section("Scan the QR code") {
-                    Button("Scan QR code") { scanning = true }
+                    Button("Scan QR code", systemImage: "qrcode.viewfinder") { scanning = true }
                 }
-                Section("Or type the code") {
-                    TextField("Mac address (100.x.x.x)", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.numbersAndPunctuation)
-                    TextField("Port", text: $port).keyboardType(.numberPad)
-                    TextField("6-digit code", text: $code).keyboardType(.numberPad)
-                    Button("Pair") {
-                        guard let p = UInt16(port), code.count == 6 else { return }
-                        Task { await model.pair(host: host, port: p, material: PairingClient.material(fromCode: code)) }
-                    }
-                    .disabled(host.isEmpty || code.count != 6)
+                Section {
+                    ClearableField("Mac's Tailscale address (100.x.x.x)", text: $host)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.numbersAndPunctuation)
+                        .focused($focus, equals: .host).submitLabel(.next).onSubmit { focus = .port }
+                    ClearableField("Port", text: $port).keyboardType(.numberPad).focused($focus, equals: .port)
+                    ClearableField("6-digit code", text: $code).keyboardType(.numberPad).focused($focus, equals: .code)
+                        .onChange(of: code) { _, v in if v.count > 6 { code = String(v.prefix(6)) } }
+                    Button("Pair") { pair() }.disabled(!canPair)
+                } header: {
+                    Text("Or type the code")
+                } footer: {
+                    Text("The address is shown in Settings → Phone on the Mac. The code works once and expires after two minutes.")
                 }
-                if case .failed(let why) = model.state { Text(why).font(.footnote).foregroundStyle(.red) }
-                if model.state == .connecting { ProgressView("Pairing…") }
+                if case .failed(let why) = model.state { FailureText(why: why, detail: model.failureDetail) }
+                if model.state == .connecting { ProgressView("Pairing… click Pair on the Mac within two minutes.") }
             }
             .navigationTitle("Pair with your Mac")
+            .toolbar {
+                // The number pad has no Done key and covers the Pair button: both live up here as well.
+                ToolbarItem(placement: .topBarTrailing) { Button("Pair") { pair() }.disabled(!canPair || model.state == .connecting) }
+                // Leading, so the floating pill does not sit over the focused field's clear button.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button("Done") { focus = nil }
+                    Spacer()
+                }
+            }
             .confirmationDialog("Pair with \(pending?.host ?? ""):\(String(pending?.port ?? 0))?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), titleVisibility: .visible) {
                 Button("Pair") { if let p = pending { Task { await model.pair(host: p.host, port: p.port, material: p.material) } }; pending = nil }
                 Button("Cancel", role: .cancel) { pending = nil }
@@ -65,10 +96,53 @@ struct PairView: View {
             }
         }
     }
+
+    private func pair() {
+        guard let p = UInt16(port), code.count == 6 else { return }
+        focus = nil
+        Task { await model.pair(host: host.trimmingCharacters(in: .whitespaces), port: p, material: PairingClient.material(fromCode: code)) }
+    }
+}
+
+/// A text field with a clear button, so a value can be replaced without backspacing through it.
+struct ClearableField: View {
+    let title: String
+    @Binding var text: String
+    init(_ title: String, text: Binding<String>) { self.title = title; _text = text }
+
+    var body: some View {
+        HStack {
+            TextField(title, text: $text)
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear \(title)")
+            }
+        }
+    }
+}
+
+/// A plain sentence, with the framework's own words behind "Details".
+struct FailureText: View {
+    let why: String
+    let detail: String?
+    @State private var open = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(why).font(.footnote).foregroundStyle(.red)
+            if let detail {
+                DisclosureGroup("Details", isExpanded: $open) {
+                    Text(detail).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                .font(.caption)
+            }
+        }
+    }
 }
 
 struct SessionView: View {
     @EnvironmentObject var model: PhoneModel
+    @State private var showConnection = false
 
     var body: some View {
         NavigationStack {
@@ -77,7 +151,7 @@ struct SessionView: View {
                 transcript
                 if let request = model.snapshot?.request { RequestCard(request: request) }
                 if let others = model.snapshot?.others, !others.isEmpty { OtherProjectsCard(others: others) }
-                if !model.heard.isEmpty { Text(model.heard).font(.callout).padding(8).frame(maxWidth: .infinity, alignment: .leading) }
+                heardLine
                 controls
             }
             .navigationTitle(model.snapshot?.project ?? "PairVox")
@@ -85,53 +159,79 @@ struct SessionView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("Interrupt Claude") { model.interrupt() }
-                        Button("Forget this Mac", role: .destructive) { model.forget() }
+                        Button("Interrupt Claude", systemImage: "stop.fill") { model.interrupt() }
+                        Button("Connection…", systemImage: "network") { showConnection = true }
+                        Button("Forget this Mac", systemImage: "trash", role: .destructive) { model.forget() }
                     } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("More")
                 }
             }
+            .sheet(isPresented: $showConnection) { ConnectionSheet() }
         }
     }
 
     private var status: some View {
         HStack {
+            Circle().fill(color).frame(width: 8, height: 8)
             Text(label).font(.system(.caption, design: .monospaced)).textCase(.uppercase)
             Spacer()
             if let n = model.notice { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(color.opacity(0.15))
+        .accessibilityElement(children: .combine)
     }
 
     private var label: String {
         switch model.state {
-        case .connected: return model.snapshot?.phase ?? "connected"
-        case .connecting: return "connecting"
+        case .connected: return PhoneModel.phaseLabel(model.snapshot?.phase ?? "connected")
+        case .connecting: return model.lastFailure == nil ? "connecting" : "reconnecting"
         case .failed: return "offline"
         case .refused: return "not paired on the Mac"
         case .unpaired: return "not paired"
         }
     }
-    private var color: Color { model.state == .connected ? .green : .orange }
+    private var color: Color {
+        switch model.state {
+        case .connected: return model.snapshot?.phase == "awaitingPermission" ? .orange : .green
+        case .connecting: return .yellow
+        default: return .red
+        }
+    }
 
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    if case .failed(let why) = model.state { Text(why).font(.footnote).foregroundStyle(.red) }
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    if let why = model.lastFailure, model.state != .connected { FailureText(why: why, detail: model.failureDetail) }
                     if case .refused(let why) = model.state {
                         Text(why).font(.footnote).foregroundStyle(.red)
                         Button("Forget this Mac and pair again") { model.forget() }.font(.footnote.weight(.semibold))
                     }
+                    if model.state == .connected, model.snapshot?.transcriptTail.isEmpty ?? true {
+                        Text("Nothing said yet. Talk to the Mac, or type below.").font(.footnote).foregroundStyle(.secondary)
+                    }
                     ForEach(model.snapshot?.transcriptTail ?? [], id: \.id) { entry in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.role.uppercased()).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
-                            Text(entry.text).font(.body).textSelection(.enabled)
-                        }.id(entry.id)
+                        TranscriptRow(entry: entry).id(entry.id)
                     }
                 }.padding(12)
             }
-            .onChange(of: model.snapshot?.transcriptTail.last?.id) { _, id in if let id { proxy.scrollTo(id, anchor: .bottom) } }
+            .onChange(of: model.snapshot?.transcriptTail.last?.id) { _, id in if let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } } }
+        }
+    }
+
+    /// What is being heard right now, or what was just sent (kept for a few seconds so it can be read).
+    @ViewBuilder private var heardLine: some View {
+        if model.listening {
+            HStack(spacing: 8) {
+                LevelMeter(level: model.inputLevel)
+                Text(model.heard.isEmpty ? "Listening…" : model.heard).font(.callout).foregroundStyle(model.heard.isEmpty ? .secondary : .primary)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+        } else if let said = model.lastHeard {
+            (Text("You said: ").foregroundStyle(.secondary) + Text(said)).font(.callout)
+                .padding(.horizontal, 12).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
         }
     }
 
@@ -140,10 +240,94 @@ struct SessionView: View {
             TextField("Type to Claude", text: $model.typed).textFieldStyle(.roundedBorder).submitLabel(.send).onSubmit { model.submitTyped() }
             Button { model.toggleListening() } label: {
                 Image(systemName: model.listening ? "stop.circle.fill" : "mic.circle.fill").font(.system(size: 38))
+                    .symbolEffect(.pulse, isActive: model.listening)
             }
             .accessibilityLabel(model.listening ? "Stop listening" : "Start listening")
         }
         .padding(12)
+    }
+}
+
+/// One transcript entry; long ones are cut at twelve lines with a "More" toggle.
+struct TranscriptRow: View {
+    let entry: LinkEntry
+    @State private var expanded = false
+    private var long: Bool { entry.text.count > 600 || entry.text.filter { $0 == "\n" }.count > 12 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(entry.role.uppercased()).font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+            Text(entry.text).font(.body).textSelection(.enabled).lineLimit(long && !expanded ? 12 : nil)
+            if long {
+                Button(expanded ? "Less" : "More") { expanded.toggle() }.font(.caption.weight(.semibold))
+            }
+        }
+    }
+}
+
+/// Microphone level as a short bar of segments.
+struct LevelMeter: View {
+    let level: Double
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<8, id: \.self) { i in
+                Rectangle().fill(Double(i) / 8 < level ? Color.orange : Color.secondary.opacity(0.25)).frame(width: 4, height: 6 + CGFloat(i) * 2)
+            }
+        }
+        .accessibilityLabel("Microphone level \(Int(level * 100)) percent")
+    }
+}
+
+/// Where the phone looks for the Mac, with a way to try now or to change the address without pairing again.
+struct ConnectionSheet: View {
+    @EnvironmentObject var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var host = ""
+    @State private var port = ""
+    @State private var problem: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Status") {
+                    LabeledContent("Link", value: stateText)
+                    if let detail = model.failureDetail { Text(detail).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary) }
+                    Button("Try now") { model.testConnection() }
+                }
+                Section {
+                    ClearableField("Mac's Tailscale address", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.numbersAndPunctuation)
+                    ClearableField("Port", text: $port).keyboardType(.numberPad)
+                    Button("Save and reconnect") {
+                        guard let p = UInt16(port) else { problem = "The port must be a number between 1 and 65535."; return }
+                        problem = model.changeAddress(host: host.trimmingCharacters(in: .whitespaces), port: p)
+                        if problem == nil { dismiss() }
+                    }
+                    .disabled(host.isEmpty || port.isEmpty)
+                    if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+                } header: {
+                    Text("Mac address")
+                } footer: {
+                    Text("Change this if the Mac's Tailscale address or port changed. The pairing key stays; you do not need a new code.")
+                }
+            }
+            .navigationTitle("Connection")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .onAppear {
+                host = model.credentials?.host ?? ""
+                port = model.credentials.map { String($0.port) } ?? ""
+            }
+        }
+    }
+
+    private var stateText: String {
+        switch model.state {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting"
+        case .failed: return "Offline"
+        case .refused: return "Refused by the Mac"
+        case .unpaired: return "Not paired"
+        }
     }
 }
 
@@ -157,23 +341,35 @@ struct RequestCard: View {
                 Text(request.risk.uppercased() + " RISK").font(.system(.caption, design: .monospaced)).bold()
                     .foregroundStyle(request.risk == "high" ? .red : .primary)
                 if request.ageSeconds > 60 { Text("waiting \(request.ageSeconds / 60) min").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                if let n = model.snapshot?.queuedRequests, n > 0 { Text("+\(n) more").font(.caption).foregroundStyle(.secondary) }
             }
             ScrollView { Text(request.summary).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 .frame(maxHeight: 120)
             ForEach(request.reasons, id: \.self) { Text("• " + $0).font(.footnote) }
+            if request.needsScreen {
+                Label("Claude Code says this one needs you at the Mac's screen.", systemImage: "display").font(.footnote).foregroundStyle(.secondary)
+            }
+            if model.state != .connected {
+                Text("Shown as it was when the link dropped. Answer it once the Mac is back.").font(.footnote).foregroundStyle(.secondary)
+            }
             HStack {
                 Button("Deny", role: .destructive) { model.deny(request) }
                 Spacer()
                 if request.truncated {
-                    Text("Too long to read here. Approve it on the Mac.").font(.footnote).foregroundStyle(.red)
+                    Label("Too long to show here: approve it on the Mac, or deny it from here.", systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
                 } else {
                     Button(request.risk == "high" ? "Allow (confirm)" : "Allow") { model.approveByTap(request) }.buttonStyle(.borderedProminent)
                 }
             }
+            .disabled(model.state != .connected)
         }
         .padding(12)
+        .opacity(model.state == .connected ? 1 : 0.6)
         .overlay(Rectangle().stroke(Color.primary, lineWidth: 1))
         .padding(.horizontal, 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(request.risk) risk request: \(request.summary)")
     }
 }
 
