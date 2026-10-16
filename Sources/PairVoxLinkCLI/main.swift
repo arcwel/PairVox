@@ -4,6 +4,7 @@
 //   pairvox-link status [--json]
 //   pairvox-link phones list [--json]
 //   pairvox-link phones remove <id> [--dry-run] [--json]
+//   pairvox-link phones prune --stale [--days N] [--dry-run] [--json]   remove phones not seen for N days (default 30)
 //   pairvox-link pair --qr | --code [--json] [--no-qr-art]
 //   pairvox-link doctor [--json]      checks Tailscale, the forward and the link; exit 1 if any check fails (PairVox not running included)
 // Exit codes: 0 done, 1 the app refused or failed, 2 bad usage, 3 PairVox is not running.
@@ -22,6 +23,7 @@ let usage = """
 usage: pairvox-link status [--json]
        pairvox-link phones list [--json]
        pairvox-link phones remove <id> [--dry-run] [--json]
+       pairvox-link phones prune --stale [--days N] [--dry-run] [--json]
        pairvox-link pair --qr | --code [--json] [--no-qr-art]
        pairvox-link doctor [--json]
        (add --socket PATH to use another control socket)
@@ -35,6 +37,8 @@ func option(_ name: String) -> String? {
 }
 
 let json = flag("--json"), dry = flag("--dry-run"), qr = flag("--qr"), code = flag("--code"), noArt = flag("--no-qr-art")
+let stale = flag("--stale")
+let daysOption = option("--days")
 let socket = option("--socket") ?? LinkCommandPaths.defaultSocket(in: URL(fileURLWithPath: NSHomeDirectory())
     .appendingPathComponent("Library/Application Support/PairVox"))
 
@@ -188,7 +192,42 @@ case "phones":
         let r = send(LinkCommand(cmd: "devices"))
         guard r.ok else { fail(r.error ?? "Failed.", code: 1) }
         if json { printJSON(r) } else if (r.devices ?? []).isEmpty { print("No paired phones.") }
-        else { for d in r.devices ?? [] { print("\(d.id)  \(d.name)  paired \(ISO8601DateFormatter().string(from: d.pairedAt))") } }
+        else {
+            let iso = ISO8601DateFormatter()
+            for d in r.devices ?? [] {
+                print("\(d.id)  \(d.name)  paired \(iso.string(from: d.pairedAt))  seen \(d.lastSeenAt.map { iso.string(from: $0) } ?? "never")")
+            }
+        }
+    case "prune":
+        // Only --stale exists, so the command says what it removes; a bare "prune" removes nothing.
+        guard stale else { fail("pairvox-link phones prune needs --stale (remove phones not seen for --days N, default 30).", code: 2) }
+        let days = daysOption.map { Int($0) ?? -1 } ?? 30
+        guard days >= 0 else { fail("--days needs a whole number of days.", code: 2) }
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let r = send(LinkCommand(cmd: "devices"))
+        guard r.ok else { fail(r.error ?? "Failed.", code: 1) }
+        // A phone that never connected counts from the day it paired.
+        let old = (r.devices ?? []).filter { ($0.lastSeenAt ?? $0.pairedAt) < cutoff }
+        var removed: [LinkCommandDevice] = [], failed: [String] = []
+        for d in old where !dry {
+            let rr = send(LinkCommand(cmd: "remove", id: d.id))
+            if rr.ok { removed.append(d) } else { failed.append("\(d.name): \(rr.error ?? "failed")") }
+        }
+        if json {
+            var out = LinkCommandReply(ok: failed.isEmpty, error: failed.isEmpty ? nil : failed.joined(separator: "; "))
+            out.devices = dry ? old : removed
+            printJSON(out)
+        } else if old.isEmpty {
+            print("Nothing to prune: every phone was seen in the last \(days) days.")
+        } else {
+            let iso = ISO8601DateFormatter()
+            for d in old {
+                let seen = d.lastSeenAt.map { iso.string(from: $0) } ?? "never (paired \(iso.string(from: d.pairedAt)))"
+                print("\(dry ? "Would remove" : (removed.contains(d) ? "Removed" : "Could not remove")) \"\(d.name)\" (\(d.id)), last seen \(seen).")
+            }
+            for f in failed { print("  \(f)") }
+        }
+        exit(failed.isEmpty ? 0 : 1)
     case "remove":
         guard args.count >= 3 else { fail(usage, code: 2) }
         let id = args[2]

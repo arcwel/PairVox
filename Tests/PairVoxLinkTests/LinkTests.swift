@@ -351,6 +351,33 @@ final class CompanionTests: XCTestCase {
     }
 }
 
+extension LinkTests {
+    func testAConnectionStampsWhenThePhoneWasLastSeenAndTheStampIsStored() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("pv-link-\(UUID().uuidString)/paired.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let clock = Clock()
+        let pairing = PairingManager(storeURL: url)
+        let host = LinkHost(pairing: pairing, engine: FakeEngine(), clock: { clock.get() })
+        await host.setPairingApproval { _ in true }
+        let (id, psk) = try await pairPhone(host, pairing)
+        let never = await pairing.pairedDevices()[0].lastSeenAt
+        XCTAssertNil(never, "a phone that paired but never connected has no stamp")
+        _ = try await connect(host, id, psk)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let seen = await pairing.pairedDevices()[0].lastSeenAt
+        XCTAssertEqual(seen, clock.get(), "the stamp is the host's clock at the handshake")
+        let reloaded = await PairingManager(storeURL: url).pairedDevices()[0].lastSeenAt
+        XCTAssertEqual(reloaded, seen, "the stamp survives a restart")
+        // Within a minute nothing is rewritten; after a minute the stamp moves.
+        clock.advance(30); await pairing.markSeen(id, now: clock.get())
+        let unchanged = await pairing.pairedDevices()[0].lastSeenAt
+        XCTAssertEqual(unchanged, seen)
+        clock.advance(31); await pairing.markSeen(id, now: clock.get())
+        let moved = await pairing.pairedDevices()[0].lastSeenAt
+        XCTAssertEqual(moved, clock.get())
+    }
+}
+
 final class AuditRun3PairingTests: XCTestCase {
     func testRevokedPhoneIsDisconnectedAndReceivesNothingMore() async throws {
         let h = LinkTests()

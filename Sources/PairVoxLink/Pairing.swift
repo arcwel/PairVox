@@ -11,22 +11,27 @@ public struct PairedDevice: Codable, Sendable, Equatable, Identifiable {
     public var psk: Data
     public var createdAt: Date
     public var revoked: Bool
+    /// When this phone last completed the handshake. Nil for a phone that paired but never connected (or paired
+    /// before this field existed). `pairvox-link phones prune --stale` uses it.
+    public var lastSeenAt: Date?
 
-    enum CodingKeys: String, CodingKey { case id, name, psk, createdAt, revoked }
-    init(id: String, name: String, psk: Data, createdAt: Date, revoked: Bool) {
-        self.id = id; self.name = name; self.psk = psk; self.createdAt = createdAt; self.revoked = revoked
+    enum CodingKeys: String, CodingKey { case id, name, psk, createdAt, revoked, lastSeenAt }
+    init(id: String, name: String, psk: Data, createdAt: Date, revoked: Bool, lastSeenAt: Date? = nil) {
+        self.id = id; self.name = name; self.psk = psk; self.createdAt = createdAt; self.revoked = revoked; self.lastSeenAt = lastSeenAt
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id); name = sanitizedDeviceName(try c.decode(String.self, forKey: .name))
         psk = (try? c.decode(Data.self, forKey: .psk)) ?? Data()
         createdAt = try c.decode(Date.self, forKey: .createdAt); revoked = try c.decode(Bool.self, forKey: .revoked)
+        lastSeenAt = try c.decodeIfPresent(Date.self, forKey: .lastSeenAt)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id); try c.encode(name, forKey: .name)
         if !psk.isEmpty { try c.encode(psk, forKey: .psk) }
         try c.encode(createdAt, forKey: .createdAt); try c.encode(revoked, forKey: .revoked)
+        try c.encodeIfPresent(lastSeenAt, forKey: .lastSeenAt)
     }
 }
 
@@ -200,6 +205,16 @@ public actor PairingManager {
     }
 
     public func activeDevice(_ id: String) -> PairedDevice? { ensureKeys(); return devices.first { $0.id == id && !$0.revoked && !$0.psk.isEmpty } }
+
+    /// Records that a phone completed the handshake now. Saved at most once a minute per phone, so a phone that
+    /// reconnects often does not rewrite the file each time; a save that fails is not an error (the stamp is only
+    /// advisory, for pruning).
+    public func markSeen(_ id: String, now: Date = Date()) {
+        guard let i = devices.firstIndex(where: { $0.id == id && !$0.revoked }) else { return }
+        if let last = devices[i].lastSeenAt, now.timeIntervalSince(last) < 60 { return }
+        devices[i].lastSeenAt = now
+        try? persist()
+    }
 
     private func persist() throws { try Self.write(devices, to: url, withKeysInFile: keys == nil) }
 

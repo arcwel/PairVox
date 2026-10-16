@@ -571,7 +571,8 @@ private struct PhoneSettings: View {
                     HStack {
                         VStack(alignment: .leading) {
                             Text(device.name)
-                            Text("Paired \(device.createdAt.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary)
+                            Text("Paired \(device.createdAt.formatted(date: .abbreviated, time: .omitted)) · last connected \(device.lastSeenAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "never")")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("Remove", role: .destructive) { phone.revoke(device.id) }

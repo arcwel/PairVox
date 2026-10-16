@@ -14,7 +14,11 @@ public struct LinkCommand: Codable, Sendable, Equatable {
 
 public struct LinkCommandDevice: Codable, Sendable, Equatable {
     public var id: String; public var name: String; public var pairedAt: Date
-    public init(id: String, name: String, pairedAt: Date) { self.id = id; self.name = name; self.pairedAt = pairedAt }
+    /// When the phone last connected; nil if it never has.
+    public var lastSeenAt: Date?
+    public init(id: String, name: String, pairedAt: Date, lastSeenAt: Date? = nil) {
+        self.id = id; self.name = name; self.pairedAt = pairedAt; self.lastSeenAt = lastSeenAt
+    }
 }
 
 public struct LinkCommandReply: Codable, Sendable, Equatable {

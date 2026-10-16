@@ -260,7 +260,7 @@ struct PhoneControl: LinkCommandHandler {
         case "devices":
             await model.refreshDevices()
             var r = LinkCommandReply(ok: true)
-            r.devices = await MainActor.run { model.devices.map { LinkCommandDevice(id: $0.id, name: $0.name, pairedAt: $0.createdAt) } }
+            r.devices = await MainActor.run { model.devices.map { LinkCommandDevice(id: $0.id, name: $0.name, pairedAt: $0.createdAt, lastSeenAt: $0.lastSeenAt) } }
             return r
         case "remove":
             guard let id = request.id, !id.isEmpty else { return LinkCommandReply(ok: false, error: "Missing phone id.") }

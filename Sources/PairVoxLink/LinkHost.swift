@@ -301,6 +301,7 @@ public actor LinkHost {
         connections[id] = connection
         connectionsChanged(connections.count)
         log("link.connected \(device.name)")
+        await pairing.markSeen(deviceID, now: clock())
         startWatchdogIfNeeded()
         if let latest { await push(latest, to: connection, id: id) }
         do {
