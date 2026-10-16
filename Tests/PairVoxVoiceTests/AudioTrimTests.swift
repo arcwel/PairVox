@@ -75,7 +75,7 @@ final class SentenceGapTests: XCTestCase {
 
     func testTheGapBetweenSentencesIsAFractionOfWhatKokoroPads() async throws {
         let audio = AudioIO()
-        do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
+        try startAudioOrSkip(audio)
         defer { audio.stop() }
         let output = VoiceSpeechOutput(audio: audio, synthesizer: PaddedSynth())
         final class Starts: @unchecked Sendable { private let l = NSLock(); private var t: [Date] = []
@@ -114,7 +114,7 @@ final class CourtesyQueueTests: XCTestCase {
 
     private func rig() throws -> (VoiceSpeechOutput, AudioIO, Events, Task<Void, Never>) {
         let audio = AudioIO()
-        do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
+        try startAudioOrSkip(audio)
         let output = VoiceSpeechOutput(audio: audio, synthesizer: TimedSynth())
         let events = Events()
         let watcher = Task { for await e in output.events { if case .started(let id) = e { events.started(id) }; if case .finished(let id) = e { events.finished(id) } } }

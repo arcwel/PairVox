@@ -285,12 +285,20 @@ final class OutputMeter: @unchecked Sendable {
 }
 
 /// Opt-in: writes exactly what PairVox plays to a 16-bit file in the log folder (up to 15 minutes
-/// per run), so audio problems can be heard and analyzed. Off by default; speech content is audio.
+/// per engine start), so audio problems can be heard and analyzed. Off by default; speech content is audio.
 final class PlaybackRecorder: @unchecked Sendable {
     private let queue = DispatchQueue(label: "app.pairvox.recorder", qos: .utility)
     private var file: AVAudioFile?
-    private var framesWritten: AVAudioFramePosition = 0
+    private var framesWritten: AVAudioFramePosition = 0   // in the current segment
+    private var segment = 0
     private let maxSeconds = 15.0 * 60
+
+    /// One file per engine start: `playback-<run>.caf`, then `playback-<run>-2.caf` and so on. An engine restart
+    /// (a headset arriving or leaving, a device change) used to reopen the first name and overwrite everything
+    /// recorded before it, which is exactly the part a device-change problem is heard in.
+    static func fileName(runID: String, segment: Int) -> String {
+        segment <= 1 ? "playback-\(runID).caf" : "playback-\(runID)-\(segment).caf"
+    }
 
     func write(_ buffer: AVAudioPCMBuffer, directory: URL, runID: String) {
         // The tap reuses its buffer, so copy before leaving the audio thread.
@@ -301,12 +309,15 @@ final class PlaybackRecorder: @unchecked Sendable {
         }
         queue.async { [self] in
             if file == nil {
-                let url = directory.appendingPathComponent("playback-\(runID).caf")
+                let url = directory.appendingPathComponent(Self.fileName(runID: runID, segment: segment + 1))
                 let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: copy.format.sampleRate,
                                                AVNumberOfChannelsKey: copy.format.channelCount, AVLinearPCMBitDepthKey: 16,
                                                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false]
                 try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 file = try? AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+                guard file != nil else { return }   // counted only once it exists, or every dropped buffer would skip a number
+                segment += 1
+                framesWritten = 0
             }
             guard let file, Double(framesWritten) / copy.format.sampleRate < maxSeconds else { return }
             try? file.write(from: copy)

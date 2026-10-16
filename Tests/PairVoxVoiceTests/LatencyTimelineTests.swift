@@ -25,7 +25,7 @@ final class LatencyTimelineTests: XCTestCase {
     /// silence that sentence still has in front of it (when it becomes audible).
     private func answerTimes(trim: Bool, cancelCourtesy: Bool) async throws -> (started: Double, audible: Double) {
         let audio = AudioIO()
-        do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
+        try startAudioOrSkip(audio)
         defer { audio.stop() }
         let backend = ReplayBackend()
         let inner = VoiceSpeechOutput(audio: audio, synthesizer: KokoroShaped())

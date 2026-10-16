@@ -16,7 +16,7 @@ final class PlaybackPauseTests: XCTestCase {
 
     func testPausedPlaybackHoldsItsPlaceAndFinishesAfterResume() async throws {
         let audio = AudioIO()
-        do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
+        try startAudioOrSkip(audio)
         defer { audio.stop() }
         let finished = LockedFlag()
         let began = Date()
@@ -35,7 +35,7 @@ final class PlaybackPauseTests: XCTestCase {
 
     func testStopWhilePausedDiscardsAndLaterSpeechPlaysNormally() async throws {
         let audio = AudioIO()
-        do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
+        try startAudioOrSkip(audio)
         defer { audio.stop() }
         let first = LockedFlag(), second = LockedFlag()
         audio.schedule(silence(seconds: 1.0)) { first.set(1) }
@@ -78,7 +78,7 @@ final class PausedSynthesisTests: XCTestCase {
 
     func testNoNewSynthesisWhilePausedAndItCatchesUpAfterResume() async throws {
         let audio = AudioIO()
-        do { try audio.start(captureWanted: false) } catch { throw XCTSkip("no audio output on this machine: \(error)") }
+        try startAudioOrSkip(audio)
         defer { audio.stop() }
         let synth = SlowSynth()
         let output = VoiceSpeechOutput(audio: audio, synthesizer: synth)

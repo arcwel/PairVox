@@ -3,6 +3,7 @@
 import AVFoundation
 import Foundation
 import PairVoxCore
+import os
 
 /// Microphone capture and speech playback on a single `AVAudioEngine` with
 /// Apple's voice processing enabled, so the echo canceller knows what PairVox is
@@ -136,6 +137,7 @@ public final class AudioIO: @unchecked Sendable {
         playerQueue.sync {
             engineGeneration += 1
             player.stop()
+            notePlayer(playing: false)
             if engine.isRunning { engine.stop() }
             engine = AVAudioEngine()
             player = AVAudioPlayerNode()
@@ -455,7 +457,7 @@ public final class AudioIO: @unchecked Sendable {
         statsTimer = nil
         recorder.finish()
         // Completions fired by stop() may call schedule(); that only enqueues, so waiting here is safe.
-        playerQueue.sync { engineGeneration += 1; player.stop(); engine.stop() }
+        playerQueue.sync { engineGeneration += 1; player.stop(); notePlayer(playing: false); engine.stop() }
         log.log(.info, .audio, "engine.stopped")
     }
 
@@ -599,7 +601,7 @@ public final class AudioIO: @unchecked Sendable {
             player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 self?.playerQueue.async { self?.bufferFinished(token: token, generation: generation) }
             }
-            if !player.isPlaying, !playbackPaused { player.play() }
+            if !player.isPlaying, !playbackPaused { player.play(); notePlayer(playing: true) }
         }
     }
 
@@ -613,6 +615,7 @@ public final class AudioIO: @unchecked Sendable {
             guard player.isPlaying, !playbackPaused else { return }
             playbackPaused = true
             player.pause()
+            notePlayer(playing: false)
             log.log(.info, .audio, "playback.paused")
         }
     }
@@ -624,7 +627,7 @@ public final class AudioIO: @unchecked Sendable {
             playbackPaused = false
             playbackEstimateEnd = nil   // the pause would otherwise be logged as an underrun
             lock.lock(); let up = isRunning; lock.unlock()
-            if up, engine.isRunning, !inFlight.isEmpty { player.play() }
+            if up, engine.isRunning, !inFlight.isEmpty { player.play(); notePlayer(playing: true) }
             log.log(.info, .audio, "playback.resumed")
         }
     }
@@ -651,6 +654,7 @@ public final class AudioIO: @unchecked Sendable {
             held.removeAll()
             playbackPaused = false
             player.stop()
+            notePlayer(playing: false)
             playbackEstimateEnd = nil
             for completion in discarded { completion() }
         }
@@ -723,12 +727,19 @@ public final class AudioIO: @unchecked Sendable {
         playbackEstimateEnd = start + .nanoseconds(Int(seconds * 1_000_000_000))
     }
 
+    /// Mirrors `player.isPlaying` for the output tap. The tap must not ask the node: `isPlaying` takes the engine
+    /// lock, `stop()` holds that lock while it removes the tap and waits for the running callback to return, and
+    /// `stopPlayback()` on the player queue waits for the same lock. Seen as a three-way deadlock in a test run;
+    /// in the app, every engine restart (a headset arriving or leaving) races the same way.
+    private let playerPlaying = OSAllocatedUnfairLock(initialState: false)
+    private func notePlayer(playing: Bool) { playerPlaying.withLock { $0 = playing } }
+
     private func installOutputTap() {
         let mixer = engine.mainMixerNode
         mixer.removeTap(onBus: 0)
         mixer.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
             guard let self else { return }
-            let playing = self.player.isPlaying
+            let playing = self.playerPlaying.withLock { $0 }
             self.meter.process(buffer, playing: playing)
             self.feedback.noteOutput(buffer)
             if playing, self.recordPlayback, let dir = self.log.directory {

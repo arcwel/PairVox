@@ -16,21 +16,25 @@ enum TTSProbe {
             .split(separator: "|").map(String.init)
         let voice = option("--voice") ?? "af_heart"
         let outDirectory = option("--out").map { URL(fileURLWithPath: $0) }
+        // `--repeat N` synthesizes the whole list N times: corruption is intermittent, one pass proves little.
+        let repeats = Int(option("--repeat") ?? "1") ?? 1
         Task.detached {
-            let code = await run(texts: texts, voice: voice, outDirectory: outDirectory)
+            let code = await run(texts: texts, voice: voice, outDirectory: outDirectory, repeats: repeats)
             exit(code)
         }
         RunLoop.main.run()
     }
 
-    private static func run(texts: [String], voice: String, outDirectory: URL?) async -> Int32 {
+    private static func run(texts: [String], voice: String, outDirectory: URL?, repeats: Int) async -> Int32 {
         let store = ModelStore()
         guard store.isPresent else { print("Kokoro is not installed (run PairVox once and let it download the voice)."); return 1 }
         let synthesizer = KokoroSynthesizer(voice: voice)
         do { try await synthesizer.load(model: store.weightsURL, voices: store.voicesURL) }
         catch { print("Kokoro could not load: \(error)"); return 1 }
         if let outDirectory { try? FileManager.default.createDirectory(at: outDirectory, withIntermediateDirectories: true) }
-        print("text | audio ms | leading silence ms | trailing silence ms | speech ms | synth ms | audio ms after trimming")
+        var corrupt = 0
+        print("text | audio ms | leading silence ms | trailing silence ms | speech ms | synth ms | audio ms after trimming | peak | non-finite | over range")
+        for pass in 0..<repeats {
         for (index, text) in texts.enumerated() {
             let began = Date()
             guard let buffer = try? await synthesizer.synthesize(text, rate: 1.0), let data = buffer.floatChannelData else {
@@ -40,19 +44,24 @@ enum TTSProbe {
             let rate = buffer.format.sampleRate
             let count = Int(buffer.frameLength)
             let samples = Array(UnsafeBufferPointer(start: data[0], count: count))
+            let report = AudioIO.inspect(buffer)
+            if !report.isClean { corrupt += 1 }
             let peak = samples.map(abs).max() ?? 0
             let threshold = max(0.004, peak * 0.02)   // 2% of the loudest sample, never below the noise floor
             let first = samples.firstIndex { abs($0) > threshold } ?? count
             let last = samples.lastIndex { abs($0) > threshold } ?? 0
             let ms = { (n: Int) in Double(n) / rate * 1000 }
             let trimmedMs = Double(AudioTrim.trim(buffer).frameLength) / rate * 1000
-            print(String(format: "%@ | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f", text, ms(count), ms(first), ms(max(0, count - 1 - last)), ms(max(0, last - first)), synthMs, trimmedMs))
+            print(String(format: "%@ | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f | %.3g | %d | %d%@", text, ms(count), ms(first), ms(max(0, count - 1 - last)), ms(max(0, last - first)), synthMs, trimmedMs,
+                         report.peak, report.nonFinite, report.overRange, report.isClean ? "" : "  CORRUPT (pass \(pass + 1))"))
             if let outDirectory {
                 let url = outDirectory.appendingPathComponent("probe-\(index).caf")
                 if let file = try? AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: rate, AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false],
                                                commonFormat: .pcmFormatFloat32, interleaved: false) { try? file.write(from: buffer) }
             }
         }
-        return 0
+        }
+        if repeats > 1 || corrupt > 0 { print("corrupt: \(corrupt) of \(texts.count * repeats)") }
+        return corrupt > 0 ? 2 : 0
     }
 }
