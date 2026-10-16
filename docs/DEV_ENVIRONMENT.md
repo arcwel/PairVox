@@ -43,6 +43,8 @@ Run a development build with `PAIRVOX_KEYSTORE=keychain`. Keys already in the fi
 
 - `scripts/restart-app.sh`: Quits this checkout's PairVox, verifies the last Release build in `.build/xcode`, swaps it into `dist/` (the old app stays until the new copy has passed its signature check), reopens it and waits up to 15 seconds for it to start.
     - `--build`: Runs a full build before restarting (the app must be closed).
+    - `--prune`: Removes every other `PairVox.app` and old `PairVoxPhone.app` under the repo (worktree builds, dry-run bundles, old device builds), unregistering each from Launch Services first so `open` cannot reach a stale copy; keeps `dist/`, the restart source and the newest phone build; then reports whether the running app's CDHash matches `dist/`. On its own it prunes without restarting; `--dry-run` lists what would go.
+- `scripts/freeze-watch.sh LOGFILE`: every 5 seconds records the PairVox pid, the last log write and whether the control socket answers; when the process is alive but silent it takes a `sample` next to the log. Started on 2026-10-16 after two runs stopped logging mid-stats and were then force-quit; the trigger was not the build or worktree housekeeping (tested live).
     - `--dry-run`: Simulates the process without making changes.
     - `--json`: Outputs the result in JSON format.
 - To compile without touching a running app, run `xcodegen generate` and then the `xcodebuild` line from `scripts/build-app.sh` (with its signing arguments): it writes to `.build/xcode`. The rest of that script replaces `dist/PairVox.app`.
