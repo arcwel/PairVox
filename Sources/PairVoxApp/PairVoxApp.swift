@@ -74,6 +74,11 @@ struct PairVoxApp: App {
             CommandGroup(after: .windowArrangement) {
                 MiniWindowCommand()
             }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Updater.shared.checkForUpdates() }
+                    .disabled(!Updater.shared.canCheck)
+                    .help(Updater.shared.unavailableReason ?? "Looks for a newer PairVox.")
+            }
             CommandGroup(replacing: .help) {
                 Button(Shortcuts.of(.exportDiagnostics).title) { model.exportDiagnostics() }.shortcut(.exportDiagnostics)
                 Button("Show Log Folder in Finder") { model.revealLogs() }

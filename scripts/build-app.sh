@@ -42,14 +42,16 @@ xcodebuild -project PairVox.xcodeproj -scheme PairVox -configuration "$CONFIG" \
   "${SIGN_ARGS[@]}" "${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"}" build | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
 set +x
 
-mkdir -p dist
-rm -rf dist/PairVox.app
-cp -R ".build/xcode/Build/Products/$CONFIG/PairVox.app" dist/
+# DIST_DIR lets a dry run or a test build land somewhere other than dist/, where the app you are running lives.
+DIST="${DIST_DIR:-dist}"
+mkdir -p "$DIST"
+rm -rf "$DIST/PairVox.app"
+cp -R ".build/xcode/Build/Products/$CONFIG/PairVox.app" "$DIST/"
 
-codesign --verify --deep --strict dist/PairVox.app && echo "Signature OK"
-if find dist/PairVox.app -name "*.metallib" | grep -q .; then
+codesign --verify --deep --strict "$DIST/PairVox.app" && echo "Signature OK"
+if find "$DIST/PairVox.app" -name "*.metallib" | grep -q .; then
   echo "MLX Metal library embedded: Kokoro voice available."
 else
   echo "Warning: no .metallib found in the bundle; Kokoro will fall back to the system voice." >&2
 fi
-echo "Built dist/PairVox.app"
+echo "Built $DIST/PairVox.app"

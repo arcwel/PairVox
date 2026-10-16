@@ -34,5 +34,13 @@
 	<string>PairVox uses on-device speech recognition as a fallback while its Whisper model loads.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>PairVox can open Terminal so you can sign in to Claude Code.</string>
+	<!-- Sparkle updates. Both empty: the updater never starts and "Check for Updates" stays disabled.
+	     Fill in at release time (docs/RELEASE.md): the https appcast address and the public key from generate_keys. -->
+	<key>SUFeedURL</key>
+	<string></string>
+	<key>SUPublicEDKey</key>
+	<string></string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 </dict>
 </plist>
