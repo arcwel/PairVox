@@ -53,6 +53,22 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         continuation = c
     }
 
+    /// Sentences longer than this many characters are synthesized in clause-sized pieces and joined. Every corrupt
+    /// buffer seen in the wild came from a sentence over a hundred characters, and its two halves came out clean;
+    /// shorter pieces also start playing sooner. The synthesizer's own silence around each piece is trimmed so the
+    /// join sounds like a comma, not a dropout.
+    static let pieceLimit = 110
+
+    func synthesizeInPieces(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
+        guard text.count > Self.pieceLimit, let (first, second) = SynthesisRecovery.split(text) else {
+            return try await synthesizer.synthesize(text, rate: rate)
+        }
+        let a = AudioTrim.trim(try await synthesizeInPieces(first, rate: rate))
+        let b = AudioTrim.trim(try await synthesizeInPieces(second, rate: rate))
+        guard let joined = SynthesisRecovery.join(a, b) else { throw SynthesisError.failed("Could not join the pieces of a sentence.") }
+        return joined
+    }
+
     public func enqueue(_ utterance: Utterance) {
         lock.lock()
         enqueuedAt[utterance.id] = .now()
@@ -150,7 +166,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
             var result: Result<AVAudioPCMBuffer, Error>
             let began = DispatchTime.now()
             do {
-                result = .success(try await self.synthesizer.synthesize(next.text, rate: r))
+                result = .success(try await self.synthesizeInPieces(next.text, rate: r))
             } catch {
                 result = .failure(error)
             }
@@ -162,14 +178,19 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
                     self.log.log(.error, .tts, "synth.corrupt",
                                  ["id": .int(next.id), "engine": .string(self.synthesizer.displayName), "attempt": 1,
                                   "peak": .double(Double(report.peak)), "nonFinite": .int(report.nonFinite),
-                                  "overRange": .int(report.overRange), "frames": .int(report.frames)])
-                    if let again = try? await self.synthesizer.synthesize(next.text, rate: r) {
+                                  "overRange": .int(report.overRange), "noisyWindows": .int(report.noisyWindows),
+                                  "highBand": .double(Double(report.maxHighBandShare)), "frames": .int(report.frames),
+                                  // The sentence itself, whatever the conversation-text setting: a corrupt one is the
+                                  // only way to reproduce the fault headless (`--tts-probe`).
+                                  "text": .string(next.text)])
+                    if let again = try? await self.synthesizeInPieces(next.text, rate: r) {
                         buffer = again
                         report = AudioIO.inspect(again)
                         if !report.isClean {
                             self.log.log(.error, .tts, "synth.corrupt",
                                          ["id": .int(next.id), "attempt": 2, "peak": .double(Double(report.peak)),
-                                          "nonFinite": .int(report.nonFinite), "overRange": .int(report.overRange)])
+                                          "nonFinite": .int(report.nonFinite), "overRange": .int(report.overRange),
+                                          "noisyWindows": .int(report.noisyWindows), "highBand": .double(Double(report.maxHighBandShare))])
                         }
                     }
                     // Still noise: the same text tends to come out bad every time, so change what is asked of the voice.
@@ -194,13 +215,19 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
             let synthMs = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
             // Cut the synthesizer's own silence around the sentence (after the corruption checks above, which look at the raw audio).
             if trimSilence ?? Self.defaultTrim.value, case .success(let raw) = result { result = .success(AudioTrim.trim(raw)) }
+            // One level for every sentence: the voice's own level swings by 11 dB from one render to the next.
+            var gain: Float = 1
+            if case .success(let buffer) = result, let data = buffer.floatChannelData {
+                gain = AudioLevel.normalize(UnsafeMutableBufferPointer(start: data[0], count: Int(buffer.frameLength)),
+                                            sampleRate: buffer.format.sampleRate)
+            }
             switch result {
             case .success(let buffer):
                 let audioMs = Double(buffer.frameLength) / buffer.format.sampleRate * 1000
                 let (readyCount, waitingCount) = self.lock.withLock { (self.ready.count, self.waiting.count) }
                 self.log.log(.info, .tts, "synth",
                              ["id": .int(next.id), "chars": .int(next.text.count), "engine": .string(self.synthesizer.displayName),
-                              "peak": .double(Double(AudioIO.inspect(buffer).peak)),
+                              "peak": .double(Double(AudioIO.inspect(buffer).peak)), "gain": .double(Double(gain)),
                               "synthMs": .double(synthMs), "audioMs": .double(audioMs),
                               "realtimeFactor": .double(audioMs > 0 ? synthMs / audioMs : 0),
                               "ready": .int(readyCount), "waiting": .int(waitingCount)])

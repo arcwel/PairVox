@@ -86,6 +86,10 @@ public final class AudioIO: @unchecked Sendable {
     /// all of it, and its completion handlers still fire as if the audio had played (Apple confirms the
     /// unscheduling; developers report the handlers). So a completion only counts when the engine is
     /// still running in the same generation. Touched only on `playerQueue`.
+    /// The format the player is connected with: `playbackFormat`, or mono at the device's own rate when that is lower.
+    /// A 16 kHz Bluetooth call-mode headset would otherwise get the mixer's resampling of 24 kHz speech; the
+    /// conversion is done here instead, with the best converter, before the buffer is scheduled (see `schedule`).
+    private var playerFormat = AudioIO.playbackFormat
     private struct InFlight { let id: Int; let buffer: AVAudioPCMBuffer; let completion: @Sendable () -> Void }
     private var inFlight: [InFlight] = []
     private var nextToken = 0
@@ -238,7 +242,8 @@ public final class AudioIO: @unchecked Sendable {
                                  announce: Bool = true) throws {
         pin(route, input: false)
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
-        engine.connect(player, to: engine.mainMixerNode, format: AudioIO.playbackFormat)
+        playerFormat = Self.playerFormat(forOutputRate: outputFormat.sampleRate)
+        engine.connect(player, to: engine.mainMixerNode, format: playerFormat)
         if outputFormat.sampleRate > 0, outputFormat.channelCount > 0 {
             engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
         }
@@ -257,7 +262,8 @@ public final class AudioIO: @unchecked Sendable {
         startOutputSignature = AudioRoute.outputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
         guard announce else { return }
         var fields: [String: LogValue] = ["captureAvailable": false, "reason": .string(reason),
-                                          "pinnedOut": .string(route.output?.name ?? "-")]
+                                          "pinnedOut": .string(route.output?.name ?? "-"),
+                                          "playerRate": .int(Int(playerFormat.sampleRate))]
         fields.merge(AudioRoute.fields()) { a, _ in a }
         log.log(.warning, .audio, "engine.started.outputOnly", fields)
         onCaptureAvailabilityChange?(false)
@@ -396,7 +402,8 @@ public final class AudioIO: @unchecked Sendable {
         // to 44.1 kHz stereo, and that mismatch fails initialization (CoreAudio -10875). So read the
         // output unit's format first and connect the mixer to it explicitly.
         let outputFormat = engine.outputNode.inputFormat(forBus: 0)
-        engine.connect(player, to: engine.mainMixerNode, format: AudioIO.playbackFormat)
+        playerFormat = Self.playerFormat(forOutputRate: outputFormat.sampleRate)
+        engine.connect(player, to: engine.mainMixerNode, format: playerFormat)
         if outputFormat.sampleRate > 0, outputFormat.channelCount > 0 {
             engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
         }
@@ -597,8 +604,10 @@ public final class AudioIO: @unchecked Sendable {
             noteScheduled(seconds: Double(buffer.frameLength) / buffer.format.sampleRate)
             nextToken += 1
             let token = nextToken, generation = engineGeneration
+            // The original is kept: a restart on another device replays it, converted for that device's rate.
             inFlight.append(InFlight(id: token, buffer: buffer, completion: completion))
-            player.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            let toPlay = buffer.format.sampleRate == playerFormat.sampleRate ? buffer : (Self.convert(buffer, to: playerFormat) ?? buffer)
+            player.scheduleBuffer(toPlay, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 self?.playerQueue.async { self?.bufferFinished(token: token, generation: generation) }
             }
             if !player.isPlaying, !playbackPaused { player.play(); notePlayer(playing: true) }
@@ -781,11 +790,14 @@ public final class AudioIO: @unchecked Sendable {
         guard let data = buffer.floatChannelData else { return AudioSanity.Report() }
         var total = AudioSanity.Report()
         for c in 0..<Int(buffer.format.channelCount) {
-            let r = AudioSanity.inspect(UnsafeBufferPointer(start: data[c], count: Int(buffer.frameLength)))
+            let r = AudioSanity.inspect(UnsafeBufferPointer(start: data[c], count: Int(buffer.frameLength)),
+                                        sampleRate: buffer.format.sampleRate)
             total.frames += r.frames
             total.peak = max(total.peak, r.peak)
             total.nonFinite += r.nonFinite
             total.overRange += r.overRange
+            total.noisyWindows += r.noisyWindows
+            total.maxHighBandShare = max(total.maxHighBandShare, r.maxHighBandShare)
         }
         return total
     }
@@ -798,13 +810,26 @@ public final class AudioIO: @unchecked Sendable {
         }
     }
 
+    /// Mono at the device's rate when that is below `playbackFormat`'s, else `playbackFormat`.
+    static func playerFormat(forOutputRate rate: Double) -> AVAudioFormat {
+        guard rate > 0, rate < playbackFormat.sampleRate,
+              let lower = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1) else { return playbackFormat }
+        return lower
+    }
+
     /// Converts any PCM buffer to `playbackFormat`.
-    public static func convertForPlayback(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        if buffer.format == playbackFormat { return buffer }
-        guard let converter = AVAudioConverter(from: buffer.format, to: playbackFormat) else { return nil }
-        let ratio = playbackFormat.sampleRate / buffer.format.sampleRate
+    public static func convertForPlayback(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? { convert(buffer, to: playbackFormat) }
+
+    /// Converts a PCM buffer to `format` with the best sample-rate converter (mastering algorithm, maximum quality),
+    /// so that going down to a 16 kHz headset filters everything above 8 kHz instead of folding it back as noise.
+    public static func convert(_ buffer: AVAudioPCMBuffer, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        if buffer.format == format { return buffer }
+        guard let converter = AVAudioConverter(from: buffer.format, to: format) else { return nil }
+        converter.sampleRateConverterQuality = .max
+        converter.sampleRateConverterAlgorithm = AVSampleRateConverterAlgorithm_Mastering
+        let ratio = format.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 1024)
-        guard let out = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: capacity) else { return nil }
+        guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
         let once = ConvertOnce()
         var error: NSError?
         _ = converter.convert(to: out, error: &error) { _, status in
