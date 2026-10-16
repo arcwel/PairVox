@@ -10,6 +10,10 @@ struct PairVoxApp: App {
 
     init() {
         TTSProbe.runIfRequested()   // `--tts-probe`: a headless voice measurement, then exit
+        // MLX and Metal report their failures on stderr and nowhere else; keep them next to the app's own log.
+        let directory = DiagnosticsExporter.logDirectory
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        freopen(directory.appendingPathComponent("stderr.log").path, "a", stderr)
         // When launched as a bare executable (swift run / Xcode scheme) make sure
         // we still get a Dock icon, menu bar and key window.
         NSApplication.shared.setActivationPolicy(.regular)

@@ -106,6 +106,11 @@ final class AppModel: ObservableObject {
         phone.apply(enabled: loaded.phoneLinkEnabled, port: loaded.phoneLinkPort)
         Task { await bootstrap() }
         watchMainWindowClosing()
+        // A quit is written down: twice today the process ended with no crash report and no line in the log,
+        // and nothing said whether someone quit it or it died.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+            DiagnosticLog.shared.log(.info, .app, "app.quit", ["reason": "terminate"])
+        }
         if loaded.menuBarOnly { DispatchQueue.main.async { [weak self] in self?.applyActivationPolicy() } }
     }
 
