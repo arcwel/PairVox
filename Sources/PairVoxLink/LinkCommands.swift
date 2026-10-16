@@ -16,8 +16,11 @@ public struct LinkCommandDevice: Codable, Sendable, Equatable {
     public var id: String; public var name: String; public var pairedAt: Date
     /// When the phone last connected; nil if it never has.
     public var lastSeenAt: Date?
-    public init(id: String, name: String, pairedAt: Date, lastSeenAt: Date? = nil) {
-        self.id = id; self.name = name; self.pairedAt = pairedAt; self.lastSeenAt = lastSeenAt
+    /// True while the phone has a live connection. Its `lastSeenAt` is only the moment it connected, so a phone
+    /// that has stayed connected for weeks looks stale by that stamp alone; `phones prune` never removes these.
+    public var connected: Bool?
+    public init(id: String, name: String, pairedAt: Date, lastSeenAt: Date? = nil, connected: Bool? = nil) {
+        self.id = id; self.name = name; self.pairedAt = pairedAt; self.lastSeenAt = lastSeenAt; self.connected = connected
     }
 }
 

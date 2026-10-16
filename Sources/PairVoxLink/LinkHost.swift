@@ -10,6 +10,13 @@ public protocol LinkEngine: Sendable {
     func approve(requestID: String, projectID: String?) async
     func deny(requestID: String, projectID: String?) async
     func interrupt() async
+    /// False when there is nothing to send text to (the Mac has no project open). The phone is told, instead of its
+    /// message going nowhere without a word.
+    func canSubmit() async -> Bool
+}
+
+public extension LinkEngine {
+    func canSubmit() async -> Bool { true }
 }
 
 /// The Mac side of the phone link. It enforces every rule itself: the phone's messages are requests, never
@@ -76,6 +83,9 @@ public actor LinkHost {
         for (id, c) in connections { await push(snapshot, to: c, id: id) }
     }
 
+    /// The paired devices that have a live connection right now.
+    public func connectedDeviceIDs() -> Set<String> { Set(connections.values.map(\.deviceID)) }
+
     public func speak(_ rawText: String) async {
         let text = LinkSnapshot.cut(rawText, 8192).text
         for (id, c) in connections {
@@ -103,6 +113,8 @@ public actor LinkHost {
         public init(heartbeat: TimeInterval = 10, idle: TimeInterval = 35, tick: TimeInterval = 5) { self.heartbeat = heartbeat; self.idle = idle; self.tick = tick }
     }
     private var timing = Timing()
+    /// What a phone is sent while the Mac has published nothing yet.
+    static let idleSnapshot = LinkSnapshot(phase: "idle", project: "", transcriptTail: [], request: nil, queuedRequests: 0)
     private var watchdog: Task<Void, Never>?
     public func setTiming(_ t: Timing) { timing = t }
 
@@ -127,8 +139,10 @@ public actor LinkHost {
                 connectionsChanged(connections.count)
                 log("link.idleDropped")
                 await c.transport.close()
-            } else if let latest, now.timeIntervalSince(c.lastSent) >= timing.heartbeat, !c.writing {
-                await push(latest, to: c, id: id)
+            } else if now.timeIntervalSince(c.lastSent) >= timing.heartbeat, !c.writing {
+                // With no state yet (the Mac has no project open) a bare idle state still goes out, so a phone that
+                // pings is not dropped by its own silence timer for a link that is perfectly healthy.
+                await push(latest ?? Self.idleSnapshot, to: c, id: id)
             }
         }
     }
@@ -326,6 +340,12 @@ public actor LinkHost {
         case .interrupt: await engine.interrupt()
         case .submit(let text):
             guard !text.isEmpty, text.count <= 4000 else { return }
+            guard await engine.canSubmit() else {
+                log("link.submit.refused no project open")
+                enqueue(.notice("Your Mac has no project open, so that was not sent. Open a project in PairVox on the Mac."), to: c, id: id)
+                return
+            }
+            log("link.submit \(text.count) chars")   // the length only; the text itself is the person's
             await engine.submit(text)
         case .deny(let requestID, let projectID):
             guard find(requestID, projectID) != nil else { return }

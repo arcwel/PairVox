@@ -163,6 +163,83 @@ final class ReconnectorTests: XCTestCase {
         private let lock = NSLock(); private var left: Int
         init(_ n: Int) { left = n }
         func take() -> Bool { lock.lock(); defer { lock.unlock() }; if left > 0 { left -= 1; return true }; return false }
+        /// Counts up from the starting value and returns the new count.
+        func bump() -> Int { lock.lock(); defer { lock.unlock() }; left += 1; return left }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return left }
+    }
+
+    func testANudgeCutsShortAnAttemptThatIsStuckAndStartsTheNextOneAtOnce() async throws {
+        // The first attempt would hang for 30 s (a dead route); a nudge ends it and the second connects.
+        let attempts = Counter(0), dial = Dial(failures: 0), log = Log()
+        let r = Reconnector<Session>(policy: .init(firstDelay: 5, maxDelay: 5),
+                                     connect: {
+                                         if attempts.bump() == 1 { try await Task.sleep(nanoseconds: 30_000_000_000) }
+                                         return try dial.connect()
+                                     },
+                                     run: { s in await s.untilEnded() },
+                                     close: { s in dial.didClose(s) },
+                                     onState: { log.add($0) })
+        await r.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let nudgedAt = Date()
+        await r.nudge()
+        await eventually("the second attempt connected", within: 1.5) { dial.last != nil }
+        XCTAssertLessThan(Date().timeIntervalSince(nudgedAt), 1.5)
+        XCTAssertEqual(attempts.count, 2)
+        XCTAssertFalse(log.all.contains { if case .waiting = $0.1 { return true } else { return false } }, "a cut-short attempt reports no failure")
+        await r.stop()
+    }
+
+    func testANudgeDuringAnAttemptThatIgnoresCancellationSkipsTheNextWait() async throws {
+        // The first attempt takes 0.3 s and cannot be cancelled, then fails; a nudge arrives at 0.1 s, while it is
+        // still running. The backoff is 5 s, so without the nudge the second attempt could not start in this test.
+        let attempts = Counter(0), dial = Dial(failures: 0), log = Log()
+        let r = Reconnector<Session>(policy: .init(firstDelay: 5, maxDelay: 5),
+                                     connect: {
+                                         if attempts.bump() == 1 {
+                                             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                                                 DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { c.resume() }
+                                             }
+                                             throw Boom()
+                                         }
+                                         return try dial.connect()
+                                     },
+                                     run: { s in await s.untilEnded() },
+                                     close: { s in dial.didClose(s) },
+                                     onState: { log.add($0) })
+        await r.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await r.nudge()
+        await eventually("the second attempt started without sitting out the 5 s wait", within: 1.5) { dial.last != nil }
+        XCTAssertEqual(attempts.count, 2)
+        await r.stop()
+    }
+
+    func testStartWhileConnectedClosesTheOldSessionAndTheNewOneStaysCurrent() async throws {
+        let dial = Dial(failures: 0), log = Log()
+        // A blocked read does not end the moment its transport is closed: here the old session's `run` returns only
+        // when the test says so, which is after the new session is current (the case that used to clear it).
+        let r = Reconnector<Session>(policy: .init(firstDelay: 0.02, maxDelay: 0.02),
+                                     connect: { try dial.connect() },
+                                     run: { s in await s.untilEnded() },
+                                     check: { s in dial.didCheck(s) },
+                                     close: { s in dial.didClose(s) },
+                                     onState: { log.add($0) })
+        await r.start()
+        await eventually("first session") { dial.last != nil }
+        await r.start()
+        await eventually("second session") { dial.sessions.count == 2 }
+        let second = await r.session
+        XCTAssertEqual(second?.id, 2)
+        XCTAssertTrue(dial.closed.contains(1), "the old session was closed by start()")
+        dial.sessions[0].end()                               // the old loop's run returns now
+        try await Task.sleep(nanoseconds: 200_000_000)       // and unwinds
+        let current = await r.session
+        XCTAssertEqual(current?.id, 2, "the old loop did not clear the new session")
+        await r.nudge()
+        XCTAssertEqual(dial.checked, [2], "a nudge reaches the live session")
+        await r.stop()
+        XCTAssertTrue(dial.closed.contains(2), "stop() closes the new session")
     }
 
     func testStartAgainDropsTheOldLoop() async throws {

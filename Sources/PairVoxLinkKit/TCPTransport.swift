@@ -14,8 +14,10 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
         return nil
     }
 
-    /// The latest connection state in words ("ready", "waiting: no route", "failed: ..."), for error messages.
-    public private(set) var stateDescription = "starting"
+    /// The latest connection state in words ("connected", "connecting", "failed: ..."), for error messages. Written
+    /// on the connection's queue and read from anywhere, so it is guarded by the same lock as `connectFailure`.
+    public var stateDescription: String { lock.lock(); defer { lock.unlock() }; return state }
+    private var state = "starting"
     /// The error behind a connection that could not be made (refused, no route). Reads and writes throw it instead
     /// of the cancellation that followed, so the caller can say what went wrong.
     private let lock = NSLock()
@@ -24,23 +26,27 @@ public final class TCPTransport: LinkTransport, @unchecked Sendable {
     public init(connection: NWConnection) {
         signal(SIGPIPE, SIG_IGN)
         self.connection = connection
-        connection.stateUpdateHandler = { [weak self] state in
+        connection.stateUpdateHandler = { [weak self] update in
             guard let self else { return }
-            switch state {
-            case .ready: self.stateDescription = "connected"
+            self.lock.lock()
+            switch update {
+            case .ready: self.state = "connected"
             case .waiting(let e):
                 // The framework would wait for the network to change and try again on its own, for as long as it
                 // takes. The callers retry themselves, so a connection that cannot be made now fails now.
-                self.stateDescription = "failed: \(e.localizedDescription)"
-                self.lock.lock(); self.connectFailure = e; self.lock.unlock()
+                self.state = "failed: \(e.localizedDescription)"
+                self.connectFailure = e
+                self.lock.unlock()
                 connection.cancel()
+                return
             case .failed(let e):
-                self.stateDescription = "failed: \(e.localizedDescription)"
-                self.lock.lock(); if self.connectFailure == nil { self.connectFailure = e }; self.lock.unlock()
-            case .preparing: self.stateDescription = "connecting"
-            case .cancelled: if self.stateDescription == "connecting" || self.stateDescription == "starting" { self.stateDescription += " (cancelled)" }
+                self.state = "failed: \(e.localizedDescription)"
+                if self.connectFailure == nil { self.connectFailure = e }
+            case .preparing: self.state = "connecting"
+            case .cancelled: if self.state == "connecting" || self.state == "starting" { self.state += " (cancelled)" }
             default: break
             }
+            self.lock.unlock()
         }
         connection.start(queue: queue)
     }

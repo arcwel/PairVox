@@ -195,7 +195,8 @@ case "phones":
         else {
             let iso = ISO8601DateFormatter()
             for d in r.devices ?? [] {
-                print("\(d.id)  \(d.name)  paired \(iso.string(from: d.pairedAt))  seen \(d.lastSeenAt.map { iso.string(from: $0) } ?? "never")")
+                let seen = d.connected == true ? "connected now" : "seen \(d.lastSeenAt.map { iso.string(from: $0) } ?? "never")"
+                print("\(d.id)  \(d.name)  paired \(iso.string(from: d.pairedAt))  \(seen)")
             }
         }
     case "prune":
@@ -206,19 +207,25 @@ case "phones":
         let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
         let r = send(LinkCommand(cmd: "devices"))
         guard r.ok else { fail(r.error ?? "Failed.", code: 1) }
-        // A phone that never connected counts from the day it paired.
-        let old = (r.devices ?? []).filter { ($0.lastSeenAt ?? $0.pairedAt) < cutoff }
+        // A phone that never connected counts from the day it paired. A phone connected right now is never stale,
+        // however long ago it connected: its stamp is the moment it connected, not the last time it was heard.
+        // (Phones paired before the stamp existed also count from the day they paired, so run `phones list` first.)
+        let old = (r.devices ?? []).filter { $0.connected != true && ($0.lastSeenAt ?? $0.pairedAt) < cutoff }
         var removed: [LinkCommandDevice] = [], failed: [String] = []
         for d in old where !dry {
             let rr = send(LinkCommand(cmd: "remove", id: d.id))
-            if rr.ok { removed.append(d) } else { failed.append("\(d.name): \(rr.error ?? "failed")") }
+            if rr.ok { removed.append(d); continue }
+            // Already gone (removed in the app between the list and this call) is the outcome that was asked for.
+            let again = send(LinkCommand(cmd: "devices"))
+            if again.ok, !(again.devices ?? []).contains(where: { $0.id == d.id }) { removed.append(d) }
+            else { failed.append("\(d.name): \(rr.error ?? "failed")") }
         }
         if json {
             var out = LinkCommandReply(ok: failed.isEmpty, error: failed.isEmpty ? nil : failed.joined(separator: "; "))
             out.devices = dry ? old : removed
             printJSON(out)
         } else if old.isEmpty {
-            print("Nothing to prune: every phone was seen in the last \(days) days.")
+            print("Nothing to prune: every phone is connected or was seen in the last \(days) days.")
         } else {
             let iso = ISO8601DateFormatter()
             for d in old {

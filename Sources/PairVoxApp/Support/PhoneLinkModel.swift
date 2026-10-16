@@ -27,6 +27,7 @@ final class ActiveEngineBox: @unchecked Sendable {
 struct ActiveEngineLink: LinkEngine {
     let box: ActiveEngineBox
     func submit(_ text: String) async { await box.engine(for: nil)?.submitFromRemote(text) }
+    func canSubmit() async -> Bool { box.engine(for: nil) != nil }
     func approve(requestID: String, projectID: String?) async { await box.engine(for: projectID)?.approvePending(always: false, requestID: requestID) }
     func deny(requestID: String, projectID: String?) async { await box.engine(for: projectID)?.denyPending(requestID: requestID) }
     func interrupt() async { await box.engine(for: nil)?.interruptClaude() }
@@ -172,6 +173,10 @@ final class PhoneLinkModel: ObservableObject {
         // One task chain keeps snapshots in the order the engine produced them.
         let previous = publishChain
         publishChain = Task { _ = await previous?.value; await host.publish(link) }
+        if connected > 0 {
+            log.log(.info, .app, "phoneLink.publish", ["phase": .string(link.phase), "entries": .int(link.transcriptTail.count),
+                                                       "request": .bool(link.request != nil)])
+        }
     }
     private var publishChain: Task<Void, Never>?
 
@@ -259,8 +264,9 @@ struct PhoneControl: LinkCommandHandler {
             return r
         case "devices":
             await model.refreshDevices()
+            let live = await model.connectedDeviceIDs()
             var r = LinkCommandReply(ok: true)
-            r.devices = await MainActor.run { model.devices.map { LinkCommandDevice(id: $0.id, name: $0.name, pairedAt: $0.createdAt, lastSeenAt: $0.lastSeenAt) } }
+            r.devices = await MainActor.run { model.devices.map { LinkCommandDevice(id: $0.id, name: $0.name, pairedAt: $0.createdAt, lastSeenAt: $0.lastSeenAt, connected: live.contains($0.id)) } }
             return r
         case "remove":
             guard let id = request.id, !id.isEmpty else { return LinkCommandReply(ok: false, error: "Missing phone id.") }
@@ -289,6 +295,8 @@ struct PhoneControl: LinkCommandHandler {
 
 extension PhoneLinkModel {
     var isListening: Bool { host != nil && listener != nil }
+    /// The paired devices with a live connection right now (empty while the link is off).
+    func connectedDeviceIDs() async -> Set<String> { await host?.connectedDeviceIDs() ?? [] }
     func logControl(_ cmd: String) { log.log(.info, .app, "phoneLink.control", ["cmd": .string(cmd)]) }
 
     /// Removes a phone and waits until it is done (used by the control channel).

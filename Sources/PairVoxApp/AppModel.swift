@@ -325,6 +325,10 @@ final class AppModel: ObservableObject {
         }
         activeSessionID = id
         snapshot = next.snapshot
+        // The phone follows the project on the Mac's screen: its typed text goes to this engine from now on, and it
+        // is shown this project's conversation at once instead of waiting for the next change inside it.
+        phone.engineBox.setActive(next.engine)
+        republishToPhone()
         input?.setEngine(next.engine)
         input?.setVocabulary(next.vocabulary)
         next.gate.setActive(true)
@@ -371,6 +375,7 @@ final class AppModel: ObservableObject {
             if let next = sessionOrder.last {
                 switchTo(next)
             } else {
+                phone.engineBox.setActive(nil)   // nothing is open: the phone's text must not reach a closed project's engine
                 input?.setMode(.muted)
             }
         }
@@ -838,9 +843,12 @@ final class AppModel: ObservableObject {
         session.snapshot = snap
         let isActive = session.id == activeSessionID
         crossProject.sessionChanged(session, isActive: isActive)
+        // The phone gets this snapshot, not the one before it: `republishToPhone` reads `self.snapshot`, so it must
+        // be updated first. (It used to run before the assignment, and the phone was always one update behind:
+        // a finished reply reached it only when the next thing changed.)
+        if isActive { snapshot = snap }
         republishToPhone()
         if isActive {
-            snapshot = snap
             phone.engineBox.setActive(session.engine)
             // Voice commands ("faster", "summary mode") change these inside the engine;
             // mirror them into settings (but not the engine's initial per-project values).

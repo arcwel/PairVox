@@ -56,14 +56,23 @@ public actor Reconnector<Session: Sendable> {
 
     public var session: Session? { current }
 
-    /// Starts (or restarts) the loop. Any earlier loop and its session are dropped.
+    /// Starts (or restarts) the loop. Any earlier loop is ended and its session is closed.
     public func start() {
         endLoop()
         gaveUp = false
         generation += 1
         let mine = generation
-        loop = Task { [weak self] in await self?.runLoop(mine) }
+        // The old loop is usually blocked inside `run` on a read that ignores cancellation, so its session is closed
+        // here; closing is what frees it. The loop then finds that it is no longer current and leaves `current` alone.
+        let old = current
+        current = nil
+        loop = Task { [weak self] in
+            if let old, let self { await self.closeOld(old) }
+            await self?.runLoop(mine)
+        }
     }
+
+    private func closeOld(_ s: Session) async { await close(s) }
 
     /// Ends the loop and closes the session. `onState` gets `.stopped`.
     public func stop() async {
@@ -78,10 +87,14 @@ public actor Reconnector<Session: Sendable> {
         if let s = current { await check(s); return }
         if gaveUp { start(); return }
         nudged = true
+        // An attempt that is in flight (maybe stuck on a dead route) is cut short so the next one starts now; a wait
+        // in progress is ended.
+        connectTask?.cancel()
         sleeper?.cancel()
     }
 
     private var gaveUp = false
+    private var connectTask: Task<Session, any Error>?
 
     private func endLoop() {
         generation += 1
@@ -92,17 +105,28 @@ public actor Reconnector<Session: Sendable> {
     private func runLoop(_ mine: Int) async {
         var delay = policy.firstDelay
         while !Task.isCancelled, generation == mine {
+            // A nudge that arrives while this attempt is in flight must survive a failure of the attempt: the app
+            // came back to the front or the network changed, so the next try should not sit out the full delay.
+            nudged = false
             onState(.connecting)
             let failure: any Error
             do {
-                let s = try await connect()
+                // The attempt runs as its own task so a nudge can cancel it; cancelling this loop cancels it too.
+                let dial = connect
+                let attempt = Task { try await dial() }
+                connectTask = attempt
+                let s: Session
+                do { s = try await withTaskCancellationHandler { try await attempt.value } onCancel: { attempt.cancel() } }
+                catch { connectTask = nil; throw error }
+                connectTask = nil
                 guard generation == mine else { await close(s); return }
                 current = s
                 nudged = false
                 delay = policy.firstDelay
                 onState(.connected)
                 do { try await run(s); failure = LinkError.closed } catch { failure = error }
-                current = nil
+                // A newer loop (start() was called) has its own session; this one must not touch `current`.
+                if generation == mine { current = nil }
                 await close(s)
             } catch {
                 failure = error
@@ -114,11 +138,13 @@ public actor Reconnector<Session: Sendable> {
                 }
             }
             if Task.isCancelled || generation != mine { return }
-            onState(.waiting(retryIn: delay, error: failure))
-            await wait(delay)
-            if generation != mine { return }
-            delay = nudged ? policy.firstDelay : min(delay * 2, policy.maxDelay)
-            nudged = false
+            if !nudged { onState(.waiting(retryIn: delay, error: failure)) }   // a cut-short attempt has nothing to report
+            if nudged { delay = policy.firstDelay }          // nudged during the attempt: try again now, backoff starts over
+            else {
+                await wait(delay)
+                if generation != mine { return }
+                delay = nudged ? policy.firstDelay : min(delay * 2, policy.maxDelay)
+            }
         }
     }
 
@@ -134,14 +160,21 @@ public actor Reconnector<Session: Sendable> {
 /// that is stuck only ends when its connection does, so cancellation alone would not free it.
 public func withTimeout<T: Sendable>(_ seconds: Double, closing transport: LinkTransport,
                                      _ body: @escaping @Sendable () async throws -> T) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await body() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            await transport.close()
-            throw LinkError.closed
+    // If the caller is cancelled (a reconnect loop being stopped or nudged) while `body` is stuck on a read, the
+    // group would wait for that read forever: closing the transport is what ends it. This handler fires only for
+    // the caller's own cancellation, not for the group cancelling its timer after `body` finished.
+    try await withTaskCancellationHandler {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await body() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                await transport.close()
+                throw LinkError.closed
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
         }
-        defer { group.cancelAll() }
-        return try await group.next()!
+    } onCancel: {
+        Task { await transport.close() }
     }
 }

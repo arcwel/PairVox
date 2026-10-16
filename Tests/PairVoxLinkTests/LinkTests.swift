@@ -1,8 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import Network
 import XCTest
 @testable import PairVoxLink
 @testable import PairVoxLinkKit
+
+/// A transport whose sends can be made to fail on demand, as a connection that has died under the app does.
+final class FlakySendTransport: LinkTransport, @unchecked Sendable {
+    private let inner: LinkTransport
+    private let lock = NSLock()
+    private var failing = false
+    init(_ inner: LinkTransport) { self.inner = inner }
+    var peer: String? { inner.peer }
+    func failSends() { lock.lock(); failing = true; lock.unlock() }
+    func send(_ data: Data) async throws {
+        lock.lock(); let fail = failing; lock.unlock()
+        if fail { throw LinkError.closed }
+        try await inner.send(data)
+    }
+    func receive() async throws -> Data { try await inner.receive() }
+    func close() async { await inner.close() }
+}
 
 final class FakeEngine: LinkEngine, @unchecked Sendable {
     private let lock = NSLock()
@@ -129,8 +147,13 @@ final class LinkTests: XCTestCase {
         await host.publish(snapshot())
         let s = try await nextSnapshot(client)
         XCTAssertEqual(s.request?.requestID, "R1")
-        // Wrong key
-        do { _ = try await connect(host, id, Handshake.randomBytes(32)); XCTFail() } catch {}
+        // Wrong key: a plain authentication failure. It must not be one of the refusals, which say something about
+        // whether the device is known and are sent only before any key has been tried.
+        do { _ = try await connect(host, id, Handshake.randomBytes(32)); XCTFail() } catch {
+            XCTAssertEqual(error as? LinkError, .authFailed)
+            XCTAssertNotEqual(error as? LinkError, .unknownDevice)
+            XCTAssertNotEqual(error as? LinkError, .revoked)
+        }
         // Unknown device: the phone is told, so it can stop retrying and ask to be paired again.
         do { _ = try await connect(host, UUID().uuidString, psk); XCTFail() } catch { XCTAssertEqual(error as? LinkError, .unknownDevice) }
         // Revoked
@@ -351,7 +374,68 @@ final class CompanionTests: XCTestCase {
     }
 }
 
+/// An engine with no project behind it: it has nothing to send text to and says so.
+final class NoProjectEngine: LinkEngine, @unchecked Sendable {
+    func submit(_ text: String) async { XCTFail("nothing may be submitted when there is no project") }
+    func approve(requestID: String, projectID: String?) async {}
+    func deny(requestID: String, projectID: String?) async {}
+    func interrupt() async {}
+    func canSubmit() async -> Bool { false }
+}
+
 extension LinkTests {
+    func testTextTypedOnAPhoneWhenTheMacHasNoProjectOpenIsAnsweredNotSwallowed() async throws {
+        let pairing = PairingManager(storeURL: nil)
+        let clock = Clock()      // the pairing helper issues its offer at this fixed time, so the host must use it too
+        let host = LinkHost(pairing: pairing, engine: NoProjectEngine(), clock: { clock.get() })
+        await host.setPairingApproval { _ in true }
+        let (id, psk) = try await pairPhone(host, pairing)
+        let client = try await connect(host, id, psk)
+        try await client.send(.submit("hello from the phone"))
+        // The reply is a notice that says why. If it never comes, closing the client ends the read after 3 s.
+        let guardTask = Task { try? await Task.sleep(nanoseconds: 3_000_000_000); await client.close() }
+        defer { guardTask.cancel() }
+        var told: String?
+        while told == nil, let message = try? await client.receive() {
+            if case .notice(let text) = message { told = text }
+        }
+        XCTAssertTrue(told?.contains("no project open") == true, "the phone is told the text went nowhere: \(String(describing: told))")
+    }
+
+    func testAKeepAlivePingThatCannotBeSentClosesTheLinkAtOnce() async throws {
+        let (host, _, pairing, _) = await makeHost()
+        let (id, psk) = try await pairPhone(host, pairing)
+        let (a, b) = MemoryTransport.pair()
+        Task { await host.serve(b) }
+        let flaky = FlakySendTransport(a)
+        let client = try await LinkClient.connect(over: flaky, deviceID: id, psk: psk)
+        // The silence limit is far away, so only the failed ping can end this link.
+        await client.startKeepAlive(every: 0.05, idleAfter: 100)
+        flaky.failSends()
+        let began = Date()
+        do { while true { _ = try await client.receive() } }
+        catch { XCTAssertLessThan(Date().timeIntervalSince(began), 2, "the link ended because the ping could not be sent") }
+    }
+
+    func testAConnectionToAClosedPortFailsAtOnceWithTheRealError() async throws {
+        // Find a port with nothing on it: listen on any port, note it, stop.
+        let listener = try TCPListener(port: 0, onConnection: { _ in })
+        try await listener.start()
+        let port = listener.port
+        listener.stop()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let transport = TCPTransport.connect(host: "127.0.0.1", port: port)
+        let began = Date()
+        do { _ = try await transport.receive(); XCTFail("nothing is listening on \(port)") }
+        catch {
+            XCTAssertLessThan(Date().timeIntervalSince(began), 3, "refused at once, not after a retry wait")
+            guard case .posix(let code)? = error as? NWError else { return XCTFail("the network's own error is expected, got \(error)") }
+            // Refused, or EADDRINUSE when the kernel reuses the port the listener just freed as the connecting
+            // socket's own port (a self-connect, seen about 1 run in 20): either is the real error, at once.
+            XCTAssertTrue([.ECONNREFUSED, .EADDRINUSE].contains(code), "got \(code)")
+        }
+    }
+
     func testAConnectionStampsWhenThePhoneWasLastSeenAndTheStampIsStored() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pv-link-\(UUID().uuidString)/paired.json")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
@@ -363,8 +447,12 @@ extension LinkTests {
         let never = await pairing.pairedDevices()[0].lastSeenAt
         XCTAssertNil(never, "a phone that paired but never connected has no stamp")
         _ = try await connect(host, id, psk)
-        try await Task.sleep(nanoseconds: 100_000_000)
-        let seen = await pairing.pairedDevices()[0].lastSeenAt
+        // The host stamps after it has verified the phone's proof, which can be just after `connect` returns.
+        var seen: Date?
+        for _ in 0..<100 where seen == nil {
+            seen = await pairing.pairedDevices()[0].lastSeenAt
+            if seen == nil { try await Task.sleep(nanoseconds: 20_000_000) }
+        }
         XCTAssertEqual(seen, clock.get(), "the stamp is the host's clock at the handshake")
         let reloaded = await PairingManager(storeURL: url).pairedDevices()[0].lastSeenAt
         XCTAssertEqual(reloaded, seen, "the stamp survives a restart")

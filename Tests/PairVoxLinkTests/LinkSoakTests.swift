@@ -129,8 +129,15 @@ final class LinkSoakTests: XCTestCase {
         }
         let client = try XCTUnwrap(recovered, "the link did not accept a good phone within 14 s of the churn ending")
         await rig.host.publish(snapshot(999_999))
-        let message = try await timed { try await client.receive() }
-        if case .snapshot(let s) = message { XCTAssertEqual(s.transcriptTail.last?.id, 999_999) } else { XCTFail("expected a snapshot, got \(message)") }
+        // A host sends a phone the state it already has the moment it connects, which can be the last snapshot of the
+        // churn, so the first snapshot is not necessarily the one just published: read until the marker arrives.
+        let sawMarker = try await timed { () async throws -> Bool in
+            for _ in 0..<5 {
+                if case .snapshot(let s) = try await client.receive(), s.transcriptTail.last?.id == 999_999 { return true }
+            }
+            return false
+        }
+        XCTAssertTrue(sawMarker, "the snapshot published after the churn reached the new phone")
         await client.close()
         let growthMB = warmup == 0 ? 0 : (Double(Self.residentBytes()) - Double(warmup)) / 1_048_576
         print("SOAK link churn: \(cycle) cycles in \(Int(seconds)) s \(counts.sorted { $0.key < $1.key }); memory growth after warm-up \(String(format: "%.1f", growthMB)) MB")

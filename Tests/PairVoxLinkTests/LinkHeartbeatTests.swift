@@ -83,6 +83,26 @@ extension LinkTests {
         await client.close()
     }
 
+    func testAMacWithNothingPublishedYetStillSendsHeartbeatsSoAHealthyLinkIsNotDropped() async throws {
+        // A Mac with no project open has published no state. Before this was fixed it sent nothing at all, so a
+        // phone that pings dropped the perfectly healthy link at its own silence limit, again and again.
+        let (host, pairing) = await realRig()
+        await fast(host)
+        let (id, psk) = try await pairReal(host, pairing)
+        let client = try await connect(host, id, psk)
+        await client.startKeepAlive(every: 0.1, idleAfter: 0.8)
+        final class Count: @unchecked Sendable { private let l = NSLock(); private var n = 0
+            func bump() { l.lock(); n += 1; l.unlock() }; var value: Int { l.lock(); defer { l.unlock() }; return n } }
+        let count = Count()
+        let reader = Task { while let m = try? await client.receive() { if case .snapshot(let s) = m { XCTAssertEqual(s.phase, "idle"); count.bump() } } }
+        try await Task.sleep(nanoseconds: 2_000_000_000)          // well over twice the phone's idle limit
+        reader.cancel()
+        let still = await host.connectedCount()
+        XCTAssertEqual(still, 1, "the link is still up")
+        XCTAssertGreaterThanOrEqual(count.value, 4, "idle heartbeats arrived: \(count.value)")
+        await client.close()
+    }
+
     func testAPhoneThatHearsNothingFromTheMacClosesTheLinkItself() async throws {
         let (host, pairing) = await realRig()
         await host.setTiming(.init(heartbeat: 3600, idle: 3600, tick: 3600))   // a Mac that goes quiet
