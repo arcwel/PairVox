@@ -11,15 +11,22 @@
 #   NOTARY_PROFILE=pairvox-notary scripts/release.sh 0.1.0
 #
 #   scripts/release.sh 0.1.0 --dry-run
-#     No certificate or notary account needed: builds ad-hoc signed, makes the DMG, then checks everything that
-#     notarization would check (bundle structure, Info.plist, entitlements, no unsigned or extra Mach-O files,
-#     hardened runtime off because the signature is ad-hoc) and prints what is still missing for a real release.
+#     No certificate or notary account needed: builds ad-hoc signed into .build/release-dry (never dist/), makes the
+#     DMG, then checks what it can of what notarization would check (every signature valid, Info.plist keys and a
+#     build number, the entitlements, no unsigned Mach-O file) and prints what is still missing for a real release.
+#     The only argument after the version that is accepted is --dry-run; anything else is an error, so a typo can
+#     never turn into a real release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:?usage: scripts/release.sh VERSION [--dry-run]}"
+[[ $# -ge 1 && $# -le 2 ]] || { echo "usage: scripts/release.sh VERSION [--dry-run]" >&2; exit 2; }
+VERSION="$1"
 DRY=0
-[[ "${2:-}" == "--dry-run" ]] && DRY=1
+case "${2:-}" in
+  "") ;;
+  --dry-run) DRY=1 ;;
+  *) echo "Unknown argument: $2 (the only option is --dry-run)" >&2; exit 2 ;;
+esac
 # The version names files and is passed to build tools, so it must look like one (a tag name is not trusted).
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)?$ ]] || { echo "Not a version number: $VERSION" >&2; exit 2; }
 if [[ $DRY -eq 0 ]]; then
@@ -27,13 +34,27 @@ if [[ $DRY -eq 0 ]]; then
   : "${NOTARY_PROFILE:?set NOTARY_PROFILE (xcrun notarytool store-credentials)}"
 fi
 
+# CFBundleVersion must grow with every release (Sparkle orders updates by it); the number of commits does, on main.
+BUILD_NUMBER="$(git rev-list --count HEAD)"
+
+# The entitlements a signed app carries, sorted on one line. Each stage tolerates "nothing found": with pipefail an
+# app without entitlements must not abort the script.
+entitlement_keys() {
+  { codesign -d --entitlements :- "$1" 2>/dev/null || true; } | { grep -o '<key>[^<]*</key>' || true; } | sed 's/<[^>]*>//g' | sort | tr '\n' ' '
+}
+EXPECTED_ENTITLEMENTS="com.apple.security.automation.apple-events com.apple.security.device.audio-input "
+
 OUT=dist
 if [[ $DRY -eq 1 ]]; then
   # A dry run never touches dist/, where the app you may be running lives.
   OUT=.build/release-dry
-  MARKETING_VERSION="$VERSION" SIGN_IDENTITY="-" DIST_DIR="$OUT" scripts/build-app.sh >/dev/null
+  MARKETING_VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" SIGN_IDENTITY="-" DIST_DIR="$OUT" scripts/build-app.sh >/dev/null
 else
-  MARKETING_VERSION="$VERSION" scripts/build-app.sh
+  MARKETING_VERSION="$VERSION" BUILD_NUMBER="$BUILD_NUMBER" scripts/build-app.sh
+  # What notarization would reject, caught before anything is signed or uploaded.
+  ENT_ALL="$(entitlement_keys "$OUT/PairVox.app")"
+  [[ "$ENT_ALL" != *"com.apple.security.get-task-allow"* ]] || { echo "$OUT/PairVox.app carries get-task-allow (debugger attach); notarization rejects it. Not releasing." >&2; exit 1; }
+  [[ "$ENT_ALL" == "$EXPECTED_ENTITLEMENTS" ]] || { echo "Unexpected entitlements in $OUT/PairVox.app: ${ENT_ALL:-none}. Not releasing." >&2; exit 1; }
 fi
 
 DMG="$OUT/PairVox-$VERSION.dmg"
@@ -58,35 +79,36 @@ if [[ $DRY -eq 1 ]]; then
   PLIST="$APP/Contents/Info.plist"
   for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion LSMinimumSystemVersion; do
     v="$(/usr/libexec/PlistBuddy -c "Print :$key" "$PLIST" 2>/dev/null || true)"
-    [[ -n "$v" ]] && ok "$key = $v" || problem "$key missing from Info.plist"
+    if [[ -n "$v" ]]; then ok "$key = $v"; else problem "$key missing from Info.plist"; fi
   done
   [[ "$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST")" == "$VERSION" ]] || problem "CFBundleShortVersionString is not $VERSION"
+  [[ "$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST")" == "$BUILD_NUMBER" ]] || problem "CFBundleVersion is not the build number $BUILD_NUMBER (Sparkle could not tell releases apart)"
   FEED="$(/usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$PLIST" 2>/dev/null || true)"
   EDKEY="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$PLIST" 2>/dev/null || true)"
   if [[ -n "$FEED" && -n "$EDKEY" ]]; then ok "Sparkle configured (SUFeedURL set, SUPublicEDKey set)"; else echo "  todo  Sparkle is off: SUFeedURL and SUPublicEDKey are empty (fine before the first release)"; fi
 
-  # 3. Entitlements: hardened-runtime exceptions must be the known ones and nothing more. Xcode adds get-task-allow
-  #    (debugger attach) to every ad-hoc signature; a Developer ID signature must not carry it or notarization fails.
-  # (captured first: with pipefail, grep -q closing the pipe early would make the pipeline fail)
-  ADHOC=0; SIG="$(codesign -dv "$APP" 2>&1 || true)"; [[ "$SIG" == *"Signature=adhoc"* ]] && ADHOC=1
-  ENT="$(codesign -d --entitlements :- "$APP" 2>/dev/null | grep -o '<key>[^<]*</key>' | sed 's/<[^>]*>//g' | grep -v '^com.apple.security.get-task-allow$' | sort | tr '\n' ' ')"
-  if [[ "$ENT" == "com.apple.security.automation.apple-events com.apple.security.device.audio-input " ]]; then ok "entitlements: $ENT"; else problem "unexpected entitlements: ${ENT:-none}"; fi
-  if codesign -d --entitlements :- "$APP" 2>/dev/null | grep -q "get-task-allow"; then
-    if [[ $ADHOC -eq 1 ]]; then echo "  info  get-task-allow is present because the signature is ad-hoc; a Developer ID build drops it"; else problem "get-task-allow in a Developer ID build (notarization rejects it)"; fi
-  fi
+  # 3. Entitlements: the known ones and nothing more. Xcode adds get-task-allow (debugger attach) to an ad-hoc
+  #    signature; a real release build is checked for it (and refused) before anything is signed, above.
+  ENT_ALL="$(entitlement_keys "$APP")"
+  ENT="${ENT_ALL//com.apple.security.get-task-allow /}"
+  if [[ "$ENT" == "$EXPECTED_ENTITLEMENTS" ]]; then ok "entitlements: $ENT"; else problem "unexpected entitlements: ${ENT:-none}"; fi
+  if [[ "$ENT_ALL" == *"com.apple.security.get-task-allow"* ]]; then echo "  info  get-task-allow is present because the signature is ad-hoc; a real release is refused if it carries it"; fi
 
   # 4. No Mach-O file in the bundle is unsigned (notarization rejects any), and nothing stray is embedded.
   UNSIGNED=0
   while IFS= read -r f; do
-    if file -b "$f" | grep -q "Mach-O"; then codesign -dv "$f" >/dev/null 2>&1 || { echo "        unsigned: ${f#$APP/}"; UNSIGNED=$((UNSIGNED + 1)); }; fi
+    kind="$(file -b "$f" || true)"
+    if [[ "$kind" == *"Mach-O"* ]]; then codesign -dv "$f" >/dev/null 2>&1 || { echo "        unsigned: ${f#"$APP"/}"; UNSIGNED=$((UNSIGNED + 1)); }; fi
   done < <(find "$APP" -type f)
-  [[ $UNSIGNED -eq 0 ]] && ok "every Mach-O file is signed" || problem "$UNSIGNED unsigned Mach-O files"
-  FW="$(ls "$APP/Contents/Frameworks" 2>/dev/null | tr '\n' ' ')"
+  if [[ $UNSIGNED -eq 0 ]]; then ok "every Mach-O file is signed"; else problem "$UNSIGNED unsigned Mach-O files"; fi
+  FW="$(ls "$APP/Contents/Frameworks" 2>/dev/null | tr '\n' ' ' || true)"
   echo "  info  frameworks: ${FW:-none}"
 
-  # 5. What a real release still needs on this Mac.
-  security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application" && ok "a Developer ID Application certificate is in the keychain" || echo "  todo  no Developer ID Application certificate in the keychain (Apple Developer Program needed)"
-  xcrun notarytool history --keychain-profile "${NOTARY_PROFILE:-pairvox-notary}" >/dev/null 2>&1 && ok "notary profile ${NOTARY_PROFILE:-pairvox-notary} works" || echo "  todo  no notary profile (xcrun notarytool store-credentials pairvox-notary ...)"
+  # 5. What a real release still needs on this Mac. (Output is captured first: with pipefail, grep -q closing the
+  #    pipe early can make the pipeline report failure.)
+  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  if [[ "$IDENTITIES" == *"Developer ID Application"* ]]; then ok "a Developer ID Application certificate is in the keychain"; else echo "  todo  no Developer ID Application certificate in the keychain (Apple Developer Program needed)"; fi
+  if xcrun notarytool history --keychain-profile "${NOTARY_PROFILE:-pairvox-notary}" >/dev/null 2>&1; then ok "notary profile ${NOTARY_PROFILE:-pairvox-notary} works"; else echo "  todo  no notary profile (xcrun notarytool store-credentials pairvox-notary ...)"; fi
   if spctl --assess --type open --context context:primary-signature "$DMG" >/dev/null 2>&1; then ok "Gatekeeper accepts the DMG"; else echo "  info  Gatekeeper rejects the ad-hoc DMG, as expected before signing and notarization"; fi
 
   echo

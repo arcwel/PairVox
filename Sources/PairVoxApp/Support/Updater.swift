@@ -36,7 +36,8 @@ final class Updater: ObservableObject {
             controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         }
         #else
-        unavailableReason = "Updates are not available in this build (Sparkle is linked by the Xcode project only)."
+        _ = (feed, key)   // read only when Sparkle is linked
+        unavailableReason = "Updates are not available in this build (Sparkle is not linked)."
         #endif
     }
 
