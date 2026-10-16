@@ -38,11 +38,26 @@ public struct PermissionPolicy: Sendable {
     public var projectRoot: String?
     public var pronunciation: Pronunciation
     public var grants: [FolderGrant]
+    /// A spoken yes may answer a request from its one-line summary (file name, first command step) even when the
+    /// full command is too long to read out; the full command is on screen. Off, a long or complex command needs a
+    /// click. The owner's choice (Settings, Permissions); on by default since a 250-character path read aloud
+    /// tells a listener nothing.
+    public var voiceFromSummary: Bool
 
-    public init(projectRoot: String?, pronunciation: Pronunciation = Pronunciation(), grants: [FolderGrant] = []) {
+    public init(projectRoot: String?, pronunciation: Pronunciation = Pronunciation(), grants: [FolderGrant] = [],
+                voiceFromSummary: Bool = true) {
         self.projectRoot = projectRoot.map { ($0 as NSString).standardizingPath }
         self.pronunciation = pronunciation
         self.grants = grants
+        self.voiceFromSummary = voiceFromSummary
+    }
+
+    /// How a path is spoken: its file name, and whether it is in the project. A listener gets nothing from the
+    /// folders above it, and a long path takes ten seconds to read.
+    func spokenFile(_ path: String) -> String {
+        guard !path.isEmpty else { return "a file" }
+        let name = pronunciation.speak((path as NSString).lastPathComponent)
+        return isInsideProject(path) ? "\(name) in the project folder" : "\(name) outside the project"
     }
 
     static let readOnlyTools: Set<String> = ["Read", "Glob", "Grep", "LS", "WebSearch", "TodoWrite", "TaskCreate",
@@ -62,8 +77,9 @@ public struct PermissionPolicy: Sendable {
         case let t where PermissionPolicy.readOnlyTools.contains(t):
             risk = .low
             summary = "\(r.displayName ?? t)"
-            spoken = "Claude wants to use \(Pronunciation.splitIdentifier(t)). Allow?"
             let targets = PermissionPolicy.readTargets(r)
+            spoken = targets.count == 1 ? "Claude wants to read \(spokenFile(targets[0])). Allow?"
+                : "Claude wants to use \(Pronunciation.splitIdentifier(t)). Allow?"
             if let target = targets.first(where: PermissionPolicy.isSensitivePath) {
                 risk = .medium
                 summary = "\(r.displayName ?? t) \(target)"
@@ -78,13 +94,14 @@ public struct PermissionPolicy: Sendable {
             risk = .medium
             let url = r.input["url"]?.stringValue ?? ""
             summary = "Fetch \(url)"
-            spoken = "Claude wants to read \(pronunciation.speak(url)). Allow?"
+            let host = URL(string: url)?.host ?? url
+            spoken = "Claude wants to fetch a page from \(pronunciation.speak(host)). Allow?"
 
         case let t where PermissionPolicy.fileWriteTools.contains(t):
             let path = r.input["file_path"]?.stringValue ?? r.input["notebook_path"]?.stringValue ?? r.blockedPath ?? ""
             let verb = t == "Write" ? "write" : "edit"
             summary = "\(verb.capitalized) \(path)"
-            spoken = "Claude wants to \(verb) \(path.isEmpty ? "a file" : pronunciation.speak(path)). Allow?"
+            spoken = "Claude wants to \(verb) \(spokenFile(path)). Allow?"
             if isInsideProject(path) {
                 risk = .medium
             } else {
@@ -105,9 +122,14 @@ public struct PermissionPolicy: Sendable {
             // Spoken from the command itself. Claude's own `description` field is free text the model
             // (or a prompt-injected repo) chooses, so it never stands in for what will run.
             let narration = BashRisk.narration(command, pronunciation: pronunciation)
-            spoken = "Claude wants to run \(narration.text). Allow?"
-            // A spoken yes must cover exactly what was heard: whatever the short readout leaves out goes to the screen.
-            screenOnly = narration.partial
+            // The first step and a count: the rest of a long command is read from the screen, not the speaker.
+            let steps = BashRisk.segments(command).count
+            let firstStep = ToolNarrator.commandSummary(command, pronunciation: pronunciation)
+            let more = steps > 1 ? " and \(steps - 1) more \(steps == 2 ? "step" : "steps") shown on screen" : ""
+            // With the summary setting off, the whole command is read, so that a yes covers only what was heard.
+            spoken = voiceFromSummary ? "Claude wants to run \(firstStep)\(more). Allow?" : "Claude wants to run \(narration.text). Allow?"
+            // Without the summary setting, a spoken yes must cover exactly what was heard.
+            screenOnly = (narration.partial && !voiceFromSummary)
                 || bash.reasons.contains { BashRisk.networkReasons.contains($0) }
 
         default:
@@ -124,7 +146,8 @@ public struct PermissionPolicy: Sendable {
         }
         var voiceOK = risk < .high && !screenOnly
         if screenOnly, risk < .high {
-            reasons.append("The command is too long or complex to read out, or reaches the network. Check it on screen.")
+            reasons.append(voiceFromSummary ? "The command reaches the network. Check it on screen."
+                                            : "The command is too long or complex to read out, or reaches the network. Check it on screen.")
         }
         if r.requiresUserInteraction {
             voiceOK = false

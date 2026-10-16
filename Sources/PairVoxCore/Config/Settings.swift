@@ -91,6 +91,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var speakProjectNames = true
     /// Voice may also confirm requests Claude Code says need the screen. Off until switched on (and confirmed twice).
     public var voiceApprovesNeedsScreen = false
+    /// A spoken yes answers a request from its one-line summary (file name, first command step); the full command
+    /// is on screen. On by default: a long path read aloud tells a listener nothing. Off, long commands need a click.
+    public var approveByVoiceFromSummary = true
     /// Ask for Touch ID or the login password after the spoken high-risk phrase.
     public var macSecondConfirmation = false
     /// Lets paired phones connect over Tailscale. Off until the owner turns it on.
@@ -208,6 +211,7 @@ public struct AppSettings: Sendable, Codable, Equatable {
         announceQuietSeconds = min(max(quiet, 0.5), 30)
         speakProjectNames = (try? c.decode(Bool.self, forKey: .speakProjectNames)) ?? d.speakProjectNames
         voiceApprovesNeedsScreen = (try? c.decode(Bool.self, forKey: .voiceApprovesNeedsScreen)) ?? d.voiceApprovesNeedsScreen
+        approveByVoiceFromSummary = (try? c.decode(Bool.self, forKey: .approveByVoiceFromSummary)) ?? d.approveByVoiceFromSummary
         macSecondConfirmation = (try? c.decode(Bool.self, forKey: .macSecondConfirmation)) ?? d.macSecondConfirmation
         phoneLinkEnabled = (try? c.decode(Bool.self, forKey: .phoneLinkEnabled)) ?? d.phoneLinkEnabled
         let decodedPort = (try? c.decode(Int.self, forKey: .phoneLinkPort)) ?? d.phoneLinkPort
@@ -273,6 +277,7 @@ public struct SettingsStore: Sendable {
             s.spokenHighRiskConfirmation = false
             s.phoneLinkEnabled = false
             s.voiceApprovesNeedsScreen = false
+            s.approveByVoiceFromSummary = false
         }
         return s
     }

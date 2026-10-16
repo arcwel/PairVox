@@ -59,7 +59,7 @@ final class EngineApprovalTests: XCTestCase {
         snap = await engine.snapshot
         XCTAssertEqual(snap.pendingPermission?.request.requestID, "B", "B is shown once A is answered")
         XCTAssertEqual(snap.queuedPermissionCount, 0)
-        XCTAssertTrue(output.allTexts.contains("Claude wants to edit b dot swift. Allow?"))
+        XCTAssertTrue(output.allTexts.contains("Claude wants to edit b dot swift in the project folder. Allow?"))
 
         await engine.denyPending()
         XCTAssertEqual(backend.responses.map(\.0), ["A", "B"])

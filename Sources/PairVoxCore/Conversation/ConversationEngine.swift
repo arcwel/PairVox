@@ -89,8 +89,7 @@ public actor ConversationEngine {
         self.output = output
         self.makeBackend = backendFactory
         self.pronunciation = Pronunciation(dictionary: configuration.pronunciation)
-        self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation,
-                                       grants: configuration.folderGrants)
+        self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation, grants: configuration.folderGrants, voiceFromSummary: configuration.approveByVoiceFromSummary)
         self.planner = SpeechPlanner(mode: configuration.speechMode, verbosity: configuration.verbosity,
                                      pronunciation: pronunciation, ids: ids, spokenLimit: configuration.spokenReplyLimit)
         var cont: AsyncStream<EngineSnapshot>.Continuation!
@@ -454,7 +453,7 @@ public actor ConversationEngine {
     /// Replaces the folder grants in force, for example after the user removed one in Settings.
     public func setFolderGrants(_ grants: [FolderGrant]) {
         config.folderGrants = grants
-        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: grants)
+        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: grants, voiceFromSummary: config.approveByVoiceFromSummary)
     }
 
     /// Asks whether Claude may work in the project folder without asking each time. Edits and shell commands are
@@ -495,7 +494,7 @@ public actor ConversationEngine {
             } else {
                 config.folderGrants.append(FolderGrant(path: offer.folder, allowShell: false))
             }
-            policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants)
+            policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants, voiceFromSummary: config.approveByVoiceFromSummary)
             grantHandler?(.granted(path: offer.folder, shell: shell))
             log.log(.info, .policy, "folderGrant.granted", ["kind": "\(offer.kind)"])
             appendEntry(.system, shell ? "Shell commands in \(offer.folder) are now allowed without asking."
@@ -711,7 +710,7 @@ public actor ConversationEngine {
     public func setPronunciation(_ dictionary: [String: String]) {
         config.pronunciation = dictionary
         pronunciation = Pronunciation(dictionary: dictionary)
-        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants)
+        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants, voiceFromSummary: config.approveByVoiceFromSummary)
         planner.pronunciation = pronunciation
     }
 

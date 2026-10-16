@@ -137,7 +137,7 @@ final class CatchUpTests: XCTestCase {
         await engine.setActive(true)
         let snap = await engine.snapshot
         XCTAssertFalse(snap.awaitingCatchUpChoice)
-        XCTAssertEqual(output.allTexts.filter { $0 == "Claude wants to edit a dot swift. Allow?" }.count, 2,
+        XCTAssertEqual(output.allTexts.filter { $0 == "Claude wants to edit a dot swift in the project folder. Allow?" }.count, 2,
                        "the waiting question is asked again on return")
     }
 
@@ -149,7 +149,7 @@ final class CatchUpTests: XCTestCase {
         await settle()
         await engine.setActive(true)
         await engine.resolveCatchUp(.skip)
-        XCTAssertEqual(output.allTexts.last, "Claude wants to edit a dot swift. Allow?")
+        XCTAssertEqual(output.allTexts.last, "Claude wants to edit a dot swift in the project folder. Allow?")
     }
 }
 

@@ -16,7 +16,7 @@ final class PermissionPolicyTests: XCTestCase {
         let a = policy.assess(req("Edit", ["file_path": "/Users/dev/app/src/Login.swift"]))
         XCTAssertEqual(a.risk, .medium)
         XCTAssertTrue(a.voiceApprovable)
-        XCTAssertEqual(a.spokenPrompt, "Claude wants to edit Login dot swift. Allow?")
+        XCTAssertEqual(a.spokenPrompt, "Claude wants to edit Login dot swift in the project folder. Allow?")
     }
 
     func testEditOutsideProjectNeedsClick() {

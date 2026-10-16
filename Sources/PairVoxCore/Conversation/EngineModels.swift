@@ -193,6 +193,8 @@ public struct EngineConfiguration: Sendable {
     public var spokenHighRiskConfirmation: Bool
     /// Voice may also confirm requests Claude Code says need the screen (only with spoken confirmation on).
     public var voiceApprovesNeedsScreen: Bool
+    /// A spoken yes answers a request from its one-line summary; the full command stays on screen.
+    public var approveByVoiceFromSummary: Bool
     /// Ask a separate read-only Claude call to explain each request in plain words (uses a small amount of usage).
     public var explainRequests: Bool
     public var folderGrants: [FolderGrant]
@@ -206,9 +208,10 @@ public struct EngineConfiguration: Sendable {
     public init(projectRoot: String? = nil, speechMode: SpeechMode = .skipCode,
                 conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
                 acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
-                spokenHighRiskConfirmation: Bool = false, voiceApprovesNeedsScreen: Bool = false, explainRequests: Bool = true,
+                spokenHighRiskConfirmation: Bool = false, voiceApprovesNeedsScreen: Bool = false,
+                approveByVoiceFromSummary: Bool = true, explainRequests: Bool = true,
                 folderGrants: [FolderGrant] = [], pronunciation: [String: String] = [:],
-                speechRate: Double = 1.0, spokenReplyLimit: Int = 0, acknowledgementDelay: TimeInterval = 1.2) {
+                speechRate: Double = 1.0, spokenReplyLimit: Int = 0, acknowledgementDelay: TimeInterval = 0.8) {
         self.projectRoot = projectRoot
         self.speechMode = speechMode
         self.conversationMode = conversationMode
@@ -217,6 +220,7 @@ public struct EngineConfiguration: Sendable {
         self.autoApproveLowRisk = autoApproveLowRisk
         self.spokenHighRiskConfirmation = spokenHighRiskConfirmation
         self.voiceApprovesNeedsScreen = voiceApprovesNeedsScreen
+        self.approveByVoiceFromSummary = approveByVoiceFromSummary
         self.explainRequests = explainRequests
         self.folderGrants = folderGrants
         self.pronunciation = pronunciation
@@ -234,6 +238,7 @@ public struct EngineConfiguration: Sendable {
                   autoApproveLowRisk: settings.autoApproveLowRisk,
                   spokenHighRiskConfirmation: settings.spokenHighRiskConfirmation,
                   voiceApprovesNeedsScreen: settings.voiceApprovesNeedsScreen,
+                  approveByVoiceFromSummary: settings.approveByVoiceFromSummary,
                   explainRequests: settings.explainRequests,
                   folderGrants: settings.folderGrants,
                   pronunciation: settings.pronunciation,

@@ -350,7 +350,7 @@ final class ConversationEngineTests: XCTestCase {
         await settle()
         var snap = await engine.snapshot
         XCTAssertEqual(snap.phase, .awaitingPermission)
-        XCTAssertEqual(output.queue.last?.text, "Claude wants to edit a dot swift. Allow?")
+        XCTAssertEqual(output.queue.last?.text, "Claude wants to edit a dot swift in the project folder. Allow?")
         await engine.submit("yeah go ahead")
         XCTAssertEqual(backend.responses.map(\.0), ["p1"])
         XCTAssertEqual(backend.responses.first?.1, .allow)
