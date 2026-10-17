@@ -133,7 +133,7 @@ public enum ModelStoreError: Error, LocalizedError {
     }
 }
 
-private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     let destination: URL
     let progress: (Double) -> Void
     let completion: (Result<URL, Error>) -> Void

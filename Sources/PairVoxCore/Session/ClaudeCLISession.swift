@@ -109,11 +109,18 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
             self?.handleTermination(proc)
         }
 
+        let log = DiagnosticLog.shared
         do {
             try p.run()
         } catch {
+            log.log(.error, .session, "process.launch.failed", ["error": .string(error.localizedDescription)])
             throw SessionError.launchFailed(error.localizedDescription)
         }
+        // Flags only: the arguments include the system prompt, and the environment can hold an API key.
+        let flags = (p.arguments ?? []).filter { $0.hasPrefix("--") }.joined(separator: " ")
+        log.log(.info, .session, "process.launched",
+                ["pid": .int(Int(p.processIdentifier)), "exe": .string(cfg.executable.path), "flags": .string(flags),
+                 "resume": .bool(cfg.resumeSessionID != nil), "cwd": .string(cfg.workingDirectory.path)])
         process = p
         stdinHandle = inPipe.fileHandleForWriting
     }

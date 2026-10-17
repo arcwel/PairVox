@@ -36,7 +36,10 @@ var targets: [Target] = [
     .executableTarget(
         name: "PairVoxCLI",
         dependencies: ["PairVoxCore"],
-        path: "Sources/PairVoxCLI"
+        path: "Sources/PairVoxCLI",
+        // Swift 5 mode like the Voice and App targets: the CLI configures C stdio (setvbuf on the Glibc `stdout`
+        // global), which Swift 6 strict concurrency refuses on Linux. The engine it drives stays in Swift 6.
+        swiftSettings: [.swiftLanguageMode(.v5)]
     ),
     .testTarget(
         name: "PairVoxCoreTests",
@@ -49,7 +52,7 @@ var targets: [Target] = [
 #if os(macOS)
 dependencies += [
     // Speech-to-text (MIT)
-    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.1.0"),
+    .package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "1.1.1"),
     // Kokoro text-to-speech (MIT; MisakiSwift G2P is Apache-2.0, no espeak-ng).
     // Pinned exactly: 1.0.11 pins mlx-swift 0.30.2 / MLXUtilsLibrary 0.0.6; newer mlx breaks Kokoro.
     .package(url: "https://github.com/mlalma/kokoro-ios.git", exact: "1.0.11"),
@@ -61,11 +64,44 @@ dependencies += [
 
 products += [
     .library(name: "PairVoxVoice", targets: ["PairVoxVoice"]),
+    .library(name: "PairVoxLink", targets: ["PairVoxLink"]),
+    .library(name: "PairVoxLinkKit", targets: ["PairVoxLinkKit"]),
+    .executable(name: "pairvox-link", targets: ["PairVoxLinkCLI"]),
+    .executable(name: "pairvox-link-testhost", targets: ["PairVoxLinkTestHost"]),
     // Dev convenience (`swift run pairvox-app`); the distributable app is built from project.yml.
     .executable(name: "pairvox-app", targets: ["PairVoxApp"]),
 ]
 
 targets += [
+    .target(
+        name: "PairVoxLinkKit",
+        path: "Sources/PairVoxLinkKit",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .target(
+        name: "PairVoxLink",
+        dependencies: ["PairVoxCore", "PairVoxLinkKit"],
+        path: "Sources/PairVoxLink",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .executableTarget(
+        name: "PairVoxLinkTestHost",
+        dependencies: ["PairVoxLink", "PairVoxLinkKit"],
+        path: "Sources/PairVoxLinkTestHost",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .executableTarget(
+        name: "PairVoxLinkCLI",
+        dependencies: ["PairVoxLink"],
+        path: "Sources/PairVoxLinkCLI",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
+    .testTarget(
+        name: "PairVoxLinkTests",
+        dependencies: ["PairVoxLink", "PairVoxLinkKit", "PairVoxCore"],
+        path: "Tests/PairVoxLinkTests",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
     .target(
         name: "PairVoxVoice",
         dependencies: [
@@ -78,9 +114,15 @@ targets += [
         path: "Sources/PairVoxVoice",
         swiftSettings: [.swiftLanguageMode(.v5)]
     ),
+    .testTarget(
+        name: "PairVoxVoiceTests",
+        dependencies: ["PairVoxVoice", "PairVoxCore", .product(name: "WhisperKit", package: "WhisperKit")],
+        path: "Tests/PairVoxVoiceTests",
+        swiftSettings: [.swiftLanguageMode(.v5)]
+    ),
     .executableTarget(
         name: "PairVoxApp",
-        dependencies: ["PairVoxCore", "PairVoxVoice"],
+        dependencies: ["PairVoxCore", "PairVoxVoice", "PairVoxLink", "PairVoxLinkKit"],
         path: "Sources/PairVoxApp",
         exclude: ["Info.plist", "PairVox.entitlements"],
         swiftSettings: [.swiftLanguageMode(.v5)],
@@ -100,7 +142,7 @@ targets += [
 
 let package = Package(
     name: "PairVox",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v15), .iOS(.v18)],
     products: products,
     dependencies: dependencies,
     targets: targets

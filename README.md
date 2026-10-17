@@ -19,7 +19,7 @@ PairVox puts a live voice loop in front of the [Claude Code](https://code.claude
   - *Skip code*: prose is read; code is described briefly ("a 12-line Swift snippet").
   - *Summary*: only the opening summary is read. Say "details" for the rest.
 - **Brainstorm or execute.** *Brainstorm* runs Claude Code in plan mode, so it discusses and plans but changes nothing. *Execute* lets it work.
-- **Approve by voice, safely.** "Yes", "no", "always allow", or "no, edit the other file instead". Destructive actions are never approved by voice and always need a click: deleting files, pushing, `sudo`, and edits outside the project.
+- **Approve by voice, safely.** "Yes", "no", "always allow", or "no, edit the other file instead". Destructive actions (deleting files, pushing, `sudo`, edits outside the project) need a click by default. If you choose, you can allow them by voice too, with a deliberate phrase (Settings → General → Permissions); that switch is off until you turn it on.
 - **Natural, local voices.** Speech recognition uses [WhisperKit](https://github.com/argmaxinc/WhisperKit), with Apple Speech as the fallback. The voice is [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), falling back to the macOS system voice. Speech never leaves your Mac.
 
 > PairVox is an independent open-source project. It works with Claude Code but is not affiliated with or endorsed by Anthropic. “Claude” and “Claude Code” are trademarks of Anthropic.
@@ -111,7 +111,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how it fits together.
 
 ## Roadmap
 
-The macOS app is v1. An **iPhone client** is next: the Mac hosts the session and the phone handles voice. The engine already sits behind a `SessionBackend` protocol so a remote host can be added without a rewrite. See [docs/ROADMAP.md](docs/ROADMAP.md).
+The macOS app is v1, with several projects at once, folder-level approvals, plain-language request summaries and a mini or menu-bar mode. An **iPhone client** is under way: the Mac hosts the session over Tailscale and the phone handles voice (`ios/`, first build; see [ios/README.md](ios/README.md)). Cross-project approvals, answering another project's request without switching, are specified in [docs/prd/cross-project-approvals-prd.md](docs/prd/cross-project-approvals-prd.md). See [docs/ROADMAP.md](docs/ROADMAP.md) for status and [docs/security/](docs/security/) for the audits.
 
 ## Contributing
 
@@ -120,3 +120,21 @@ Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Security repo
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Third-party components and model files are listed in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+## Phone link
+
+The phone talks to the Mac over Tailscale. **If your tailnet uses access rules, allow your phone to reach your Mac on TCP port 47821, or pairing fails silently.** Full setup, the exact rule and troubleshooting: [docs/PHONE_LINK_SETUP.md](docs/PHONE_LINK_SETUP.md).
+
+### From the terminal
+
+`pairvox-link` talks to the running app (private socket in `~/Library/Application Support/PairVox/`). Every command has `--json`; exit codes are 0 done, 1 refused, 2 bad usage, 3 PairVox not running.
+
+```bash
+swift run pairvox-link status
+swift run pairvox-link pair               # prints a QR code and the same pairing link as text
+swift run pairvox-link phones list
+swift run pairvox-link phones remove <id> --dry-run
+swift run pairvox-link phones prune --stale --days 30 --dry-run   # phones not seen for 30 days; connected ones are never listed
+```
+
+A new phone still needs your click on the Mac ("Pair"). Removing a phone disconnects it at once and destroys its key.

@@ -7,8 +7,10 @@ import SwiftUI
 struct ControlBarView: View {
     @EnvironmentObject var model: AppModel
     @State private var typed = ""
+    @FocusState private var typingFocused: Bool
 
     var body: some View {
+        let _ = UITrace.tick("ControlBar.body")
         VStack(spacing: 8) {
             HStack(spacing: 14) {
                 StatusOrbView(phase: model.snapshot.phase, level: model.inputLevel, muted: model.listeningMode == .muted)
@@ -28,7 +30,7 @@ struct ControlBarView: View {
                 } label: {
                     Image(systemName: model.listeningMode == .muted ? "mic.slash.fill" : "mic.fill")
                 }
-                .help(model.listeningMode == .muted ? "Unmute microphone" : "Mute microphone")
+                .accessibilityHint("\(model.listeningMode == .muted ? "Unmute" : "Mute") microphone (\(Shortcuts.of(.toggleMute).display), anywhere: ⌃⌥M)")
 
                 Button {
                     model.stopSpeaking()
@@ -36,7 +38,7 @@ struct ControlBarView: View {
                     Image(systemName: "speaker.slash.fill")
                 }
                 .disabled(!model.snapshot.isSpeaking)
-                .help("Stop speaking (⌘.)")
+                .accessibilityHint("Stop speaking (\(Shortcuts.of(.stopSpeaking).display), anywhere: ⌃⌥S)")
 
                 Button {
                     model.interrupt()
@@ -44,13 +46,15 @@ struct ControlBarView: View {
                     Image(systemName: "stop.fill")
                 }
                 .disabled(!model.snapshot.isClaudeWorking)
-                .help("Interrupt Claude (⇧⌘.)")
+                .accessibilityHint("Interrupt Claude (\(Shortcuts.of(.interrupt).display), anywhere: ⌃⌥I)")
             }
             .controlSize(.large)
 
             HStack {
-                TextField("Type instead of talking…", text: $typed)
-                    .textFieldStyle(.roundedBorder)
+                TextField("Type instead of talking… (\(Shortcuts.of(.focusInput).display))", text: $typed)
+                    .textFieldStyle(RoundedFieldStyle())
+                    .focused($typingFocused)
+                    .onChange(of: model.focusInputTick) { typingFocused = true }
                     .onSubmit {
                         model.sendTyped(typed)
                         typed = ""
@@ -96,7 +100,7 @@ private struct PushToTalkButton: View {
             .onChange(of: pressing) { _, isPressing in
                 model.pushToTalk(down: isPressing)
             }
-            .help("Hold to talk. Global shortcut: hold ⌃⌥Space")
+            .accessibilityHint("Hold to talk. Works in any app: hold \(Shortcuts.pushToTalk(model.settings.pushToTalkKey).display)")
             .disabled(model.project == nil)
     }
 }
@@ -121,7 +125,10 @@ struct StatusOrbView: View {
     var body: some View {
         // Map -60…-10 dBFS to 0…1 for a gentle pulse.
         let normalized = CGFloat(max(0, min(1, (level + 60) / 50)))
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+        // Only thinking, working and speaking move with time; listening follows `level`, which re-renders this view
+        // anyway. Paused otherwise, so an idle window is not redrawn 30 times a second.
+        let animating = phase == .thinking || phase == .working || phase == .speaking
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !animating)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let breathing: CGFloat = (phase == .thinking || phase == .working) ? 0.08 * CGFloat(sin(t * 4)) : 0
             let speaking: CGFloat = phase == .speaking ? 0.06 * CGFloat(sin(t * 9)) : 0

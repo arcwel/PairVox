@@ -39,7 +39,14 @@ public enum OutboundMessage {
         case .allowAlways:
             var p: [String: JSONValue] = ["behavior": "allow", "updatedInput": request.input]
             if let s = request.suggestions, case .array(let items) = s, !items.isEmpty, !request.suppressAlwaysAllow {
-                p["updatedPermissions"] = s
+                // "Don't ask again" is promised for this session only, so every suggestion is applied to the
+                // session. A suggestion that targets a settings file would otherwise outlive it unseen.
+                let scoped: [JSONValue] = items.compactMap {
+                    guard case .object(var o) = $0 else { return nil }
+                    o["destination"] = "session"
+                    return .object(o)
+                }
+                if !scoped.isEmpty { p["updatedPermissions"] = .array(scoped) }
             }
             payload = .object(p)
         case .deny(let message, let interrupt):

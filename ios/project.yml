@@ -1,0 +1,33 @@
+# XcodeGen spec for the iPhone app.   cd ios && xcodegen generate && open PairVoxPhone.xcodeproj
+# Set your Apple team under Signing & Capabilities (or DEVELOPMENT_TEAM below) before running on a device.
+name: PairVoxPhone
+options:
+  bundleIdPrefix: app.pairvox
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  PairVoxKit:
+    path: ..
+targets:
+  PairVoxPhone:
+    type: application
+    platform: iOS
+    sources:
+      - path: PairVoxPhone
+        excludes: ["Info.plist"]
+    dependencies:
+      - package: PairVoxKit
+        product: PairVoxLinkKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.pairvox.PairVoxPhone
+        INFOPLIST_FILE: PairVoxPhone/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

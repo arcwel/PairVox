@@ -12,6 +12,51 @@ public protocol SpeechSynthesizing: AnyObject, Sendable {
     var displayName: String { get }
     var isReady: Bool { get }
     func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer
+    /// The plain system voice, when this synthesizer has one to fall back on (used when a neural voice keeps
+    /// producing corrupt audio for a sentence). Nil if there is none.
+    func synthesizeWithSystemVoice(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer?
+}
+
+public extension SpeechSynthesizing {
+    func synthesizeWithSystemVoice(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer? { nil }
+}
+
+/// Recovery for a sentence the voice renders as noise: two shorter pieces, joined.
+public enum SynthesisRecovery {
+    /// Cuts a sentence into two parts of similar length, preferring a comma, semicolon or colon near the middle,
+    /// then a space. Nil when it is too short to be worth cutting.
+    public static func split(_ text: String) -> (String, String)? {
+        let chars = Array(text)
+        guard chars.count >= 24 else { return nil }
+        let mid = chars.count / 2
+        let window = max(6, chars.count / 4)
+        // Plain loops: the lazy flatMap-then-first form made the CI compiler give up type-checking (2026-10-17).
+        func nearest(_ matches: (Character) -> Bool) -> Int? {
+            for distance in 0...window {
+                for i in [mid - distance, mid + distance] where i > 4 && i < chars.count - 4 && matches(chars[i]) {
+                    return i
+                }
+            }
+            return nil
+        }
+        guard let i = nearest({ ",;:".contains($0) }).map({ $0 + 1 }) ?? nearest({ $0 == " " }) else { return nil }
+        let a = String(chars[..<i]).trimmingCharacters(in: .whitespaces)
+        let b = String(chars[i...]).trimmingCharacters(in: .whitespaces)
+        return a.isEmpty || b.isEmpty ? nil : (a, b)
+    }
+
+    /// Two buffers of the same format joined end to end.
+    public static func join(_ a: AVAudioPCMBuffer, _ b: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard a.format == b.format, let out = AVAudioPCMBuffer(pcmFormat: a.format, frameCapacity: a.frameLength + b.frameLength),
+              let src = (a.floatChannelData, b.floatChannelData) as? (UnsafePointer<UnsafeMutablePointer<Float>>, UnsafePointer<UnsafeMutablePointer<Float>>),
+              let dst = out.floatChannelData else { return nil }
+        for c in 0..<Int(a.format.channelCount) {
+            dst[c].update(from: src.0[c], count: Int(a.frameLength))
+            (dst[c] + Int(a.frameLength)).update(from: src.1[c], count: Int(b.frameLength))
+        }
+        out.frameLength = a.frameLength + b.frameLength
+        return out
+    }
 }
 
 public enum SynthesisError: Error, LocalizedError {
@@ -67,7 +112,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
         if isReady { return }
         guard MLXRuntime.metalLibraryAvailable() else {
             let msg = "Kokoro needs MLX's Metal shaders. Build the app with Xcode or scripts/build-app.sh."
-            lock.lock(); loadError = msg; lock.unlock()
+            lock.withLock { loadError = msg }
             throw SynthesisError.failed(msg)
         }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
@@ -93,11 +138,13 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     }
 
     public func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
-        lock.lock()
-        let engine = tts
-        let style = voices[_voice + ".npy"] ?? voices["af_heart.npy"] ?? voices.values.first
-        let language: Language = _voice.hasPrefix("b") ? .enGB : .enUS
-        lock.unlock()
+        try await synthesize(text, voice: voice, rate: rate)
+    }
+
+    /// Speaks with a specific voicepack without changing the selected voice (used by previews).
+    public func synthesize(_ text: String, voice id: String, rate: Double) async throws -> AVAudioPCMBuffer {
+        let (engine, style) = lock.withLock { (tts, voices[id + ".npy"] ?? voices["af_heart.npy"] ?? voices.values.first) }
+        let language: Language = id.hasPrefix("b") ? .enGB : .enUS
         guard let engine, let style else { throw SynthesisError.notReady }
 
         let samples: [Float] = try await withCheckedThrowingContinuation { cont in
@@ -265,9 +312,14 @@ public final class FallbackSynthesizer: SpeechSynthesizing, @unchecked Sendable 
                 return try await kokoro.synthesize(text, rate: rate)
             } catch {
                 NSLog("PairVox: Kokoro failed (\(error)); using the system voice")
+                DiagnosticLog.shared.log(.warning, .tts, "fallback.system", ["error": .string("\(error)")])
             }
         }
         return try await system.synthesize(text, rate: rate)
+    }
+
+    public func synthesizeWithSystemVoice(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer? {
+        try await system.synthesize(text, rate: rate)
     }
 }
 

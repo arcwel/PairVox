@@ -73,6 +73,8 @@ public struct SpeechPlanner: Sendable {
     public var mode: SpeechMode
     public var verbosity: Verbosity
     public var pronunciation: Pronunciation
+    /// The most prose and code sentences read aloud in one turn; the rest is held back for "details". 0 means no limit.
+    public var spokenLimit: Int
 
     private let ids: UtteranceIDs
     private var parser = MarkdownSpeechParser()
@@ -91,9 +93,12 @@ public struct SpeechPlanner: Sendable {
     public private(set) var spokenThisTurn: [Utterance] = []
     public private(set) var skipped: [SkippedSegment] = []
     private var toolCount = 0
+    private var spokenCount = 0
+    private var limitHit = false
 
     public init(mode: SpeechMode, verbosity: Verbosity = .normal, pronunciation: Pronunciation = Pronunciation(),
-                ids: UtteranceIDs = UtteranceIDs()) {
+                ids: UtteranceIDs = UtteranceIDs(), spokenLimit: Int = 0) {
+        self.spokenLimit = max(0, spokenLimit)
         self.mode = mode
         self.verbosity = verbosity
         self.pronunciation = pronunciation
@@ -136,6 +141,8 @@ public struct SpeechPlanner: Sendable {
         case .success:
             if mode == .summary, !heldBack.isEmpty {
                 out.append(make("There's more detail. Say “details” to hear it.", .prompt))
+            } else if limitHit, !heldBack.isEmpty {
+                out.append(make("That's the first part. Say “details” to hear the rest.", .prompt))
             }
         case .interrupted:
             break
@@ -177,10 +184,11 @@ public struct SpeechPlanner: Sendable {
                 out += route(chunker.boundary())
                 let desc = "There's a table with \(rows) \(rows == 1 ? "row" : "rows") on screen."
                 skipped.append(SkippedSegment(kind: .table, summary: desc))
-                if mode == .summary && summaryClosed {
+                if (mode == .summary && summaryClosed) || overLimit() {
                     heldBack.append(make(desc, .prose, record: false))
                 } else {
                     out.append(make(desc, .prose))
+                    spokenCount += 1
                 }
             }
         }
@@ -196,11 +204,12 @@ public struct SpeechPlanner: Sendable {
         for raw in chunks {
             let spoken = pronunciation.speak(raw)
             guard SentenceChunker.isSpeakable(spoken) else { continue }
-            if mode == .summary && summaryClosed {
+            if mode == .summary && summaryClosed || overLimit() {
                 heldBack.append(make(spoken, .prose, record: false))
             } else {
                 out.append(make(spoken, .prose))
                 proseSpokenInBlock = true
+                spokenCount += 1
             }
         }
         return out
@@ -212,10 +221,17 @@ public struct SpeechPlanner: Sendable {
         let reading = CodeReader.read(language: language, code: code, pronunciation: pronunciation)
         codeReadings += reading.map { make($0, .code, record: false) }
 
+        if mode != .summary, overLimit() {
+            heldBack.append(make(description, .code, record: false))
+            return []
+        }
         switch mode {
         case .full:
-            return [make(description, .code)] + reading.map { make($0, .code) }
+            let spoken = [make(description, .code)] + reading.map { make($0, .code) }
+            spokenCount += spoken.count
+            return spoken
         case .skipCode:
+            spokenCount += 1
             return [make(description, .code)]
         case .summary:
             if summaryClosed {
@@ -224,6 +240,13 @@ public struct SpeechPlanner: Sendable {
             }
             return [make(description, .code)]
         }
+    }
+
+    /// True once this turn has used up its spoken sentences. From then on everything is held back.
+    private mutating func overLimit() -> Bool {
+        guard spokenLimit > 0, spokenCount >= spokenLimit else { return false }
+        limitHit = true
+        return true
     }
 
     private mutating func make(_ text: String, _ kind: Utterance.Kind, record: Bool = true) -> Utterance {

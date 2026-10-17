@@ -14,6 +14,21 @@ public protocol SpeechOutput: AnyObject, Sendable {
     /// not finish (the one playing first), so speech can resume later.
     @discardableResult func stopAll() -> [Int]
     func setRate(_ rate: Double)
+    /// True when `pause()` holds playback in place and `resume()` carries on from the same spot. An output that cannot
+    /// do this keeps the default (false) and the engine stops speech at a barge-in instead.
+    var supportsPause: Bool { get }
+    func pause()
+    func resume()
+    /// Removes utterances that are queued but have not started playing. Returns the ids that were removed; one that is
+    /// already playing stays. An output that cannot do this returns nothing and the engine leaves the queue alone.
+    @discardableResult func cancelQueued(_ ids: [Int]) -> [Int]
+}
+
+public extension SpeechOutput {
+    var supportsPause: Bool { false }
+    func pause() {}
+    func resume() {}
+    func cancelQueued(_ ids: [Int]) -> [Int] { [] }
 }
 
 public enum SpeechOutputEvent: Sendable, Equatable {
@@ -62,9 +77,64 @@ public struct TranscriptEntry: Sendable, Equatable, Identifiable {
     }
 }
 
+/// A plain-words explanation of a pending request, written by a separate read-only Claude call.
+public enum Explanation: Sendable, Equatable {
+    case none
+    case loading
+    case ready(String)
+    case unavailable
+}
+
+/// One assistant reply that arrived while the user was in another project.
+public struct MissedMessage: Sendable, Equatable, Identifiable {
+    public let entryID: Int
+    public var id: Int { entryID }
+    /// What was (or would have been) spoken, as sentences.
+    public var sentences: [String]
+    public var date: Date
+}
+
+/// What to do about replies that arrived while the user was in another project.
+public enum CatchUpChoice: Sendable, Equatable {
+    case fromFirstMissed
+    case lastMessage
+    case skip
+}
+
+/// A question to the user about giving Claude standing access to the project folder.
+public struct GrantOffer: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable { case edit, shell }
+    public enum Stage: Sendable, Equatable { case asking, confirming }
+    public var folder: String
+    public var kind: Kind
+    public var stage: Stage
+    /// The words PairVox says (and the banner shows) at this stage.
+    public var text: String
+}
+
+/// What the engine reports back so the app can save or forget a grant.
+public enum FolderGrantChange: Sendable, Equatable {
+    case granted(path: String, shell: Bool)
+    case declined(path: String)
+}
+
 public struct PendingPermission: Sendable, Equatable {
     public var request: PermissionRequest
     public var assessment: PermissionAssessment
+    public var explanation: Explanation = .none
+    /// Questions the user asked about this request before deciding, and the answers.
+    public var questions: [AdvisorTurn] = []
+    /// When the request arrived. A spoken yes stops counting after `Announcer.staleAfter`; a click still works.
+    public var receivedAt: Date
+
+    public init(request: PermissionRequest, assessment: PermissionAssessment, receivedAt: Date = Date()) {
+        self.request = request
+        self.assessment = assessment
+        self.receivedAt = receivedAt
+    }
+
+    /// Older than the age limit every voice path shares (the announcer's and the phone link's).
+    public func isStale(now: Date) -> Bool { now.timeIntervalSince(receivedAt) > Announcer.staleAfter }
 }
 
 public struct UsageSnapshot: Sendable, Equatable {
@@ -93,6 +163,16 @@ public struct EngineSnapshot: Sendable, Equatable {
     public var phase: EnginePhase = .starting
     public var transcript: [TranscriptEntry] = []
     public var pendingPermission: PendingPermission?
+    public var grantOffer: GrantOffer?
+    /// False while the user is working in a different project: this one stays silent.
+    public var isActive = true
+    /// Replies spoken-or-not that the user has not heard because they were elsewhere.
+    public var missedMessages: [MissedMessage] = []
+    /// The user has come back to a project with missed replies and has not yet chosen what to hear.
+    public var awaitingCatchUpChoice = false
+    /// Requests waiting behind the one shown; each is shown and spoken in turn once the current one is answered.
+    public var queuedPermissions: [PendingPermission] = []
+    public var queuedPermissionCount: Int { queuedPermissions.count }
     public var session: SessionInfo?
     public var usage = UsageSnapshot()
     public var speechMode: SpeechMode = .skipCode
@@ -116,23 +196,42 @@ public struct EngineConfiguration: Sendable {
     public var verbosity: Verbosity
     public var acknowledgements: Bool
     public var autoApproveLowRisk: Bool
+    public var spokenHighRiskConfirmation: Bool
+    /// Voice may also confirm requests Claude Code says need the screen (only with spoken confirmation on).
+    public var voiceApprovesNeedsScreen: Bool
+    /// A spoken yes answers a request from its one-line summary; the full command stays on screen.
+    public var approveByVoiceFromSummary: Bool
+    /// Ask a separate read-only Claude call to explain each request in plain words (uses a small amount of usage).
+    public var explainRequests: Bool
+    public var folderGrants: [FolderGrant]
     public var pronunciation: [String: String]
     public var speechRate: Double
+    /// The most sentences read aloud per reply; the rest waits for "details". 0 means everything.
+    public var spokenReplyLimit: Int
     /// Delay before a filler acknowledgement if nothing has been said yet.
     public var acknowledgementDelay: TimeInterval
 
     public init(projectRoot: String? = nil, speechMode: SpeechMode = .skipCode,
                 conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
-                acknowledgements: Bool = true, autoApproveLowRisk: Bool = false, pronunciation: [String: String] = [:],
-                speechRate: Double = 1.0, acknowledgementDelay: TimeInterval = 1.2) {
+                acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
+                spokenHighRiskConfirmation: Bool = false, voiceApprovesNeedsScreen: Bool = false,
+                approveByVoiceFromSummary: Bool = true, explainRequests: Bool = true,
+                folderGrants: [FolderGrant] = [], pronunciation: [String: String] = [:],
+                speechRate: Double = 1.0, spokenReplyLimit: Int = 0, acknowledgementDelay: TimeInterval = 0.8) {
         self.projectRoot = projectRoot
         self.speechMode = speechMode
         self.conversationMode = conversationMode
         self.verbosity = verbosity
         self.acknowledgements = acknowledgements
         self.autoApproveLowRisk = autoApproveLowRisk
+        self.spokenHighRiskConfirmation = spokenHighRiskConfirmation
+        self.voiceApprovesNeedsScreen = voiceApprovesNeedsScreen
+        self.approveByVoiceFromSummary = approveByVoiceFromSummary
+        self.explainRequests = explainRequests
+        self.folderGrants = folderGrants
         self.pronunciation = pronunciation
         self.speechRate = speechRate
+        self.spokenReplyLimit = spokenReplyLimit
         self.acknowledgementDelay = acknowledgementDelay
     }
 
@@ -143,7 +242,13 @@ public struct EngineConfiguration: Sendable {
                   verbosity: settings.verbosity,
                   acknowledgements: settings.acknowledgements,
                   autoApproveLowRisk: settings.autoApproveLowRisk,
+                  spokenHighRiskConfirmation: settings.spokenHighRiskConfirmation,
+                  voiceApprovesNeedsScreen: settings.voiceApprovesNeedsScreen,
+                  approveByVoiceFromSummary: settings.approveByVoiceFromSummary,
+                  explainRequests: settings.explainRequests,
+                  folderGrants: settings.folderGrants,
                   pronunciation: settings.pronunciation,
-                  speechRate: settings.speechRate)
+                  speechRate: settings.speechRate,
+                  spokenReplyLimit: settings.spokenReplyLimit)
     }
 }

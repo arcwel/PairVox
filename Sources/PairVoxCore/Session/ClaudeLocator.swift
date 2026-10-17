@@ -30,7 +30,9 @@ public enum ClaudeLocator {
                               fileManager: FileManager = .default) -> URL? {
         if let override, !override.isEmpty {
             let expanded = (override as NSString).expandingTildeInPath
-            return fileManager.isExecutableFile(atPath: expanded) ? URL(fileURLWithPath: expanded) : nil
+            guard fileManager.isExecutableFile(atPath: expanded), overrideProblem(expanded, fileManager: fileManager) == nil
+            else { return nil }
+            return URL(fileURLWithPath: expanded)
         }
         for dir in candidateDirectories(home: home, pathVariable: pathVariable) {
             let path = (dir as NSString).appendingPathComponent("claude")
@@ -38,6 +40,24 @@ public enum ClaudeLocator {
                 return URL(fileURLWithPath: path)
             }
         }
+        return nil
+    }
+
+    /// Why a user-chosen `claude` path cannot be trusted with the API key and the repository, or nil if it can.
+    /// The override comes from a file any process of the user can edit, and the program it names is started with
+    /// the key in its environment, so it must be a real file that only the user or root can change.
+    public static func overrideProblem(_ path: String, fileManager: FileManager = .default) -> String? {
+        guard (path as NSString).isAbsolutePath else { return "The path must be absolute." }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attrs = try? fileManager.attributesOfItem(atPath: resolved) else { return "The file does not exist." }
+        guard (attrs[.type] as? FileAttributeType) == .typeRegular else { return "It is not a regular file." }
+        let uid = (attrs[.ownerAccountID] as? NSNumber)?.uint32Value ?? .max
+        guard uid == getuid() || uid == 0 else { return "It is owned by another user." }
+        let mode = (attrs[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777
+        guard mode & 0o022 == 0 else { return "Other users or groups can change it." }
+        let parent = (resolved as NSString).deletingLastPathComponent
+        let parentMode = (try? fileManager.attributesOfItem(atPath: parent))?[.posixPermissions] as? NSNumber
+        guard (parentMode?.uint16Value ?? 0o777) & 0o002 == 0 else { return "Its folder is writable by everyone." }
         return nil
     }
 
@@ -53,23 +73,38 @@ public enum ClaudeLocator {
 /// Reads the user's login-shell environment (PATH etc.), which GUI apps don't get.
 public enum ShellEnvironment {
     public static func loginShellEnvironment(timeout: TimeInterval = 5) async -> [String: String] {
+        await readLoginShell(timeout: timeout).environment
+    }
+
+    /// The login shell's environment plus whether the shell was actually read. When it was not (no executable
+    /// shell, a timeout, or output without the marker) `environment` is this process's own, PATH merged.
+    public struct LoginShellRead: Sendable {
+        public var environment: [String: String]
+        public var shell: String
+        public var shellWasRead: Bool
+    }
+
+    public static func readLoginShell(timeout: TimeInterval = 5) async -> LoginShellRead {
         var env = ProcessInfo.processInfo.environment
         let shell = env["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
-        guard FileManager.default.isExecutableFile(atPath: shell) else { return env }
-        let marker = "__PAIRVOX_ENV__"
-        let script = "echo \(marker); env"
-        if let r = try? await ProcessRunner.run(URL(fileURLWithPath: shell), arguments: ["-l", "-i", "-c", script],
-                                                environment: env, timeout: timeout),
-           let range = r.stdout.range(of: marker + "\n") {
-            for line in r.stdout[range.upperBound...].split(separator: "\n") {
-                guard let eq = line.firstIndex(of: "=") else { continue }
-                let key = String(line[..<eq])
-                guard !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { continue }
-                env[key] = String(line[line.index(after: eq)...])
+        var wasRead = false
+        if FileManager.default.isExecutableFile(atPath: shell) {
+            let marker = "__PAIRVOX_ENV__"
+            let script = "echo \(marker); env"
+            if let r = try? await ProcessRunner.run(URL(fileURLWithPath: shell), arguments: ["-l", "-i", "-c", script],
+                                                    environment: env, timeout: timeout),
+               let range = r.stdout.range(of: marker + "\n") {
+                wasRead = true
+                for line in r.stdout[range.upperBound...].split(separator: "\n") {
+                    guard let eq = line.firstIndex(of: "=") else { continue }
+                    let key = String(line[..<eq])
+                    guard !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { continue }
+                    env[key] = String(line[line.index(after: eq)...])
+                }
             }
         }
         env["PATH"] = mergedPath(env["PATH"], prepending: [])
-        return env
+        return LoginShellRead(environment: env, shell: shell, shellWasRead: wasRead)
     }
 
     /// Merges a PATH value with standard locations, removing duplicates.

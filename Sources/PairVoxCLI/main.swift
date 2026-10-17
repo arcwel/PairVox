@@ -9,6 +9,8 @@
 
 import Foundation
 import PairVoxCore
+// One line at a time even when output is piped or redirected, so scripts (and `tee`) see it as it happens.
+setvbuf(stdout, nil, _IOLBF, 0)
 
 struct Options {
     var cwd = FileManager.default.currentDirectoryPath
@@ -23,6 +25,10 @@ struct Options {
     var metrics = false
     var acknowledgements = true
     var rawLog: String?
+    var logDir: String?
+    var logText = false
+    var envAudit = false
+    var json = false
 }
 
 func usage() -> Never {
@@ -43,6 +49,10 @@ func usage() -> Never {
       --metrics             Print per-turn latency
       --no-ack              No "On it." acknowledgements
       --raw-log FILE        Append raw stream-json lines to FILE
+      --log [DIR]           Write structured diagnostics (JSON lines) to DIR (default ~/Library/Logs/PairVox)
+      --log-text            With --log, also record conversation text (off by default)
+      --env-audit           Print which login-shell variables the child never gets (names only), then exit
+      --json                With --env-audit, print a JSON object instead of text
 
     Type a message and press Enter. Typing while it talks interrupts it (barge-in).
     Voice commands work as text: stop, repeat that, details, read the code, skip,
@@ -80,12 +90,41 @@ func parseOptions() -> Options {
         case "--metrics": o.metrics = true
         case "--no-ack": o.acknowledgements = false
         case "--raw-log": o.rawLog = next(a)
+        case "--log":
+            if let upcoming = args.first, !upcoming.hasPrefix("--") { o.logDir = (next(a) as NSString).expandingTildeInPath }
+            else { o.logDir = ("~/Library/Logs/PairVox" as NSString).expandingTildeInPath }
+        case "--log-text": o.logText = true
+        case "--env-audit": o.envAudit = true
+        case "--json": o.json = true
         default:
             FileHandle.standardError.write(Data("Unknown option \(a). Try --help.\n".utf8))
             exit(2)
         }
     }
+    if o.json && !o.envAudit {
+        FileHandle.standardError.write(Data("--json only applies to --env-audit.\n".utf8))
+        exit(2)
+    }
     return o
+}
+
+/// `--env-audit`: shows what `ChildEnvironment` drops from this Mac's login shell. Names only, never a value.
+/// Exit 0 with the report; exit 2 when the login shell could not be read (the report would describe the wrong
+/// environment).
+func runEnvironmentAudit(json: Bool) async -> Never {
+    let read = await ShellEnvironment.readLoginShell()
+    guard read.shellWasRead else {
+        FileHandle.standardError.write(Data("Could not read the login shell (\(read.shell)); no audit.\n".utf8))
+        exit(2)
+    }
+    let audit = EnvironmentAudit(environment: read.environment)
+    if json {
+        print(audit.jsonReport())
+    } else {
+        print("Child environment audit · login shell \(read.shell)")
+        print(audit.textReport())
+    }
+    exit(0)
 }
 
 /// Reads stdin lines on a background thread.
@@ -99,6 +138,15 @@ func stdinLines() -> AsyncStream<String> {
 }
 
 let opts = parseOptions()
+if opts.envAudit { await runEnvironmentAudit(json: opts.json) }
+if let dir = opts.logDir {
+    DiagnosticLog.shared.configure(.init(directory: URL(fileURLWithPath: dir, isDirectory: true), minLevel: .debug,
+                                         includeContent: opts.logText))
+    DiagnosticLog.shared.log(.info, .app, "cli.launch", ["model": .string(opts.model ?? "default"),
+                                                         "conversationText": .bool(opts.logText)])
+    atexit { DiagnosticLog.shared.flush() }
+    Term.dim("Logging to \(dir)/\(DiagnosticLog.fileName)")
+}
 let env = await ShellEnvironment.loginShellEnvironment()
 guard let claude = ClaudeLocator.locate(override: opts.claudePath, pathVariable: env["PATH"]) else {
     print("Could not find the `claude` CLI. Install Claude Code, run `claude` once to sign in, or pass --claude PATH.")
@@ -114,13 +162,14 @@ if let v = opts.apiKeyEnv {
     auth = .apiKey(key)
 }
 
-let version = await ClaudeLocator.version(of: claude, environment: env) ?? "unknown version"
+let version = await ClaudeLocator.version(of: claude, environment: ChildEnvironment.filter(env)) ?? "unknown version"
 Term.dim("PairVox CLI · \(claude.path) (\(version)) · \(auth.kind == .subscription ? "Claude subscription login" : "API key")")
 Term.dim("Project: \(opts.cwd) · speech: \(opts.speechMode.spokenName) · mode: \(opts.conversationMode.rawValue)")
 
 let rawLogHandle: FileHandle? = opts.rawLog.flatMap { path in
     if !FileManager.default.fileExists(atPath: path) {
-        _ = FileManager.default.createFile(atPath: path, contents: nil)
+        // The raw stream holds commands and file contents, so it is private to the user.
+        _ = FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
     }
     let h = FileHandle(forWritingAtPath: path)
     h?.seekToEndOfFile()
@@ -157,17 +206,17 @@ let observer = Task {
         for e in snap.transcript where !seenEntries.contains(e.id) {
             seenEntries.insert(e.id)
             switch e.role {
-            case .tool: print(Term.color("2", "         🔧 \(e.text.prefix(160))"))
-            case .system: print(Term.color("2", "         · \(e.text)"))
+            case .tool: print(Term.color("2", "         🔧 \(Term.safe(String(e.text.prefix(160))))"))
+            case .system: print(Term.color("2", "         · \(Term.safe(e.text))"))
             default: break
             }
         }
         if let p = snap.pendingPermission, p.request.requestID != lastPermission {
             lastPermission = p.request.requestID
             let a = p.assessment
-            print(Term.color("1;35", "         ┌ Permission: \(a.summary.prefix(200))"))
+            print(Term.color("1;35", "         ┌ Permission: \(Term.safe(String(a.summary.prefix(2000))))"))
             print(Term.color("35", "         │ risk: \(a.risk) · \(a.voiceApprovable ? "say yes / no / always allow" : "type /approve or /deny")"))
-            for r in a.reasons { print(Term.color("35", "         │ \(r)")) }
+            for r in a.reasons { print(Term.color("35", "         │ \(Term.safe(r))")) }
             print(Term.color("35", "         └"))
         }
         if snap.pendingPermission == nil { lastPermission = nil }
@@ -177,7 +226,7 @@ let observer = Task {
             Term.dim("         ⏱  first token \(f(l.firstToken)) · first utterance \(f(l.firstUtterance)) · first audio \(f(l.firstAudio))")
         }
         if let problem = snap.authProblem, snap.phase == .needsSetup {
-            Term.dim("         ⚠️  \(problem.prefix(200))")
+            Term.dim("         ⚠️  \(Term.safe(String(problem.prefix(200))))")
         }
     }
 }

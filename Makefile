@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-.PHONY: build test cli app xcode release clean
+.PHONY: build test cli app xcode release qa-smoke clean
 
 # On macOS the default SwiftPM build system rejects the Kokoro/Misaki dynamic products that both
 # embed MLX (Xcode handles it). Use the native build system there. See docs/HANDOFF.md §4.
@@ -21,8 +21,11 @@ app:              ## Build dist/PairVox.app (macOS, needs XcodeGen)
 xcode:            ## Generate and open the Xcode project
 	xcodegen generate && open PairVox.xcodeproj
 
+qa-smoke:         ## Non-audio QA via pairvox-cli (4 real Haiku turns): make qa-smoke ARGS=--dry-run
+	scripts/qa-smoke.sh $(ARGS)
+
 release:          ## Signed + notarized DMG: make release VERSION=0.1.0
-	scripts/release.sh $(VERSION)
+	scripts/release.sh "$(VERSION)"
 
 clean:
 	rm -rf .build dist PairVox.xcodeproj

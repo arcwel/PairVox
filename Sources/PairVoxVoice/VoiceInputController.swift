@@ -21,8 +21,11 @@ public final class VoiceInputController: @unchecked Sendable {
 
     private let audio: AudioIO
     private let transcriber: any UtteranceTranscriber
-    private let engine: ConversationEngine
+    private var _engine: ConversationEngine
+    /// The project engine that hears the user. Changes when the user switches projects.
+    private var engine: ConversationEngine { lock.withLock { _engine } }
     private let lock = NSLock()
+    private let log = DiagnosticLog.shared
     private let workQueue = DispatchQueue(label: "app.pairvox.vad")
 
     private var vad: VoiceActivityDetector
@@ -41,7 +44,7 @@ public final class VoiceInputController: @unchecked Sendable {
                 endSilence: TimeInterval) {
         self.audio = audio
         self.transcriber = transcriber
-        self.engine = engine
+        self._engine = engine
         var config = VoiceActivityDetector.Config()
         config.endSilence = endSilence
         self.vad = VoiceActivityDetector(config: config)
@@ -49,6 +52,16 @@ public final class VoiceInputController: @unchecked Sendable {
     }
 
     // MARK: Configuration
+
+    /// Sends what the user says to a different project from now on. Anything half-captured is dropped so it
+    /// cannot land in the wrong project.
+    public func setEngine(_ newEngine: ConversationEngine) {
+        lock.lock()
+        _engine = newEngine
+        capturing = false
+        utterance = []
+        lock.unlock()
+    }
 
     public func setMode(_ newMode: ListeningMode) {
         lock.lock()
@@ -115,6 +128,7 @@ public final class VoiceInputController: @unchecked Sendable {
 
         var startEvent = false
         var finished: [Float]?
+        let wasPlaying = playbackActive
 
         switch mode {
         case .muted:
@@ -130,6 +144,8 @@ public final class VoiceInputController: @unchecked Sendable {
             // Without barge-in, ignore the mic while we're talking (half duplex).
             if playbackActive && !bargeInEnabled && !capturing { break }
             if capturing { utterance.append(contentsOf: frame) }
+            // Tell the detector how loud our own voice has been, so it can ignore the echo of it.
+            vad.playbackLevelDB = playbackActive ? audio.recentOutputLevelDB() : nil
             switch vad.process(frame) {
             case .speechStarted?:
                 capturing = true
@@ -146,25 +162,41 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.unlock()
 
         if let level { onLevel?(level) }
-        if startEvent { Task { await engine.userStartedSpeaking() } }
-        if let finished { finishUtterance(finished) }
+        if startEvent {
+            log.log(.info, .input, "vad.speech.start", ["playbackActive": .bool(wasPlaying), "bargeIn": .bool(wasPlaying)])
+            Task { await engine.userStartedSpeaking() }
+        }
+        if let finished {
+            log.log(.info, .input, "vad.speech.end",
+                    ["seconds": .double(Double(finished.count) / AudioIO.captureSampleRate)])
+            finishUtterance(finished)
+        }
     }
 
     private func finishUtterance(_ samples: [Float]) {
         lock.lock()
         let words = vocabulary
         lock.unlock()
+        let engine = self.engine
         Task { [engine, transcriber] in
             await engine.userStoppedSpeaking()
             // Ignore blips shorter than 0.3 s.
             guard samples.count > Int(AudioIO.captureSampleRate * 0.3) else {
+                self.log.log(.info, .input, "utterance.ignored", ["reason": "shorter than 0.3 s"])
                 await engine.transcriptionFailed()
                 return
             }
+            let began = DispatchTime.now()
             do {
                 let text = try await transcriber.transcribe(samples, vocabulary: words)
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
+                self.log.log(.info, .stt, "transcribed",
+                             ["engine": .string(transcriber.displayName), "audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate),
+                              "decodeMs": .double(ms), "text": self.log.content(text)])
                 await engine.submit(text)
             } catch {
+                self.log.log(.error, .stt, "transcribe.failed", ["engine": .string(transcriber.displayName),
+                                                                 "error": .string(error.localizedDescription)])
                 self.onError?(error.localizedDescription)
                 await engine.transcriptionFailed()
             }

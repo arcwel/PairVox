@@ -17,15 +17,21 @@ public enum RepoVocabulary {
         pattern: #"\b(?:class|struct|enum|protocol|actor|extension|interface|type|func|function|def|fn|trait|impl|module)\s+([A-Za-z_][A-Za-z0-9_]{2,})"#)
 
     /// Scans `root` and returns up to `limit` terms, most frequent first.
-    public static func scan(root: URL, limit: Int = 150, maxFiles: Int = 1500, maxBytesPerFile: Int = 200_000) -> [String] {
+    public static func scan(root: URL, limit: Int = 150, maxFiles: Int = 1500, maxBytesPerFile: Int = 200_000,
+                            maxEntries: Int = 50_000) -> [String] {
         var counts: [String: Int] = [:]
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+        guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey],
                                              options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [] }
         var files = 0
+        var entries = 0
         for case let url as URL in enumerator {
+            entries += 1
+            if entries > maxEntries { break }
             let name = url.lastPathComponent
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+            // A repository can contain links to devices or huge files elsewhere; only real files and folders count.
+            if values?.isSymbolicLink == true { if values?.isDirectory == true { enumerator.skipDescendants() }; continue }
             if values?.isDirectory == true {
                 if skipDirectories.contains(name) { enumerator.skipDescendants() }
                 else if name.count >= 3 { counts[name, default: 0] += 1 }
@@ -37,8 +43,8 @@ public enum RepoVocabulary {
             if files > maxFiles { break }
             let base = url.deletingPathExtension().lastPathComponent
             if base.count >= 3 { counts[base, default: 0] += 3 }
-            guard (values?.fileSize ?? 0) <= maxBytesPerFile,
-                  let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            guard values?.isRegularFile == true, (values?.fileSize ?? Int.max) <= maxBytesPerFile,
+                  let text = readText(url, limit: maxBytesPerFile) else { continue }
             let ns = text as NSString
             for m in declarationPattern.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
                 let ident = ns.substring(with: m.range(at: 1))
@@ -47,6 +53,14 @@ public enum RepoVocabulary {
         }
         return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
             .prefix(limit).map(\.key)
+    }
+
+    /// Reads at most `limit` bytes, so the size check on the directory entry is not the only bound.
+    static func readText(_ url: URL, limit: Int) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: limit) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     static let commonWords: Set<String> = [

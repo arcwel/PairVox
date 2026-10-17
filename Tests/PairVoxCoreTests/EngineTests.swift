@@ -47,6 +47,23 @@ final class FakeOutput: SpeechOutput, @unchecked Sendable {
     private var _played: [Utterance] = []
     private var _stops = 0
     private var _rate = 1.0
+    private var _pauses = 0
+    private var _resumes = 0
+    var pausable = false
+
+    var supportsPause: Bool { pausable }
+    var cancellable = false
+    @discardableResult func cancelQueued(_ ids: [Int]) -> [Int] {
+        guard cancellable else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        let removed = _queue.filter { ids.contains($0.id) }.map(\.id)
+        _queue.removeAll { ids.contains($0.id) }
+        return removed
+    }
+    func pause() { lock.lock(); _pauses += 1; lock.unlock() }
+    func resume() { lock.lock(); _resumes += 1; lock.unlock() }
+    var pauses: Int { lock.lock(); defer { lock.unlock() }; return _pauses }
+    var resumes: Int { lock.lock(); defer { lock.unlock() }; return _resumes }
 
     init() {
         var c: AsyncStream<SpeechOutputEvent>.Continuation!
@@ -113,6 +130,13 @@ final class ConversationEngineTests: XCTestCase {
         try? await Task.sleep(nanoseconds: ms * 1_000_000)
     }
 
+    /// Waits until the acknowledgement is queued (or two seconds pass). A fixed 300 ms wait was not always enough on
+    /// the Linux CI runner, so the test then started a sentence that did not exist yet.
+    func waitForQueuedAcknowledgement() async {
+        let deadline = Date().addingTimeInterval(2)
+        while output.queue.first?.kind != .ack, Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
+    }
+
     func testTurnStreamsSpeechAndRecordsTranscript() async {
         await engine.submit("What does the auth module do?")
         XCTAssertEqual(backend.sent, ["What does the auth module do?"])
@@ -166,6 +190,129 @@ final class ConversationEngineTests: XCTestCase {
         XCTAssertEqual(output.queue.map(\.text), ["First point here.", "Second point here.", "Third point here.", "Fourth point."])
     }
 
+    // MARK: Pausing instead of stopping
+
+    private func startSpeaking() async {
+        output.pausable = true
+        await engine.submit("Explain")
+        backend.emit(.textDelta("First point here. Second point here. Third point here. "))
+        await settle()
+        output.playNext(finish: false)
+        await settle()
+    }
+
+    func testNoiseOverSpeechResumesInPlaceWithoutReplaying() async {
+        await startSpeaking()
+        let before = output.queue.map(\.text)
+        await engine.userStartedSpeaking()
+        XCTAssertEqual(output.pauses, 1)
+        XCTAssertEqual(output.stops, 0, "nothing is discarded while we find out whether the user meant it")
+        XCTAssertEqual(output.queue.map(\.text), before)
+        backend.emit(.textDelta("Fourth point. "))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.text), before, "new text waits while the user talks")
+        await engine.userStoppedSpeaking()
+        await engine.submit("")   // transcribed to nothing
+        XCTAssertEqual(output.resumes, 1)
+        XCTAssertEqual(output.stops, 0)
+        XCTAssertEqual(output.queue.map(\.text), before + ["Fourth point."], "carries on where it was, then the held text")
+    }
+
+    func testBackchannelOverSpeechResumesInPlace() async {
+        await startSpeaking()
+        let before = output.queue.map(\.text)
+        await engine.userStartedSpeaking()
+        await engine.submit("okay")
+        XCTAssertEqual(output.resumes, 1)
+        XCTAssertEqual(output.stops, 0)
+        XCTAssertEqual(output.queue.map(\.text), before)
+        XCTAssertEqual(backend.interrupts, 0)
+    }
+
+    func testRealCommandOverPausedSpeechStopsIt() async {
+        await startSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.submit("stop")
+        XCTAssertGreaterThanOrEqual(output.stops, 1)
+        XCTAssertEqual(output.queue, [])
+        XCTAssertEqual(output.resumes, 0)
+    }
+
+    func testNewInstructionOverPausedSpeechStopsItAndIsSent() async {
+        await startSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.submit("Actually use SQLite instead")
+        XCTAssertEqual(output.stops, 1)
+        XCTAssertEqual(output.queue, [])
+        XCTAssertEqual(backend.sent.last, "Actually use SQLite instead")
+    }
+
+    func testStuckTranscriptionDoesNotLeaveSpeechPaused() async {
+        await engine.setPauseWatchdog(seconds: 0.2)
+        await startSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertEqual(output.resumes, 1, "a decode that never answers must not silence the reply")
+        let phase = await engine.snapshot.phase
+        XCTAssertNotEqual(phase, .transcribing)
+    }
+
+    func testOutputsThatCannotPauseKeepTheOldBehaviour() async {
+        await engine.submit("Explain")
+        backend.emit(.textDelta("One here. Two here. "))
+        await settle()
+        output.playNext(finish: false)
+        await engine.userStartedSpeaking()
+        XCTAssertEqual(output.pauses, 0)
+        XCTAssertEqual(output.stops, 1)
+    }
+
+    func testLongReplyIsReadInPartAndDetailsReadsTheRest() async {
+        await engine.setSpokenReplyLimit(3)
+        await engine.submit("Explain")
+        backend.emit(.textDelta("One here. Two here. Three here. Four here. Five here. Six here. "))
+        backend.emit(.turnCompleted(TurnResult(outcome: .success)))
+        await settle()
+        output.playAll()
+        await settle()
+        let first = output.played.map(\.text)
+        XCTAssertTrue(first.contains("Three here."))
+        XCTAssertFalse(first.contains("Four here."), "the reply was cut at the limit")
+        XCTAssertTrue(first.contains { $0.contains("first part") })
+        await engine.submit("details")
+        await settle()
+        output.playAll()
+        XCTAssertTrue(output.played.map(\.text).contains("Six here."), "details reads what was held back")
+    }
+
+    // MARK: Courtesy lines never delay the answer
+
+    func testAQueuedAcknowledgementIsDroppedWhenTheAnswerIsReady() async {
+        output.cancellable = true
+        await engine.submit("Refactor the parser")
+        await waitForQueuedAcknowledgement()                // the acknowledgement is queued, not started
+        XCTAssertEqual(output.queue.first?.kind, .ack)
+        backend.emit(.textDelta("The parser has three stages. "))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.text), ["The parser has three stages."], "the answer must not wait behind \"On it.\"")
+    }
+
+    func testAnAcknowledgementAlreadyBeingSpokenFinishes() async {
+        output.cancellable = true
+        await engine.submit("Refactor the parser")
+        await waitForQueuedAcknowledgement()
+        XCTAssertEqual(output.queue.first?.kind, .ack)
+        output.playNext(finish: false)                      // it has started
+        // "Started" reaches the engine through an async stream; the answer must not overtake it, or the engine still
+        // sees the acknowledgement as only queued and rightly drops it (the race behind the CI failures).
+        let deadline = Date().addingTimeInterval(2)
+        while await !engine.snapshot.isSpeaking, Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
+        backend.emit(.textDelta("The parser has three stages. "))
+        await settle()
+        XCTAssertEqual(output.queue.map(\.kind), [.ack, .prose], "what is already out loud is not cut off")
+    }
+
     func testBackchannelWhileWorkingDoesNotInterrupt() async {
         await engine.submit("Refactor the parser")
         backend.emit(.textDelta("Starting with the tokenizer. Then the AST. "))
@@ -215,7 +362,7 @@ final class ConversationEngineTests: XCTestCase {
         await settle()
         var snap = await engine.snapshot
         XCTAssertEqual(snap.phase, .awaitingPermission)
-        XCTAssertEqual(output.queue.last?.text, "Claude wants to edit a dot swift. Allow?")
+        XCTAssertEqual(output.queue.last?.text, "Claude wants to edit a dot swift in the project folder. Allow?")
         await engine.submit("yeah go ahead")
         XCTAssertEqual(backend.responses.map(\.0), ["p1"])
         XCTAssertEqual(backend.responses.first?.1, .allow)

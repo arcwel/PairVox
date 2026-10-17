@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>PairVox</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key><true/>
+    <key>UILaunchScreen</key><dict/>
+    <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
+    <key>UIBackgroundModes</key><array><string>audio</string></array>
+    <key>NSMicrophoneUsageDescription</key><string>PairVox listens to you through this phone so you can talk to Claude. Audio is turned into text on this phone and never leaves it.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>PairVox turns what you say into text on this phone, then sends only the text to your Mac.</string>
+    <key>NSCameraUsageDescription</key><string>PairVox scans the QR code shown on your Mac to pair with it.</string>
+    <key>NSFaceIDUsageDescription</key><string>PairVox asks for Face ID before you allow a high-risk action.</string>
+</dict>
+</plist>

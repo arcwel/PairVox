@@ -45,22 +45,23 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
 
     private func setState(_ s: TranscriberState) {
         lock.lock(); _state = s; lock.unlock()
+        DiagnosticLog.shared.log(.info, .stt, "whisper.state", ["state": .string("\(s)")])
         onStateChange?(s)
     }
 
     /// Downloads (first run) and loads the model. Safe to call more than once.
     public func load(model: String) async {
-        lock.lock()
-        let current = _state
-        let same = loadedModel == model
-        lock.unlock()
+        let (current, same) = lock.withLock { (_state, loadedModel == model) }
         if case .loading = current { return }
         if same, current == .ready { return }
         setState(.loading("Loading speech recognition model…"))
         do {
-            let config = WhisperKitConfig(model: model, verbose: false, prewarm: true, load: true, download: true)
+            // Model and tokenizer come from commit-pinned, hash-checked copies, never from a moving branch.
+            let folders = try await WhisperModelStore().ensure(variant: model)
+            let config = WhisperKitConfig(model: model, modelFolder: folders.model.path, tokenizerFolder: folders.tokenizer,
+                                          verbose: false, prewarm: true, load: true, download: false)
             let kit = try await WhisperKit(config)
-            lock.lock(); pipe = kit; loadedModel = model; lock.unlock()
+            lock.withLock { pipe = kit; loadedModel = model }
             setState(.ready)
         } catch {
             setState(.failed(error.localizedDescription))
@@ -68,9 +69,7 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
     }
 
     public func transcribe(_ samples: [Float], vocabulary: [String]) async throws -> String {
-        lock.lock()
-        let kit = pipe
-        lock.unlock()
+        let kit = lock.withLock { pipe }
         guard let kit else { throw TranscriptionError.notReady }
 
         var options = DecodingOptions(language: "en", temperature: 0, usePrefillPrompt: true, skipSpecialTokens: true,
@@ -194,6 +193,7 @@ public final class FallbackTranscriber: UtteranceTranscriber, @unchecked Sendabl
             } catch {
                 guard fallback.isReady else { throw error }
                 NSLog("PairVox: WhisperKit failed (\(error)); using Apple Speech")
+                DiagnosticLog.shared.log(.warning, .stt, "fallback.apple", ["error": .string("\(error)")])
             }
         }
         return try await fallback.transcribe(samples, vocabulary: vocabulary)

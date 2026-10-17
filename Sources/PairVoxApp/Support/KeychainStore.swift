@@ -23,6 +23,19 @@ enum KeychainStore {
         return key
     }
 
+    /// Whether a key is saved, without reading it: asking for attributes only never triggers a Keychain permission
+    /// prompt, so a rebuilt (re-signed) app can start without one.
+    static func hasAPIKey() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: apiKeyAccount,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     @discardableResult
     static func saveAPIKey(_ key: String) -> Bool {
         deleteAPIKey()

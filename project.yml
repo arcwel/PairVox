@@ -21,6 +21,12 @@ settings:
 packages:
   PairVoxKit:
     path: .
+  # In-app updates (Sparkle) are scaffolded in Support/Updater.swift behind `#if canImport(Sparkle)`, so adding the
+  # package here is all it takes. Not added yet: on 2026-10-15 xcodebuild hung in "Resolve Package Graph" for over
+  # ten minutes on this package's binary artifact (the download URL itself answered), see docs/RELEASE.md.
+  #  Sparkle:
+  #    url: https://github.com/sparkle-project/Sparkle
+  #    exactVersion: 2.7.1
 
 targets:
   PairVox:
@@ -37,6 +43,10 @@ targets:
         product: PairVoxCore
       - package: PairVoxKit
         product: PairVoxVoice
+      - package: PairVoxKit
+        product: PairVoxLink
+      # - package: Sparkle
+      #   product: Sparkle
     settings:
       base:
         PRODUCT_NAME: PairVox

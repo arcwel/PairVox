@@ -75,7 +75,7 @@ final class TerminalSpeechOutput: SpeechOutput, @unchecked Sendable {
         if useSay, FileManager.default.isExecutableFile(atPath: "/usr/bin/say") {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-            p.arguments = ["-r", String(Int(185 * r)), u.text]
+            p.arguments = ["-r", String(Int(185 * r)), "--", u.text]
             p.terminationHandler = { [weak self] _ in self?.finished(u, generation: gen) }
             lock.lock(); currentProcess = p; lock.unlock()
             do { try p.run() } catch { finished(u, generation: gen) }
@@ -105,6 +105,16 @@ final class TerminalSpeechOutput: SpeechOutput, @unchecked Sendable {
 enum Term {
     static let isTTY = isatty(STDOUT_FILENO) != 0
 
+    /// Model-chosen text printed to the terminal: control characters (escape sequences, carriage returns,
+    /// backspaces) are replaced so they cannot redraw or hide what the operator is reading.
+    static func safe(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.map { scalar in
+            let v = scalar.value
+            let control = v < 0x20 && v != 0x09 || (0x7F...0x9F).contains(v)
+            return control ? "\u{FFFD}" : scalar
+        }))
+    }
+
     static func color(_ code: String, _ s: String) -> String {
         isTTY ? "\u{1B}[\(code)m\(s)\u{1B}[0m" : s
     }
@@ -115,13 +125,14 @@ enum Term {
 
     static func format(_ u: Utterance, elapsed: TimeInterval) -> String {
         let t = String(format: "%6.2fs", elapsed)
+        let text = safe(u.text)   // model- and repository-chosen text never reaches the terminal with control bytes
         switch u.kind {
-        case .prose: return color("2", t) + " 🔊 " + u.text
-        case .code: return color("2", t) + " 🔊 " + color("36", u.text)
-        case .narration: return color("2", t) + " ⚙️  " + color("33", u.text)
-        case .prompt: return color("2", t) + " ❓ " + color("1;35", u.text)
-        case .notice: return color("2", t) + " ℹ️  " + color("34", u.text)
-        case .ack: return color("2", t) + " 💬 " + color("2", u.text)
+        case .prose: return color("2", t) + " 🔊 " + text
+        case .code: return color("2", t) + " 🔊 " + color("36", text)
+        case .narration: return color("2", t) + " ⚙️  " + color("33", text)
+        case .prompt: return color("2", t) + " ❓ " + color("1;35", text)
+        case .notice: return color("2", t) + " ℹ️  " + color("34", text)
+        case .ack: return color("2", t) + " 💬 " + color("2", text)
         }
     }
 }
