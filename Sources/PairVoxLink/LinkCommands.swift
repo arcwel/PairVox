@@ -8,7 +8,7 @@ import Foundation
 public struct LinkCommand: Codable, Sendable, Equatable {
     public var cmd: String            // "status" | "devices" | "remove" | "offer"
     public var id: String?            // device id, for "remove"
-    public var kind: String?          // "qr" | "code", for "offer"
+    public var kind: String?          // "qr" for "offer"; "code" is refused (six-digit codes were removed)
     public init(cmd: String, id: String? = nil, kind: String? = nil) { self.cmd = cmd; self.id = id; self.kind = kind }
 }
 
@@ -34,7 +34,7 @@ public struct LinkCommandReply: Codable, Sendable, Equatable {
     public var connected: Int?
     public var devices: [LinkCommandDevice]?
     public var offerKind: String?
-    public var offerDisplay: String?      // the six digits, or the QR text
+    public var offerDisplay: String?      // the QR secret (base64)
     public var offerExpires: Date?
     public init(ok: Bool, error: String? = nil) { self.ok = ok; self.error = error }
 }

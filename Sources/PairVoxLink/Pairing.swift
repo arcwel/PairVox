@@ -35,11 +35,13 @@ public struct PairedDevice: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-/// What the Mac shows to the person pairing: a QR payload or a six-digit code, valid once and briefly.
+/// What the Mac shows to the person pairing: a QR code carrying a 128-bit secret, valid once and briefly.
+///
+/// There used to be a six-digit code as well. Its secret was the six digits themselves, so anyone who captured
+/// one pairing exchange could try all million codes offline in under a second, open the grant and hold the phone's
+/// long-term key. A 16-byte random secret cannot be searched that way. Removed 2026-10-17 (hardening task 3.1).
 public struct PairingOffer: Sendable, Equatable {
-    public enum Kind: Sendable { case qr, code }
-    public var kind: Kind
-    /// The text to put in the QR code, or the six digits.
+    /// The secret as base64, the text that goes in the QR code (see `qrPayload(host:port:)`).
     public var display: String
     var material: Data
     public var expires: Date
@@ -71,9 +73,12 @@ public actor PairingManager {
     private var totalFailures = 0
     /// A peer that sends this many wrong proofs is ignored for the rest of the offer.
     public static let maxFailures = 3
-    /// Across every peer, this many wrong proofs burn the offer (12 guesses in a million for a six-digit code).
+    /// Across every peer, this many wrong proofs burn the offer: a guessed 128-bit secret never succeeds, so this
+    /// only stops a peer from keeping the offer busy.
     public static let maxTotalFailures = 12
     public static let offerLifetime: TimeInterval = 120
+    /// Bytes of random secret in a pairing offer.
+    public static let secretLength = 16
 
     /// With a `keys` store, phone keys live there and the file holds only names and dates. A file written by an
     /// earlier version (keys inside) is converted on first load.
@@ -136,16 +141,9 @@ public actor PairingManager {
 
     public func pairedDevices() -> [PairedDevice] { ensureKeys(); return devices }
 
-    public func createOffer(kind: PairingOffer.Kind, now: Date = Date()) -> PairingOffer {
-        let made: PairingOffer
-        switch kind {
-        case .qr:
-            let m = Handshake.randomBytes(16)
-            made = PairingOffer(kind: .qr, display: m.base64EncodedString(), material: m, expires: now.addingTimeInterval(Self.offerLifetime))
-        case .code:
-            let digits = String(format: "%06d", Int.random(in: 0...999_999))
-            made = PairingOffer(kind: .code, display: digits, material: Data(digits.utf8), expires: now.addingTimeInterval(Self.offerLifetime))
-        }
+    public func createOffer(now: Date = Date()) -> PairingOffer {
+        let secret = Handshake.randomBytes(Self.secretLength)
+        let made = PairingOffer(display: secret.base64EncodedString(), material: secret, expires: now.addingTimeInterval(Self.offerLifetime))
         offer = made
         failuresByPeer = [:]
         totalFailures = 0

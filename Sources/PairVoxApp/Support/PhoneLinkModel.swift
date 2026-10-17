@@ -183,11 +183,11 @@ final class PhoneLinkModel: ObservableObject {
 
     // MARK: Pairing
 
-    func newOffer(_ kind: PairingOffer.Kind) {
+    func newOffer() {
         guard host != nil else { return }
         offerSource = "Settings"
         Task {
-            let made = await pairing.createOffer(kind: kind)
+            let made = await pairing.createOffer()
             offer = made
             offerExpiry = made.expires
             startOfferTimer()
@@ -234,7 +234,7 @@ final class PhoneLinkModel: ObservableObject {
     // MARK: QR
 
     var qrPayload: String? {
-        guard let offer, offer.kind == .qr, let host = tailnetAddress else { return nil }
+        guard let offer, let host = tailnetAddress else { return nil }
         return offer.qrPayload(host: host, port: port)
     }
 
@@ -276,15 +276,18 @@ struct PhoneControl: LinkCommandHandler {
             await model.revokeNow(id)
             return LinkCommandReply(ok: true)
         case "offer":
-            let kind: PairingOffer.Kind = request.kind == "code" ? .code : .qr
+            // Six-digit codes were removed (2026-10-17): a captured code exchange gave away the phone's key.
+            if request.kind == "code" {
+                return LinkCommandReply(ok: false, error: "Six-digit pairing codes were removed. Pair with the QR code or the pairing link instead.")
+            }
             if await model.hasOpenOfferNow {
                 return LinkCommandReply(ok: false, error: "A pairing offer is already open. Cancel it in Settings → Phone or wait for it to expire.")
             }
-            guard let offer = await model.createOfferNow(kind) else {
+            guard let offer = await model.createOfferNow() else {
                 return LinkCommandReply(ok: false, error: "The phone link is off. Switch it on in Settings → Phone first.")
             }
             var r = LinkCommandReply(ok: true)
-            r.offerKind = request.kind ?? "qr"; r.offerDisplay = offer.display; r.offerExpires = offer.expires
+            r.offerKind = "qr"; r.offerDisplay = offer.display; r.offerExpires = offer.expires
             let hp = await MainActor.run { (model.tailnetAddress, Int(model.port)) }
             r.host = hp.0; r.port = hp.1
             return r
@@ -309,9 +312,9 @@ extension PhoneLinkModel {
     }
 
     /// Creates a pairing offer and shows it in Settings too; nil when the link is off.
-    func createOfferNow(_ kind: PairingOffer.Kind) async -> PairingOffer? {
+    func createOfferNow() async -> PairingOffer? {
         guard host != nil else { return nil }
-        let made = await pairing.createOffer(kind: kind)
+        let made = await pairing.createOffer()
         offer = made; offerExpiry = made.expires
         offerSource = "the command line"
         startOfferTimer()

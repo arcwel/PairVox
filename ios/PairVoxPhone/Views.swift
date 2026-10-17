@@ -36,40 +36,38 @@ private struct Curtain: View {
 struct PairView: View {
     @EnvironmentObject var model: PhoneModel
     @State private var scanning = false
-    @State private var host = ""
-    @State private var port = "47821"
-    @State private var code = ""
+    /// The pairing link pasted by hand: the same text the QR code holds. There is no short code to type: a six-digit
+    /// code could be guessed offline from a captured exchange, which gave away this phone's key (removed 2026-10-17).
+    @State private var link = ""
     @State private var pending: PairingPayload?
     @State private var scanProblem: String?
-    @FocusState private var focus: Field?
-    private enum Field { case host, port, code }
+    @FocusState private var linkFocused: Bool
 
-    /// The Mac's port is never below 1024 (the QR code is refused below that too).
-    private var portNumber: UInt16? { UInt16(port).flatMap { $0 >= 1024 ? $0 : nil } }
-    private var canPair: Bool { !host.isEmpty && code.count == 6 && portNumber != nil && model.state != .connecting }
+    private var canPair: Bool { !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.state != .connecting }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("On your Mac") {
-                    Text("Open PairVox → Settings → Phone, switch the phone link on, then show a QR code or a 6-digit code. Tailscale must be running on both devices.")
+                    Text("Open PairVox → Settings → Phone, switch the phone link on, then press Show QR code. Tailscale must be running on both devices.")
                         .font(.footnote)
                 }
                 Section("Scan the QR code") {
                     Button("Scan QR code", systemImage: "qrcode.viewfinder") { scanning = true }
                 }
                 Section {
-                    ClearableField("Mac's Tailscale address (100.x.x.x)", text: $host)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.numbersAndPunctuation)
-                        .focused($focus, equals: .host).submitLabel(.next).onSubmit { focus = .port }
-                    ClearableField("Port", text: $port).keyboardType(.numberPad).focused($focus, equals: .port)
-                    ClearableField("6-digit code", text: $code).keyboardType(.numberPad).focused($focus, equals: .code)
-                        .onChange(of: code) { _, v in if v.count > 6 { code = String(v.prefix(6)) } }
+                    ClearableField("pairvox://pair?…", text: $link)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .focused($linkFocused).submitLabel(.done).onSubmit { pair() }
+                    // PasteButton reads the clipboard without the system's "allow paste" prompt.
+                    PasteButton(payloadType: String.self) { strings in
+                        Task { @MainActor in link = strings.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+                    }
                     Button("Pair") { pair() }.disabled(!canPair)
                 } header: {
-                    Text("Or type the code")
+                    Text("Or paste the pairing link")
                 } footer: {
-                    Text("The address is shown in Settings → Phone on the Mac. The code works once and expires after two minutes.")
+                    Text("On the Mac, press Copy link under the QR code. With Universal Clipboard it pastes here directly. The link works once and expires after two minutes.")
                 }
                 if case .failed(let why) = model.state { FailureText(why: why, detail: model.failureDetail) }
                 if model.state == .connecting { ProgressView("Pairing… click Pair on the Mac within two minutes.") }
@@ -80,7 +78,7 @@ struct PairView: View {
                 ToolbarItem(placement: .topBarTrailing) { Button("Pair") { pair() }.disabled(!canPair) }
                 // Leading, so the floating pill does not sit over the focused field's clear button.
                 ToolbarItemGroup(placement: .keyboard) {
-                    Button("Done") { focus = nil }
+                    Button("Done") { linkFocused = false }
                     Spacer()
                 }
             }
@@ -103,10 +101,12 @@ struct PairView: View {
         }
     }
 
+    /// A pasted link goes through the same parser and the same "Pair with …?" question as a scanned code.
     private func pair() {
-        guard canPair, let p = portNumber else { return }
-        focus = nil
-        Task { await model.pair(host: host.trimmingCharacters(in: .whitespaces), port: p, material: PairingClient.material(fromCode: code)) }
+        guard canPair else { return }
+        linkFocused = false
+        if let payload = PairingPayload.parse(link.trimmingCharacters(in: .whitespacesAndNewlines)) { pending = payload }
+        else { scanProblem = "That is not a PairVox pairing link for a Mac on your Tailscale network. Copy it again from Settings → Phone on the Mac." }
     }
 }
 
@@ -314,7 +314,7 @@ struct ConnectionSheet: View {
                 } header: {
                     Text("Mac address")
                 } footer: {
-                    Text("Change this if the Mac's Tailscale address or port changed. The pairing key stays; you do not need a new code.")
+                    Text("Change this if the Mac's Tailscale address or port changed. The pairing key stays; you do not need to pair again.")
                 }
             }
             .navigationTitle("Connection")

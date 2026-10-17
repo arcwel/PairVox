@@ -99,7 +99,7 @@ final class PhoneModel: ObservableObject {
         do {
             let name = UIDevice.current.name
             // The Mac asks its owner to click Pair before it answers, so this must outlast the walk to the Mac.
-            // A pairing code is valid for two minutes.
+            // A pairing offer (QR code or link) is valid for two minutes.
             let creds = try await withTimeout(Self.pairingTimeout, closing: transport) { try await LinkClient.pair(over: transport, material: material, deviceName: name) }
             await transport.close()
             notice = nil
@@ -107,9 +107,9 @@ final class PhoneModel: ObservableObject {
                 try store.save(PhoneCredentials(deviceID: creds.deviceID, psk: creds.psk, host: host, port: port))
             } catch {
                 // The Mac now trusts a key this phone could not keep: say so plainly, since the next pairing needs a
-                // new code and the Mac will list a phone that never connects.
+                // new QR code and the Mac will list a phone that never connects.
                 failureDetail = Self.describe(error)
-                state = .failed("The Mac accepted the pairing, but this phone could not save the key (Keychain error \((error as NSError).code)). Unlock the phone and pair again with a new code; remove the orphaned entry in Settings → Phone on the Mac.")
+                state = .failed("The Mac accepted the pairing, but this phone could not save the key (Keychain error \((error as NSError).code)). Unlock the phone and pair again with a new QR code; remove the orphaned entry in Settings → Phone on the Mac.")
                 return
             }
             failureDetail = nil
@@ -160,13 +160,13 @@ final class PhoneModel: ObservableObject {
     /// Pairing does not retry, so none of its sentences promise that it will.
     static func plainPairingFailure(_ error: Error, network: String, port: UInt16) -> String {
         if error as? LinkError == .authFailed {
-            return "The code did not match. Show a new code on the Mac and try again; each code works once and expires after two minutes."
+            return "The QR code or link did not match. Show a new QR code on the Mac and try again; each one works once and expires after two minutes."
         }
         if error as? LinkError == .closed, network == "connected" {
-            return "The Mac closed the connection before pairing finished. Either the code expired, or Pair was not clicked on the Mac in time. Show a new code and try again."
+            return "The Mac closed the connection before pairing finished. Either the QR code expired, or Pair was not clicked on the Mac in time. Show a new QR code and try again."
         }
         let general = plainConnectionFailure(error, network: network, port: port)
-        return general.hasSuffix(" Trying again.") ? "Pairing did not complete. Show a new code on the Mac and try again." : general
+        return general.hasSuffix(" Trying again.") ? "Pairing did not complete. Show a new QR code on the Mac and try again." : general
     }
 
     /// The Mac's engine phase, in words for the status bar.

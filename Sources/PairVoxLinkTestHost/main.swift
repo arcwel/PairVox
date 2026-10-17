@@ -6,9 +6,10 @@
 // conversation. It is a development tool: it is not part of the app and never talks to Claude.
 //
 //   pairvox-link-testhost [--port 47822] [--tick SECONDS]     run the stand-in host (--tick: publish a numbered snapshot every N seconds)
-//   pairvox-link-testhost --pair HOST:PORT --code 123456 [--name NAME] [--give-up SECONDS]
-//                                                             act as a phone: ask a Mac to pair, print the outcome
-// Prints a six-digit pairing code. After a phone connects it shows a permission request and prints what the phone does.
+//   pairvox-link-testhost --pair 'pairvox://pair?h=...&p=...&s=...' [--name NAME] [--give-up SECONDS]
+//                                                             act as a phone: ask a Mac to pair with its pairing link, print the outcome
+// Prints a pairing link (LINK: pairvox://pair?...), the text a QR code holds: paste it into the phone app (the iOS
+// Simulator has no camera). After a phone connects it shows a permission request and prints what the phone does.
 
 import Foundation
 import Network
@@ -28,16 +29,16 @@ func argument(_ name: String) -> String? {
     return CommandLine.arguments[i + 1]
 }
 if let target = argument("--pair") {
-    let parts = target.split(separator: ":")
-    guard parts.count == 2, let clientPort = UInt16(parts[1]), let code = argument("--code") else {
-        FileHandle.standardError.write(Data("usage: --pair HOST:PORT --code 123456 [--name NAME] [--give-up SECONDS]\n".utf8)); exit(2)
+    // A pairing link, as `pairvox-link pair` prints it. Six-digit codes were removed on 2026-10-17.
+    guard let link = PairingPayload.parse(target) else {
+        FileHandle.standardError.write(Data("usage: --pair 'pairvox://pair?h=HOST&p=PORT&s=SECRET' [--name NAME] [--give-up SECONDS]\n".utf8)); exit(2)
     }
-    let transport = TCPTransport.connect(host: String(parts[0]), port: clientPort)
+    let transport = TCPTransport.connect(host: link.host, port: link.port)
     let giveUp = Double(argument("--give-up") ?? "130") ?? 130
     let began = Date()
     do {
         let creds = try await withThrowingTaskGroup(of: (deviceID: String, psk: Data).self) { group in
-            group.addTask { try await LinkClient.pair(over: transport, material: PairingClient.material(fromCode: code), deviceName: argument("--name") ?? "Scripted client") }
+            group.addTask { try await LinkClient.pair(over: transport, material: link.material, deviceName: argument("--name") ?? "Scripted client") }
             group.addTask { try await Task.sleep(nanoseconds: UInt64(giveUp * 1_000_000_000)); await transport.close(); throw LinkError.closed }
             defer { group.cancelAll() }
             return try await group.next()!
@@ -97,8 +98,8 @@ let listener = try TCPListener(port: port, allow: { host in
     return text.hasPrefix("127.") || text == "::1" || text.hasPrefix("::ffff:127.")
 }, onConnection: { transport in Task { await host.serve(transport) } })
 try await listener.start()
-let offer = await pairing.createOffer(kind: .code)
+let offer = await pairing.createOffer()
 print("TEST HOST READY on 127.0.0.1:\(listener.port)")
-print("CODE: \(offer.display)")
+print("LINK: \(offer.qrPayload(host: "127.0.0.1", port: listener.port))")
 print("(valid for two minutes; this host accepts the pairing by itself)")
 while true { try await Task.sleep(nanoseconds: 3_600_000_000_000) }

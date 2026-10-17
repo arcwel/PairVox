@@ -67,7 +67,7 @@
 
 **PairVoxLinkKit** (macOS and iOS): the wire library shared by the Mac and the phone. Encrypted, numbered frames (`FrameCodec`), the keyed handshake, message types, the phone-side `LinkClient`, `TCPTransport`, and the phone's Keychain credential store. Has no dependency on `PairVoxCore`.
 
-**PairVoxLink** (macOS): the Mac side of the phone link. `LinkHost` serves paired phones and enforces every approval rule itself; `PairingManager` handles QR and six-digit-code pairing, the Accept step and revocation; `TailnetAddress` limits who may even start a handshake; `EngineLink` maps engine state to what the phone sees. See [prd/pairvox-iphone-prd.md](prd/pairvox-iphone-prd.md) and the Phone link section of [THREAT_MODEL.md](THREAT_MODEL.md).
+**PairVoxLink** (macOS): the Mac side of the phone link. `LinkHost` serves paired phones and enforces every approval rule itself; `PairingManager` handles QR pairing (a 16-byte one-time secret, also usable as a pasted link), the Accept step and revocation; `TailnetAddress` limits who may even start a handshake; `EngineLink` maps engine state to what the phone sees. See [prd/pairvox-iphone-prd.md](prd/pairvox-iphone-prd.md) and the Phone link section of [THREAT_MODEL.md](THREAT_MODEL.md).
 
 **PairVoxApp**: SwiftUI views and `AppModel` (one engine per open project, the project list, mini window and menu bar), plus the Keychain (API key), Carbon hotkeys (hold-to-talk, key configurable), notifications and `PhoneLinkModel` (Settings → Phone).
 

@@ -38,13 +38,13 @@ Persona: the owner, a developer with a Mac running PairVox and a phone with earb
 
 Critical journey: the owner starts a task on the Mac, leaves, puts in earbuds, opens PairVox on the phone (already paired), hears "Claude is working on the login fix", says "tell it to skip the tests", hears an approval prompt for a file edit, says "yes", and later hears the summary. That moment, an approval answered from the street, is the "worth it" moment.
 
-Pairing journey: the Mac shows a QR code (or a six-digit code); the phone scans or types it once; the Mac lists the phone and can revoke it.
+Pairing journey: the Mac shows a QR code (and the same pairing link to copy); the phone scans it or the link is pasted once; the Mac lists the phone and can revoke it.
 
 ## 6. Scope
 ### MVP (v1)
 | # | Feature / job | Priority | Acceptance criteria |
 |---|---------------|----------|---------------------|
-| 1 | Pair by QR or six-digit code | P0 | One scan or code pairs a phone; code expires in 2 minutes and works once; Mac lists paired phones and revokes one; revoked phone is refused at the next connection |
+| 1 | Pair by QR code or pasted link | P0 | One scan or paste pairs a phone; the offer expires in 2 minutes and works once; Mac lists paired phones and revokes one; revoked phone is refused at the next connection |
 | 2 | Encrypted connection over Tailscale | P0 | Every frame is encrypted and authenticated with the pairing key even though the tailnet is trusted; a different device on the tailnet cannot connect |
 | 3 | Live transcript and replies | P0 | Phone shows the active project's transcript within 1 s of the Mac; reconnect replays missed events |
 | 4 | Spoken replies on the phone | P0 | Replies are spoken on the phone with the same speech modes as the Mac; barge-in works |
@@ -118,7 +118,7 @@ Kill / pivot criteria: if background audio cannot stay alive on a locked iPhone 
 - The owner has or will buy an Apple Developer team for TestFlight (not confirmed; HazzMate rulings say no paid team until told).
 - Approvals use the Mac's rules (owner chose "same rules as the Mac"). High-risk requests on the phone need a deliberate tap; Face ID, Touch ID, the device passcode or a plain tap all count (owner ruling, 2026-10-13). The phone reports which it used and the Mac logs it.
 - Engine stays on the Mac (technical decision by the author).
-- Pairing offers both QR and six-digit code (owner chose both).
+- Pairing offers both QR and six-digit code (owner chose both). **Superseded 2026-10-17:** the owner removed the six-digit code after the hardening review showed a captured code exchange gives away the phone's key. The QR secret can be pasted as a link instead.
 - A disconnected phone holds requests rather than denying them (suggestion accepted by the owner).
 - Local notification only while connected; no relay.
 

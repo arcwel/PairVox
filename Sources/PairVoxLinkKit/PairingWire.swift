@@ -35,7 +35,6 @@ public func pairingKey(_ material: Data) -> SymmetricKey {
 
 /// The phone's half of pairing.
 public enum PairingClient {
-    public static func material(fromCode digits: String) -> Data { Data(digits.utf8) }
     public static func material(fromQR payload: String) -> Data? { Data(base64Encoded: payload) }
 
     public static func request(material: Data, deviceName: String) -> PairRequest {

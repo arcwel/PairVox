@@ -40,7 +40,7 @@ Remove it later with the same command ending `serve --tcp=47821 off`. Connection
 1. Tailscale is running and signed in on the Mac and on the iPhone (the iPhone shows the VPN indicator in its status bar).
 2. The access rules allow the phone to reach the Mac on 47821 (above).
 3. PairVox on the Mac: **Settings → Phone**, switch on "Let paired phones connect over Tailscale". It shows "This Mac: 100.x.y.z:47821".
-4. PairVox on the phone: scan the QR code or type the Mac's address, port and six-digit code. Click **Pair** in the dialog on the Mac.
+4. PairVox on the phone: scan the QR code, or on the Mac press **Copy link** and paste it into the phone app (Universal Clipboard carries it across). Click **Pair** in the dialog on the Mac.
 
 ## Staying connected
 

@@ -5,7 +5,7 @@
 //   pairvox-link phones list [--json]
 //   pairvox-link phones remove <id> [--dry-run] [--json]
 //   pairvox-link phones prune --stale [--days N] [--dry-run] [--json]   remove phones not seen for N days (default 30)
-//   pairvox-link pair --qr | --code [--json] [--no-qr-art]
+//   pairvox-link pair [--json] [--no-qr-art]        prints a QR code and the same pairing link as text
 //   pairvox-link doctor [--json]      checks Tailscale, the forward and the link; exit 1 if any check fails (PairVox not running included)
 // Exit codes: 0 done, 1 the app refused or failed, 2 bad usage, 3 PairVox is not running.
 
@@ -26,7 +26,7 @@ usage: pairvox-link status [--json]
        pairvox-link phones list [--json]
        pairvox-link phones remove <id> [--dry-run] [--json]
        pairvox-link phones prune --stale [--days N] [--dry-run] [--json]
-       pairvox-link pair --qr | --code [--json] [--no-qr-art]
+       pairvox-link pair [--json] [--no-qr-art]
        pairvox-link doctor [--json]
        (add --socket PATH to use another control socket)
 """
@@ -251,20 +251,18 @@ case "phones":
     default: fail(usage, code: 2)
     }
 case "pair":
-    guard qr != code else { fail("Choose exactly one of --qr or --code.\n" + usage, code: 2) }
-    let r = send(LinkCommand(cmd: "offer", kind: qr ? "qr" : "code"))
+    // `--qr` is still accepted (it was required before); six-digit codes were removed on 2026-10-17 because a
+    // captured exchange let anyone try all million codes offline and recover the phone's key.
+    guard !code else { fail("Six-digit pairing codes were removed. Run `pairvox-link pair` for a QR code and pairing link.", code: 2) }
+    _ = qr
+    let r = send(LinkCommand(cmd: "offer", kind: "qr"))
     guard r.ok, let display = r.offerDisplay else { fail(r.error ?? "Failed.", code: 1) }
     if json { printJSON(r); exit(0) }
-    if qr {
-        guard let host = r.host, let port = r.port else { fail("The Mac has no Tailscale address.", code: 1) }
-        let payload = "pairvox://pair?h=\(host)&p=\(port)&s=\(display.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_"))"
-        if !noArt { print(asciiQR(payload)) }
-        print(payload)
-    } else {
-        print("Code: \(display)")
-        if let host = r.host, let port = r.port { print("Mac: \(host):\(port)") }
-    }
-    print("Valid for two minutes, once. You will be asked to click Pair on the Mac.")
+    guard let host = r.host, let port = r.port else { fail("The Mac has no Tailscale address.", code: 1) }
+    let payload = "pairvox://pair?h=\(host)&p=\(port)&s=\(display.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_"))"
+    if !noArt { print(asciiQR(payload)) }
+    print(payload)
+    print("Scan it with the phone app, or paste the link into it. Valid for two minutes, once. You will be asked to click Pair on the Mac.")
 default:
     fail(usage, code: 2)
 }

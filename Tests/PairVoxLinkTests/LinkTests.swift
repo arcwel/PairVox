@@ -56,9 +56,9 @@ final class LinkTests: XCTestCase {
     }
 
     /// Pairs a phone over a memory transport and returns its credentials.
-    func pairPhone(_ host: LinkHost, _ pairing: PairingManager, kind: PairingOffer.Kind = .qr) async throws -> (String, Data) {
-        let offer = await pairing.createOffer(kind: kind, now: Clock().get())
-        let material = kind == .qr ? PairingClient.material(fromQR: offer.display)! : PairingClient.material(fromCode: offer.display)
+    func pairPhone(_ host: LinkHost, _ pairing: PairingManager) async throws -> (String, Data) {
+        let offer = await pairing.createOffer(now: Clock().get())
+        let material = PairingClient.material(fromQR: offer.display)!
         let (a, b) = MemoryTransport.pair()
         Task { await host.serve(b) }
         let creds = try await LinkClient.pair(over: a, material: material, deviceName: "Test iPhone")
@@ -97,44 +97,59 @@ final class LinkTests: XCTestCase {
 
     func testPairingNeedsTheSecretTheOwnersClickAndWorksOnce() async throws {
         let (host, _, pairing, clock) = await makeHost()
-        let creds = try await pairPhone(host, pairing, kind: .code)
+        let creds = try await pairPhone(host, pairing)
         XCTAssertEqual(creds.1.count, 32)
         let list = await pairing.pairedDevices()
         XCTAssertEqual(list.map(\.name), ["Test iPhone"])
         // Wrong secret
-        let offer = await pairing.createOffer(kind: .code, now: clock.get())
-        let wrong = String(format: "%06d", (Int(offer.display)! + 1) % 1_000_000)
+        let offer = await pairing.createOffer(now: clock.get())
+        var wrong = PairingClient.material(fromQR: offer.display)!
+        wrong[0] ^= 0x01   // one bit off
         let (a, b) = MemoryTransport.pair(); Task { await host.serve(b) }
-        do { _ = try await LinkClient.pair(over: a, material: PairingClient.material(fromCode: wrong), deviceName: "x"); XCTFail() } catch {}
+        do { _ = try await LinkClient.pair(over: a, material: wrong, deviceName: "x"); XCTFail() } catch {}
         // The right secret still works (one wrong try does not burn the offer), then the offer is spent.
         let (c, d) = MemoryTransport.pair(); Task { await host.serve(d) }
-        _ = try await LinkClient.pair(over: c, material: PairingClient.material(fromCode: offer.display), deviceName: "Second")
+        _ = try await LinkClient.pair(over: c, material: PairingClient.material(fromQR: offer.display)!, deviceName: "Second")
         let (e, f) = MemoryTransport.pair(); Task { await host.serve(f) }
-        do { _ = try await LinkClient.pair(over: e, material: PairingClient.material(fromCode: offer.display), deviceName: "Third"); XCTFail() } catch {}
+        do { _ = try await LinkClient.pair(over: e, material: PairingClient.material(fromQR: offer.display)!, deviceName: "Third"); XCTFail() } catch {}
     }
 
     func testDeclinedAndExpiredPairingIssuesNoKey() async throws {
         let (host, _, pairing, clock) = await makeHost(accept: false)
-        let offer = await pairing.createOffer(kind: .qr, now: clock.get())
+        let offer = await pairing.createOffer(now: clock.get())
         let (a, b) = MemoryTransport.pair(); Task { await host.serve(b) }
         do { _ = try await LinkClient.pair(over: a, material: PairingClient.material(fromQR: offer.display)!, deviceName: "x"); XCTFail() } catch {}
         let none = await pairing.pairedDevices()
         XCTAssertTrue(none.isEmpty)
         let (host2, _, pairing2, clock2) = await makeHost()
-        let offer2 = await pairing2.createOffer(kind: .qr, now: clock2.get())
+        let offer2 = await pairing2.createOffer(now: clock2.get())
         clock2.advance(PairingManager.offerLifetime + 1)
         let (c, d) = MemoryTransport.pair(); Task { await host2.serve(d) }
         do { _ = try await LinkClient.pair(over: c, material: PairingClient.material(fromQR: offer2.display)!, deviceName: "x"); XCTFail() } catch {}
     }
 
-    func testThreeWrongCodesBurnTheOffer() async throws {
+    /// Hardening task 3.1: there is no short code any more. Every offer is a fresh 16-byte secret, so a captured
+    /// exchange cannot be searched offline the way a six-digit code could (a million tries, under a second).
+    func testEveryOfferIsASixteenByteSecret() async throws {
         let pairing = PairingManager(storeURL: nil)
-        let offer = await pairing.createOffer(kind: .code, now: Date())
+        var seen = Set<Data>()
+        for _ in 0..<20 {
+            let offer = await pairing.createOffer()
+            let secret = try XCTUnwrap(PairingClient.material(fromQR: offer.display))
+            XCTAssertEqual(secret.count, PairingManager.secretLength)
+            XCTAssertTrue(seen.insert(secret).inserted, "a new secret each time")
+        }
+        XCTAssertEqual(PairingManager.secretLength, 16)
+    }
+
+    func testTwelveWrongSecretsBurnTheOffer() async throws {
+        let pairing = PairingManager(storeURL: nil)
+        let offer = await pairing.createOffer(now: Date())
         for _ in 0..<PairingManager.maxTotalFailures {
             let r = PairingClient.request(material: Data("000000-not-it".utf8), deviceName: "x")
             _ = try? await pairing.redeem(r, peer: "p\(Int.random(in: 0...1_000_000))", accept: { _ in true })
         }
-        let good = PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "x")
+        let good = PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "x")
         do { _ = try await pairing.redeem(good, accept: { _ in true }); XCTFail() } catch { XCTAssertEqual(error as? PairingError, .noOffer) }
     }
 
@@ -274,7 +289,7 @@ final class UndeliveredPairingTests: XCTestCase {
         await host.setPairingApproval { _ in try? await Task.sleep(nanoseconds: approvalDelay); return true }
         let listener = try TCPListener { transport in Task { await host.serve(transport) } }
         try await listener.start()
-        let offer = await pairing.createOffer(kind: .qr)
+        let offer = await pairing.createOffer()
         return (pairing, listener, PairingClient.material(fromQR: offer.display)!)
     }
 
@@ -314,7 +329,7 @@ final class TCPLoopbackTests: XCTestCase {
         defer { listener.stop() }
         XCTAssertNotEqual(listener.port, 0)
 
-        let offer = await pairing.createOffer(kind: .qr)
+        let offer = await pairing.createOffer()
         let creds = try await LinkClient.pair(over: TCPTransport.connect(host: "127.0.0.1", port: listener.port),
                                               material: PairingClient.material(fromQR: offer.display)!, deviceName: "Loopback phone")
         let client = try await LinkClient.connect(over: TCPTransport.connect(host: "127.0.0.1", port: listener.port),
@@ -368,8 +383,8 @@ final class CompanionTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("pv-link-\(UUID().uuidString)/paired.json")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let first = PairingManager(storeURL: url)
-        let offer = await first.createOffer(kind: .code)
-        let request = PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "Phone A")
+        let offer = await first.createOffer()
+        let request = PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "Phone A")
         _ = try await first.redeem(request, accept: { _ in true })
         let mode = (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber)?.intValue
         XCTAssertEqual(mode, 0o600)
@@ -385,7 +400,7 @@ final class CompanionTests: XCTestCase {
 
     func testQRPayloadNamesTheMacAndCarriesTheSecret() async {
         let m = PairingManager(storeURL: nil)
-        let offer = await m.createOffer(kind: .qr)
+        let offer = await m.createOffer()
         let payload = offer.qrPayload(host: "100.100.1.2", port: 47821)
         XCTAssertTrue(payload.hasPrefix("pairvox://pair?h=100.100.1.2&p=47821&s="))
         XCTAssertFalse(payload.contains("+") || payload.contains("/") && payload.dropFirst(12).contains("/") )
@@ -518,8 +533,8 @@ final class AuditRun3PairingTests: XCTestCase {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-rv-\(UUID().uuidString)")
         let url = dir.appendingPathComponent("paired.json")
         let m = PairingManager(storeURL: url)
-        let offer = await m.createOffer(kind: .code)
-        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true })
+        let offer = await m.createOffer()
+        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "A"), accept: { _ in true })
         let id = await m.pairedDevices()[0].id
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path); try? FileManager.default.removeItem(at: dir) }
@@ -533,9 +548,9 @@ final class AuditRun3PairingTests: XCTestCase {
         XCTAssertEqual(sanitizedDeviceName("\u{202E}\n"), "Unnamed phone")
         XCTAssertLessThanOrEqual(sanitizedDeviceName(String(repeating: "👨‍👩‍👧‍👦", count: 64)).utf8.count, 128)
         let m = PairingManager(storeURL: nil)
-        let offer = await m.createOffer(kind: .code)
+        let offer = await m.createOffer()
         let seen = NameBox()
-        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "Ann\u{202E}\nOK"),
+        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "Ann\u{202E}\nOK"),
                                accept: { n in await seen.set(n); return true })
         let shown = await seen.value
         XCTAssertEqual(shown, "AnnOK")
@@ -558,8 +573,8 @@ final class AuditRun3PairingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("paired.json")
         let m = PairingManager(storeURL: url)
-        let offer = await m.createOffer(kind: .code)
-        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true })
+        let offer = await m.createOffer()
+        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "A"), accept: { _ in true })
         func mode(_ p: String) -> Int { ((try? FileManager.default.attributesOfItem(atPath: p)[.posixPermissions]) as? NSNumber)?.intValue ?? -1 }
         XCTAssertEqual(mode(url.path), 0o600)
         XCTAssertEqual(mode(dir.path), 0o700)
@@ -572,12 +587,12 @@ actor NameBox { var value: String?; func set(_ s: String) { value = s } }
 final class AuditRun3HostTests: XCTestCase {
     func testOnePeerGuessingWrongCannotBlockTheRealPhone() async throws {
         let pairing = PairingManager(storeURL: nil)
-        let offer = await pairing.createOffer(kind: .code)
+        let offer = await pairing.createOffer()
         for _ in 0..<5 {
             let bad = PairingClient.request(material: Data("nope".utf8), deviceName: "x")
             _ = try? await pairing.redeem(bad, peer: "100.1.1.1", accept: { _ in true })
         }
-        let good = PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "Real")
+        let good = PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "Real")
         _ = try await pairing.redeem(good, peer: "100.2.2.2", accept: { _ in true })
     }
 
@@ -636,7 +651,7 @@ final class AuditRun3SizeTests: XCTestCase {
 final class PhoneSideTests: XCTestCase {
     func testQRPayloadRoundTripsAndRejectsJunk() async {
         let m = PairingManager(storeURL: nil)
-        let offer = await m.createOffer(kind: .qr)
+        let offer = await m.createOffer()
         let parsed = PairingPayload.parse(offer.qrPayload(host: "100.100.1.2", port: 47821))
         XCTAssertEqual(parsed?.host, "100.100.1.2")
         XCTAssertEqual(parsed?.port, 47821)
@@ -740,8 +755,8 @@ final class DeviceKeyStoreTests: XCTestCase {
         let url = dir.appendingPathComponent("paired.json")
         let keys = MemoryDeviceKeyStore()
         let m = PairingManager(storeURL: url, keys: keys)
-        let offer = await m.createOffer(kind: .code)
-        let grant = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true })
+        let offer = await m.createOffer()
+        let grant = try await m.redeem(PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "A"), accept: { _ in true })
         _ = grant
         let device = await m.pairedDevices()[0]
         let file = try String(contentsOf: url, encoding: .utf8)
@@ -795,9 +810,9 @@ final class ControlChannelTests: XCTestCase {
         XCTAssertEqual(mode, 0o600)
         let dirMode = (try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? NSNumber)?.intValue
         XCTAssertEqual(dirMode, 0o700)
-        let ok = try LinkCommandClient.send(LinkCommand(cmd: "offer", id: nil, kind: "code"), path: path)
+        let ok = try LinkCommandClient.send(LinkCommand(cmd: "offer", id: nil, kind: "qr"), path: path)
         XCTAssertTrue(ok.ok)
-        XCTAssertEqual(ok.status, "cmd=offer id=- kind=code")
+        XCTAssertEqual(ok.status, "cmd=offer id=- kind=qr")
         let bad = try LinkCommandClient.send(LinkCommand(cmd: "fail"), path: path)
         XCTAssertFalse(bad.ok)
         XCTAssertEqual(bad.error, "nope")
@@ -934,8 +949,8 @@ final class AuditRun4LinkTests: XCTestCase {
         let url = dir.appendingPathComponent("paired.json")
         let keys = MemoryDeviceKeyStore()
         let m = PairingManager(storeURL: url, keys: keys)
-        let offer = await m.createOffer(kind: .code)
-        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true })
+        let offer = await m.createOffer()
+        _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "A"), accept: { _ in true })
         let id = await m.pairedDevices()[0].id
         let key = keys.key(for: id)!
         keys.removeKey(for: id)                              // the Keychain is unreadable for a moment
@@ -957,8 +972,8 @@ final class AuditRun4LinkTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let keys = MemoryDeviceKeyStore()
         let m = PairingManager(storeURL: url, keys: keys)
-        let offer = await m.createOffer(kind: .code)
-        do { _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromCode: offer.display), deviceName: "A"), accept: { _ in true }); XCTFail("must fail") } catch {}
+        let offer = await m.createOffer()
+        do { _ = try await m.redeem(PairingClient.request(material: PairingClient.material(fromQR: offer.display)!, deviceName: "A"), accept: { _ in true }); XCTFail("must fail") } catch {}
         let list = await m.pairedDevices()
         XCTAssertTrue(list.isEmpty)
     }

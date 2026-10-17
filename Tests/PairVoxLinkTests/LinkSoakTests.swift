@@ -46,11 +46,11 @@ final class LinkSoakTests: XCTestCase {
     }
 
     func pair(_ rig: Rig, name: String = "Soak phone") async throws -> (deviceID: String, psk: Data) {
-        let offer = await rig.pairing.createOffer(kind: .code)
+        let offer = await rig.pairing.createOffer()
         let port = rig.port
         let transport = TCPTransport.connect(host: "127.0.0.1", port: port)
         do {
-            return try await timed { try await LinkClient.pair(over: transport, material: PairingClient.material(fromCode: offer.display), deviceName: name) }
+            return try await timed { try await LinkClient.pair(over: transport, material: PairingClient.material(fromQR: offer.display)!, deviceName: name) }
         } catch { await transport.close(); throw error }
     }
 
@@ -199,7 +199,10 @@ final class LinkFaultTests: XCTestCase {
             try process.run()
         }
         var log: String { lock.lock(); defer { lock.unlock() }; return text }
-        var code: String? { log.components(separatedBy: "CODE: ").dropFirst().first?.split(separator: "\n").first.map(String.init) }
+        /// The pairing link the stand-in host prints (`LINK: pairvox://pair?...`).
+        var link: PairingPayload? {
+            log.components(separatedBy: "LINK: ").dropFirst().first?.split(separator: "\n").first.flatMap { PairingPayload.parse(String($0)) }
+        }
         func stop() { output.fileHandleForReading.readabilityHandler = nil; if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
     }
 
@@ -221,11 +224,11 @@ final class LinkFaultTests: XCTestCase {
         let port = UInt16(47_900 + Int.random(in: 0..<80))
         let host = try HostProcess(port: port)
         defer { host.stop() }
-        let ready = await waitFor(8) { host.code != nil }
+        let ready = await waitFor(8) { host.link != nil }
         XCTAssertTrue(ready, "the stand-in host did not start: \(host.log)")
-        let code = try XCTUnwrap(host.code)
+        let link = try XCTUnwrap(host.link)
         let transport = TCPTransport.connect(host: "127.0.0.1", port: port)
-        let creds = try await LinkClient.pair(over: transport, material: PairingClient.material(fromCode: code), deviceName: "Fault phone")
+        let creds = try await LinkClient.pair(over: transport, material: link.material, deviceName: "Fault phone")
         let client = try await LinkClient.connect(over: TCPTransport.connect(host: "127.0.0.1", port: port), deviceID: creds.deviceID, psk: creds.psk)
         let seen = Seen()
         let reader = Task {

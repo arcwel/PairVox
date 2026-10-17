@@ -26,7 +26,7 @@ public actor LinkClient {
         return LinkClient(transport: transport, codec: FrameCodec(keys: keys))
     }
 
-    /// Pairs a new phone with the secret from the Mac's QR code or six-digit code.
+    /// Pairs a new phone with the secret from the Mac's QR code (or the same pairing link, pasted).
     public static func pair(over transport: LinkTransport, material: Data, deviceName: String) async throws -> (deviceID: String, psk: Data) {
         let request = PairingClient.request(material: material, deviceName: deviceName)
         try await transport.send(try JSONEncoder().encode(Opening.pair(request)))

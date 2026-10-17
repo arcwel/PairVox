@@ -16,10 +16,10 @@ extension LinkTests {
     }
 
     private func pairReal(_ host: LinkHost, _ pairing: PairingManager) async throws -> (String, Data) {
-        let offer = await pairing.createOffer(kind: .code)
+        let offer = await pairing.createOffer()
         let (a, b) = MemoryTransport.pair()
         Task { await host.serve(b) }
-        let creds = try await LinkClient.pair(over: a, material: PairingClient.material(fromCode: offer.display), deviceName: "Heartbeat phone")
+        let creds = try await LinkClient.pair(over: a, material: PairingClient.material(fromQR: offer.display)!, deviceName: "Heartbeat phone")
         return (creds.deviceID, creds.psk)
     }
 

@@ -558,15 +558,21 @@ private struct PhoneSettings: View {
             }
             if model.settings.phoneLinkEnabled {
                 Section("Pair a new phone") {
-                    HStack {
-                        Button("Show QR code") { phone.newOffer(.qr) }
-                        Button("Show a 6-digit code") { phone.newOffer(.code) }
-                    }
-                    if let offer = phone.offer {
-                        if let payload = phone.qrPayload, let image = PhoneLinkModel.qrImage(payload) {
+                    Button("Show QR code") { phone.newOffer() }
+                    if phone.offer != nil, let payload = phone.qrPayload {
+                        if let image = PhoneLinkModel.qrImage(payload) {
                             Image(nsImage: image).interpolation(.none).resizable().frame(width: 180, height: 180)
-                        } else if offer.kind == .code {
-                            Text(offer.display).font(.system(size: 34, weight: .bold, design: .monospaced)).textSelection(.enabled)
+                        }
+                        // The same secret as text, for a phone without a camera (the iOS Simulator) or to paste on the
+                        // iPhone through Universal Clipboard. There is no short code: one could be guessed offline
+                        // from a captured exchange.
+                        Text("No camera? Copy the pairing link and paste it in the phone app.").font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Text(payload).font(.system(.caption2, design: .monospaced)).lineLimit(1).truncationMode(.middle)
+                            Button("Copy link") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(payload, forType: .string)
+                            }
                         }
                         Text("Valid for two minutes, once. You will be asked to click Pair on this Mac.").font(.caption).foregroundStyle(.secondary)
                         Button("Cancel") { phone.cancelOffer() }

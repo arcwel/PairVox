@@ -131,7 +131,7 @@ The phone talks to the Mac over Tailscale. **If your tailnet uses access rules, 
 
 ```bash
 swift run pairvox-link status
-swift run pairvox-link pair --qr          # prints a QR code and its text; --code prints six digits
+swift run pairvox-link pair               # prints a QR code and the same pairing link as text
 swift run pairvox-link phones list
 swift run pairvox-link phones remove <id> --dry-run
 swift run pairvox-link phones prune --stale --days 30 --dry-run   # phones not seen for 30 days; connected ones are never listed

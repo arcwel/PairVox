@@ -1,6 +1,6 @@
 # PairVox for iPhone (first build)
 
-A small SwiftUI app that talks to the PairVox Mac app over Tailscale. It pairs by QR code or six-digit code, shows the active project's transcript, speaks replies and approval prompts, listens with on-device speech recognition, and answers permission requests. The Mac makes every permission decision.
+A small SwiftUI app that talks to the PairVox Mac app over Tailscale. It pairs by QR code (or the same pairing link, pasted), shows the active project's transcript, speaks replies and approval prompts, listens with on-device speech recognition, and answers permission requests. The Mac makes every permission decision.
 
 > **Before you pair:** Tailscale must run on both devices, and if your tailnet restricts ports, your phone must be allowed to reach your Mac on **TCP 47821**. Otherwise the phone sits on "connecting" and the Mac sees nothing. See [../docs/PHONE_LINK_SETUP.md](../docs/PHONE_LINK_SETUP.md).
 
@@ -14,8 +14,8 @@ A small SwiftUI app that talks to the PairVox Mac app over Tailscale. It pairs b
 ## Pair
 
 1. Mac: PairVox → Settings → Phone → switch on "Let paired phones connect over Tailscale". The screen shows this Mac's tailnet address and port.
-2. Mac: press "Show QR code" (or "Show a 6-digit code").
-3. Phone: Scan the QR code, or type the Mac's address, port and the six digits, then Pair.
+2. Mac: press "Show QR code".
+3. Phone: Scan the QR code. Without a camera (the iOS Simulator), press "Copy link" on the Mac and paste the link into the phone's pair form. With Universal Clipboard the iPhone's Paste button picks it up directly. Then Pair.
 4. Mac: a dialog asks "Pair '<phone name>' with this Mac?" Click Pair.
 
 ## Things to try, and what you should see
@@ -38,4 +38,4 @@ Push notifications when the app is closed, lock-screen controls, starting or swi
 
 ## Known limits (see docs/security/2026-10-13-audit-run-3-phone-link.md)
 
-Pairing needs the Mac's tailnet address. The six-digit code is weaker than the QR code (it could be guessed from a captured exchange; it still needs your Pair click on the Mac). Nothing here has been run on a real device by the author.
+Pairing needs the Mac's tailnet address. There is no six-digit code: it could be guessed offline from a captured exchange and gave away the phone's key, so it was removed on 2026-10-17. Nothing here has been run on a real device by the author.
