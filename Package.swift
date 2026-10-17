@@ -36,7 +36,10 @@ var targets: [Target] = [
     .executableTarget(
         name: "PairVoxCLI",
         dependencies: ["PairVoxCore"],
-        path: "Sources/PairVoxCLI"
+        path: "Sources/PairVoxCLI",
+        // Swift 5 mode like the Voice and App targets: the CLI configures C stdio (setvbuf on the Glibc `stdout`
+        // global), which Swift 6 strict concurrency refuses on Linux. The engine it drives stays in Swift 6.
+        swiftSettings: [.swiftLanguageMode(.v5)]
     ),
     .testTarget(
         name: "PairVoxCoreTests",

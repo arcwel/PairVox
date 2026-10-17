@@ -511,6 +511,23 @@ public enum BashRisk {
         }
     }
 
+    /// True when a wildcard path could name a protected folder or something inside it, judged from the pattern alone:
+    /// each of the folder's path components must match the pattern's component at the same depth, the way the shell
+    /// would match it (a leading dot has to be written, so `~/*` does not reach `~/.claude`). A pattern that stops
+    /// above the folder (`/Users/*`) does not count; one that reaches the folder or goes inside it does.
+    static func patternCanReachProtectedFolder(_ absolutePattern: String) -> Bool {
+        let pattern = absolutePattern.split(separator: "/").map(String.init)
+        let candidates = PermissionPolicy.protectedFolders
+            + [SettingsStore.defaultURL().deletingLastPathComponent().path, NSHomeDirectory() + "/.claude"]
+        for folder in Set(candidates) {
+            let parts = folder.split(separator: "/").map(String.init)
+            guard pattern.count >= parts.count else { continue }
+            let all = zip(pattern, parts).allSatisfy { p, name in fnmatch(p, name, FNM_PERIOD) == 0 }
+            if all { return true }
+        }
+        return false
+    }
+
     /// True if any word of the command, once `~`, `$HOME`, backslashes and quotes are resolved, is inside a folder
     /// that holds the consent store (PairVox's settings) or Claude Code's configuration.
     static func touchesProtectedFolder(_ command: String, projectRoot: String? = nil, depth: Int = 0) -> Bool {
@@ -542,7 +559,10 @@ public enum BashRisk {
             let absolute = w.hasPrefix("/") ? w : (base.map { ($0 as NSString).appendingPathComponent(w) } ?? "")
             guard !absolute.isEmpty else { continue }
             if absolute.contains("*") || absolute.contains("?") || absolute.contains("[") {
-                // Expand the pattern for real and check what it can reach.
+                // The pattern itself, against each protected folder: what it could reach, whether or not the folder
+                // exists yet on this Mac (a fresh install, or CI, has no ~/.claude for the expansion below to find).
+                if patternCanReachProtectedFolder(absolute) { return true }
+                // Expand the pattern for real and check what it can reach (catches symlinks into a protected folder).
                 var g = glob_t()
                 defer { globfree(&g) }
                 if glob(absolute, GLOB_BRACE | GLOB_TILDE | GLOB_MARK, nil, &g) == 0 {

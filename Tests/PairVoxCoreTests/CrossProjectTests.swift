@@ -322,3 +322,24 @@ final class ProtectedShellRegressionTests: XCTestCase {
         XCTAssertEqual(i.items.count, 2)
     }
 }
+
+/// The protected-folder check must not depend on the folder existing: a fresh Mac or a CI runner has no
+/// `~/.claude`, and the real glob expansion then finds nothing.
+final class ProtectedPatternWithoutFolderTests: XCTestCase {
+    func testPatternsReachProtectedFoldersFromTheTextAlone() {
+        let home = NSHomeDirectory()
+        XCTAssertTrue(BashRisk.patternCanReachProtectedFolder(home + "/.cl*/settings.json"))
+        XCTAssertTrue(BashRisk.patternCanReachProtectedFolder(home + "/.c[l]aude/settings.json"))
+        XCTAssertTrue(BashRisk.patternCanReachProtectedFolder(home + "/.claud?/settings.json"))
+        XCTAssertTrue(BashRisk.patternCanReachProtectedFolder(home + "/.cl*"))
+        XCTAssertTrue(BashRisk.patternCanReachProtectedFolder(home + "/Library/Application Support/Pair*/settings.json"))
+    }
+
+    func testPatternsThatCannotReachThemAreNotFlagged() {
+        let home = NSHomeDirectory()
+        XCTAssertFalse(BashRisk.patternCanReachProtectedFolder(home + "/*"), "a bare star does not match a dot folder")
+        XCTAssertFalse(BashRisk.patternCanReachProtectedFolder("/Users/*"), "stops above the folder")
+        XCTAssertFalse(BashRisk.patternCanReachProtectedFolder(home + "/Documents/*.txt"))
+        XCTAssertFalse(BashRisk.patternCanReachProtectedFolder(home + "/Library/Application Support/Other*/x"))
+    }
+}
