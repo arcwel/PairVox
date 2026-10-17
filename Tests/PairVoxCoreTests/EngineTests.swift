@@ -130,6 +130,13 @@ final class ConversationEngineTests: XCTestCase {
         try? await Task.sleep(nanoseconds: ms * 1_000_000)
     }
 
+    /// Waits until the acknowledgement is queued (or two seconds pass). A fixed 300 ms wait was not always enough on
+    /// the Linux CI runner, so the test then started a sentence that did not exist yet.
+    func waitForQueuedAcknowledgement() async {
+        let deadline = Date().addingTimeInterval(2)
+        while output.queue.first?.kind != .ack, Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
+    }
+
     func testTurnStreamsSpeechAndRecordsTranscript() async {
         await engine.submit("What does the auth module do?")
         XCTAssertEqual(backend.sent, ["What does the auth module do?"])
@@ -284,7 +291,7 @@ final class ConversationEngineTests: XCTestCase {
     func testAQueuedAcknowledgementIsDroppedWhenTheAnswerIsReady() async {
         output.cancellable = true
         await engine.submit("Refactor the parser")
-        await settle(300)                                   // the acknowledgement is queued, not started
+        await waitForQueuedAcknowledgement()                // the acknowledgement is queued, not started
         XCTAssertEqual(output.queue.first?.kind, .ack)
         backend.emit(.textDelta("The parser has three stages. "))
         await settle()
@@ -294,7 +301,8 @@ final class ConversationEngineTests: XCTestCase {
     func testAnAcknowledgementAlreadyBeingSpokenFinishes() async {
         output.cancellable = true
         await engine.submit("Refactor the parser")
-        await settle(300)
+        await waitForQueuedAcknowledgement()
+        XCTAssertEqual(output.queue.first?.kind, .ack)
         output.playNext(finish: false)                      // it has started
         backend.emit(.textDelta("The parser has three stages. "))
         await settle()
