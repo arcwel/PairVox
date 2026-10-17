@@ -10,6 +10,7 @@ struct ControlBarView: View {
     @FocusState private var typingFocused: Bool
 
     var body: some View {
+        let _ = UITrace.tick("ControlBar.body")
         VStack(spacing: 8) {
             HStack(spacing: 14) {
                 StatusOrbView(phase: model.snapshot.phase, level: model.inputLevel, muted: model.listeningMode == .muted)

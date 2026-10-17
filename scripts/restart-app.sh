@@ -14,14 +14,16 @@ set -Eeuo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
-BUILD=0 DRY=0 JSON=0 PRUNE=0 RESTART=0
+BUILD=0 DRY=0 JSON=0 PRUNE=0 RESTART=1
 for arg in "$@"; do
   case "$arg" in
-    --build) BUILD=1 RESTART=1 ;; --dry-run) DRY=1 ;; --json) JSON=1 ;; --prune) PRUNE=1 ;;
+    --build) BUILD=1 ;; --dry-run) DRY=1 ;; --json) JSON=1 ;; --prune) PRUNE=1 ;;
     *) echo "usage: $0 [--build] [--prune] [--dry-run] [--json]" >&2; exit 2 ;;
   esac
 done
-[[ $PRUNE -eq 1 && $BUILD -eq 0 ]] || RESTART=1   # --prune on its own does not restart anything
+# `--prune` alone (with or without --json / --dry-run) prunes and restarts nothing; with --build or on its own
+# next to a restart it is one more step after the restart.
+[[ $PRUNE -eq 1 && $BUILD -eq 0 && "$*" =~ ^(--prune|--json|--dry-run| )+$ && ! "$*" =~ --build ]] && RESTART=0
 
 SRC=".build/xcode/Build/Products/Release/PairVox.app"
 BIN="$ROOT/dist/PairVox.app/Contents/MacOS/PairVox"

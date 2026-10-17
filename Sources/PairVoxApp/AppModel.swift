@@ -26,14 +26,14 @@ final class AppModel: ObservableObject {
         didSet { settingsChanged(from: oldValue) }
     }
     /// The snapshot of the project the user is in.
-    @Published private(set) var snapshot = EngineSnapshot()
+    @Published private(set) var snapshot = EngineSnapshot() { didSet { UITrace.tick("set.snapshot") } }
     /// Every open project, in the order they were opened.
-    @Published private(set) var sessions: [SessionSummary] = []
+    @Published private(set) var sessions: [SessionSummary] = [] { didSet { UITrace.tick("set.sessions") } }
     @Published private(set) var activeSessionID: UUID?
-    @Published private(set) var setup = SetupState()
+    @Published private(set) var setup = SetupState() { didSet { UITrace.tick("set.setup") } }
     @Published private(set) var whisperState: TranscriberState = .notLoaded
     @Published private(set) var kokoroStatus: ModelStore.Status = .missing
-    @Published private(set) var inputLevel: Float = -90
+    @Published private(set) var inputLevel: Float = -90 { didSet { UITrace.tick("set.inputLevel") } }
     @Published private(set) var listeningMode: VoiceInputController.ListeningMode = .handsFree
     @Published private(set) var pushToTalkActive = false
     /// A request explainer exists for the open project (questions about a request can be asked).
@@ -328,6 +328,11 @@ final class AppModel: ObservableObject {
     /// the one entered offers to catch the user up on anything missed.
     func switchTo(_ id: UUID) {
         guard id != activeSessionID, let next = liveSessions[id] else { return }
+        log.log(.info, .app, "project.switch", ["from": .string(activeSession?.name ?? "-"), "to": .string(next.name),
+                                                "entries": .int(next.snapshot.transcript.count), "phase": .string("\(next.snapshot.phase)"),
+                                                "sessions": .int(sessionOrder.count), "grantOffer": .bool(next.snapshot.grantOffer != nil),
+                                                "pending": .bool(next.snapshot.pendingPermission != nil),
+                                                "missed": .int(next.snapshot.missedMessages.count), "catchUp": .bool(next.snapshot.awaitingCatchUpChoice)])
         if let previous = activeSession {
             previous.gate.setActive(false)
             let engine = previous.engine

@@ -7,6 +7,7 @@ struct TranscriptView: View {
     let entries: [TranscriptEntry]
 
     var body: some View {
+        let _ = UITrace.tick("Transcript.body")
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {

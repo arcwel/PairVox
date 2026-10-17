@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var columns: NavigationSplitViewVisibility = .detailOnly
 
     var body: some View {
+        let _ = UITrace.tick("ContentView.body")
         NavigationSplitView(columnVisibility: $columns) {
             ProjectSidebar()
                 .navigationSplitViewColumnWidth(min: 190, ideal: 230, max: 320)
@@ -70,6 +71,7 @@ private struct MainToolbarItems: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
+        let _ = UITrace.tick("Toolbar.body")
         HStack(spacing: 10) { items }
     }
 

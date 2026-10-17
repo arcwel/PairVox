@@ -23,6 +23,7 @@ struct PermissionCardView: View {
     }
 
     var body: some View {
+        let _ = UITrace.tick("PermissionCard.body")
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "hand.raised.fill").foregroundStyle(riskColor)

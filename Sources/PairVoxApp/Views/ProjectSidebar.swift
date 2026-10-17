@@ -8,6 +8,7 @@ struct ProjectSidebar: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
+        let _ = UITrace.tick("Sidebar.body")
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("PROJECTS").font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
@@ -104,6 +105,7 @@ struct CatchUpBar: View {
     private var missed: [MissedMessage] { model.snapshot.missedMessages }
 
     var body: some View {
+        let _ = UITrace.tick("CatchUp.body")
         VStack(alignment: .leading, spacing: 8) {
             Text("WHILE YOU WERE AWAY · \(missed.count) NEW \(missed.count == 1 ? "REPLY" : "REPLIES")")
                 .font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
