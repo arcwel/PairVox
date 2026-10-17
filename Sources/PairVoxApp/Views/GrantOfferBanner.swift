@@ -12,12 +12,16 @@ struct GrantOfferBanner: View {
     private var title: String { offer.kind == .edit ? "FOLDER ACCESS · EDITS" : "FOLDER ACCESS · SHELL COMMANDS" }
 
     var body: some View {
+        let _ = UITrace.tick("GrantOffer.body")
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
-            Text(offer.folder).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
+            // Plain text only: with a selectable Text and a vertical fixedSize here, the whole window stopped drawing
+            // whenever this banner appeared (blank sidebar and transcript, toolbar still live; 2026-10-16, measured by
+            // view-body tracing). The folder is one unbreakable word, so it is clipped in the middle rather than wrapped.
+            Text(offer.folder).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle)
             Text(offer.text.replacingOccurrences(of: " Say yes or no.", with: "").replacingOccurrences(of: " Say yes again to allow, or no.", with: ""))
                 .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(nil)
             HStack {
                 switch offer.stage {
                 case .asking:
