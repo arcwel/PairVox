@@ -40,9 +40,18 @@ final class SecurityHardeningTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("Evil.swift"),
                                                    withDestinationURL: URL(fileURLWithPath: "/dev/zero"))
         let done = expectation(description: "scan returns")
-        var terms: [String] = []
-        DispatchQueue.global().async { terms = RepoVocabulary.scan(root: root); done.fulfill() }
+        // A locked box, not a captured `var`: Swift 6.0 (the Linux CI toolchain) refuses mutating a captured var
+        // from a concurrently executing closure.
+        final class Box: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value: [String] = []
+            func set(_ v: [String]) { lock.lock(); value = v; lock.unlock() }
+            func get() -> [String] { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let box = Box()
+        DispatchQueue.global().async { box.set(RepoVocabulary.scan(root: root)); done.fulfill() }
         wait(for: [done], timeout: 10)
+        let terms = box.get()
         XCTAssertTrue(terms.contains("RealWidgetController"))
         XCTAssertFalse(terms.contains("Evil"))
         // And a plain read never goes past the limit.
