@@ -125,7 +125,10 @@ struct StatusOrbView: View {
     var body: some View {
         // Map -60…-10 dBFS to 0…1 for a gentle pulse.
         let normalized = CGFloat(max(0, min(1, (level + 60) / 50)))
-        TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+        // Only thinking, working and speaking move with time; listening follows `level`, which re-renders this view
+        // anyway. Paused otherwise, so an idle window is not redrawn 30 times a second.
+        let animating = phase == .thinking || phase == .working || phase == .speaking
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !animating)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             let breathing: CGFloat = (phase == .thinking || phase == .working) ? 0.08 * CGFloat(sin(t * 4)) : 0
             let speaking: CGFloat = phase == .speaking ? 0.06 * CGFloat(sin(t * 9)) : 0

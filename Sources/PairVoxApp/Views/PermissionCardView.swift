@@ -36,15 +36,15 @@ struct PermissionCardView: View {
                     .padding(.vertical, 3)
                     .background(riskColor.opacity(0.18), in: Capsule())
             }
-            // The whole request, scrollable: an approval must never cover text the approver could not see.
-            ScrollView {
-                Text(pending.assessment.summary)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // The whole request, scrollable when long: an approval must never cover text the approver could not see.
+            // No `fixedSize` here: a selectable Text under a vertical fixedSize is the construct that blanked the whole
+            // window in the folder-access banner (2026-10-16). ViewThatFits shows the plain text when it fits in 160
+            // points and the scroll box otherwise, without asking the text for an unbounded ideal height.
+            ViewThatFits(in: .vertical) {
+                summaryText
+                ScrollView { summaryText }.frame(height: 160)
             }
             .frame(maxHeight: 160)
-            .fixedSize(horizontal: false, vertical: true)
             explanationView
             if model.advisorAvailable && model.settings.explainRequests { askView }
             waitingView
@@ -77,6 +77,13 @@ struct PermissionCardView: View {
         .padding(.horizontal, Style.bannerHorizontal)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Style.radius))
         .overlay(RoundedRectangle(cornerRadius: Style.radius).stroke(riskColor.opacity(0.5)))
+    }
+
+    private var summaryText: some View {
+        Text(pending.assessment.summary)
+            .font(.system(.callout, design: .monospaced))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var explanationView: some View {

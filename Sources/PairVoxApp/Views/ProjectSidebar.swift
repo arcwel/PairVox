@@ -111,7 +111,8 @@ struct CatchUpBar: View {
                 .font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
             if let last = missed.last {
                 Text(last.sentences.joined(separator: " "))
-                    .font(.callout).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    // Three lines at most; no vertical fixedSize (the construct behind the blank-window banner bug).
+                    .font(.callout).lineLimit(3)
             }
             HStack {
                 Button("Skip") { model.catchUp(.skip) }

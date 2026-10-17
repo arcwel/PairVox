@@ -403,13 +403,15 @@ final class AppModel: ObservableObject {
     private func refreshSessions() {
         let open = sessionOrder.compactMap { liveSessions[$0]?.url.path }
         if settings.openProjects != open { settings.openProjects = open }
-        sessions = sessionOrder.compactMap { id in
+        let next: [SessionSummary] = sessionOrder.compactMap { id in
             guard let s = liveSessions[id] else { return nil }
             let snap = id == activeSessionID ? snapshot : s.snapshot
             return SessionSummary(id: id, name: s.name, path: s.url.path, phase: snap.phase,
                                   needsAttention: snap.pendingPermission != nil || snap.grantOffer != nil,
                                   missedCount: snap.missedMessages.count, isActive: id == activeSessionID)
         }
+        // Called on every streaming delta; publishing an unchanged list re-rendered every view that reads the model.
+        if next != sessions { sessions = next }
     }
 
     // MARK: Catch-up after switching

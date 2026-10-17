@@ -25,6 +25,7 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+[[ -z "$RUN" || "$RUN" =~ ^[a-f0-9]+$ ]] || { echo "a run id is hex, like 16e4c87a" >&2; exit 2; }
 [[ -r "$LOG" ]] || { echo "no log at $LOG" >&2; exit 3; }
 if [[ -z "$RUN" ]]; then
   RUN=$(grep -o '"run":"[a-f0-9]*"' "$LOG" | tail -1 | cut -d'"' -f4 || true)
