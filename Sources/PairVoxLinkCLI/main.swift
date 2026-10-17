@@ -15,7 +15,9 @@ import Foundation
 import PairVoxLink
 
 func fail(_ message: String, code: Int32) -> Never {
-    FileHandle.standardError.write(Data((message + "\n").utf8))
+    // Messages can carry text from the app over the socket; control characters never reach the terminal.
+    FileHandle.standardError.write(Data((message.split(separator: "\n", omittingEmptySubsequences: false)
+        .map { printable(String($0)) }.joined(separator: "\n") + "\n").utf8))
     exit(code)
 }
 
@@ -180,7 +182,7 @@ switch command {
 case "status":
     let r = send(LinkCommand(cmd: "status"))
     if json { printJSON(r) } else if r.ok {
-        print(r.status ?? "")
+        print(printable(r.status ?? ""))
         if let host = r.host, let port = r.port, r.enabled == true { print("Listening on \(host):\(port); \(r.connected ?? 0) connected") }
     } else { fail(r.error ?? "Failed.", code: 1) }
 case "doctor":
@@ -196,7 +198,7 @@ case "phones":
             let iso = ISO8601DateFormatter()
             for d in r.devices ?? [] {
                 let seen = d.connected == true ? "connected now" : "seen \(d.lastSeenAt.map { iso.string(from: $0) } ?? "never")"
-                print("\(d.id)  \(d.name)  paired \(iso.string(from: d.pairedAt))  \(seen)")
+                print("\(printable(d.id))  \(printable(d.name))  paired \(iso.string(from: d.pairedAt))  \(seen)")
             }
         }
     case "prune":
@@ -230,7 +232,7 @@ case "phones":
             let iso = ISO8601DateFormatter()
             for d in old {
                 let seen = d.lastSeenAt.map { iso.string(from: $0) } ?? "never (paired \(iso.string(from: d.pairedAt)))"
-                print("\(dry ? "Would remove" : (removed.contains(d) ? "Removed" : "Could not remove")) \"\(d.name)\" (\(d.id)), last seen \(seen).")
+                print("\(dry ? "Would remove" : (removed.contains(d) ? "Removed" : "Could not remove")) \"\(printable(d.name))\" (\(printable(d.id))), last seen \(seen).")
             }
             for f in failed { print("  \(f)") }
         }
@@ -241,7 +243,7 @@ case "phones":
         if dry {
             let r = send(LinkCommand(cmd: "devices"))
             guard let d = r.devices?.first(where: { $0.id == id }) else { fail("No paired phone with id \(id).", code: 1) }
-            print("Would remove \"\(d.name)\" (\(d.id))."); exit(0)
+            print("Would remove \"\(printable(d.name))\" (\(printable(d.id)))."); exit(0)
         }
         let r = send(LinkCommand(cmd: "remove", id: id))
         guard r.ok else { fail(r.error ?? "Failed.", code: 1) }

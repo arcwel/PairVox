@@ -171,6 +171,24 @@ final class LinkTests: XCTestCase {
         XCTAssertEqual(refusal.refused, .versionMismatch)
     }
 
+    /// Review task 3.5: the session hello must carry a 16-byte nonce, as pairing already required. A wrong length
+    /// gets no challenge: the connection ends, as it would for a wrong key.
+    func testAHelloWithTheWrongNonceLengthGetsNoChallenge() async throws {
+        let (host, _, pairing, _) = await makeHost()
+        let (id, _) = try await pairPhone(host, pairing)
+        for nonce in [Data(), Handshake.randomBytes(15), Handshake.randomBytes(4096)] {
+            let (a, b) = MemoryTransport.pair()
+            Task { await host.serve(b) }
+            try await a.send(try JSONEncoder().encode(Opening.hello(version: Handshake.version, deviceID: id, clientNonce: nonce)))
+            do {
+                let reply = try await a.receive()
+                XCTAssertNil(try? JSONDecoder().decode(Challenge.self, from: reply), "no challenge for a \(nonce.count)-byte nonce")
+            } catch {
+                // Closed without a reply: the expected outcome.
+            }
+        }
+    }
+
     func testRevokedWhileConnectedIsCutOffAtTheNextMessage() async throws {
         let (host, engine, pairing, _) = await makeHost()
         let (id, psk) = try await pairPhone(host, pairing)
@@ -962,6 +980,24 @@ final class AuditRun4LinkTests: XCTestCase {
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(engine.calls, ["approve:R@A"])
     }
+
+    /// Review task 3.6: an approval for the request on the phone's main card goes to the project that card belonged
+    /// to, not to whichever project the Mac made active in the meantime.
+    func testAnApprovalForTheShownRequestGoesToTheShownProject() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var onScreen = h.snapshot(id: "R"); onScreen.request?.projectID = nil; onScreen.activeProjectID = "A"
+        await host.publish(onScreen)
+        _ = try await h.nextSnapshot(client)
+        try await client.send(.approve(requestID: "R", method: .tap, auth: .none, projectID: nil))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(engine.calls, ["approve:R@A"])
+        try await client.send(.deny(requestID: "R", projectID: nil))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(engine.calls.last, "deny:R@A")
+    }
 }
 
 final class AuditRun4MarkerTests: XCTestCase {
@@ -1064,8 +1100,19 @@ final class FileDeviceKeyStoreTests: XCTestCase {
         XCTAssertTrue(DeviceKeyStores.isDistributionCertificate("3rd Party Mac Developer Application: Anthony Guidry (JXNXBK2X9V)"))
         XCTAssertFalse(DeviceKeyStores.isDistributionCertificate("Apple Development: Anthony Guidry (MW9S7Y9BYY)"))
         XCTAssertFalse(DeviceKeyStores.isDistributionCertificate("DraftFi Local Signing"))
-        // The real check, on the test host (Apple's xctest runner or an unsigned build): never "distribution".
-        XCTAssertFalse(DeviceKeyStores.runningBuildIsDistributionSigned())
+        // The real check runs without trapping, whatever signed the test runner.
+        _ = DeviceKeyStores.runningBuildSigning()
+    }
+
+    /// Review task 3.4: only a build positively identified as local development keeps the key file. A signature
+    /// PairVox cannot place (an App Store or TestFlight re-signature, a self-signed identity, a failed Security call)
+    /// gets the Keychain, so a release cannot end up in the plain file by accident.
+    func testOnlyADevelopmentSignatureKeepsTheKeyFile() {
+        XCTAssertEqual(DeviceKeyStores.classify(certificate: "Apple Development: Anthony Guidry (MW9S7Y9BYY)"), .development)
+        XCTAssertEqual(DeviceKeyStores.classify(certificate: "Mac Developer: Anthony Guidry (MW9S7Y9BYY)"), .development)
+        XCTAssertEqual(DeviceKeyStores.classify(certificate: "Developer ID Application: Anthony Guidry (JXNXBK2X9V)"), .distribution)
+        XCTAssertEqual(DeviceKeyStores.classify(certificate: "Apple Mac OS Application Signing"), .unknown)
+        XCTAssertEqual(DeviceKeyStores.classify(certificate: "DraftFi Local Signing"), .unknown)
     }
 
     func testPairingWorksOnTheFileStoreAcrossARestart() async throws {

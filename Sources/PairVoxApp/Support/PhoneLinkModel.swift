@@ -70,7 +70,8 @@ final class PhoneLinkModel: ObservableObject {
 
     nonisolated init(storeURL: URL = PhoneLinkModel.defaultStoreURL()) {
         let chosen = DeviceKeyStores.automatic(directory: storeURL.deletingLastPathComponent())
-        DiagnosticLog.shared.log(.info, .app, "phoneLink.keyStore", ["store": .string(chosen.name)])
+        DiagnosticLog.shared.log(.info, .app, "phoneLink.keyStore",
+                                 ["store": .string(chosen.name), "signing": .string(DeviceKeyStores.runningBuildSigning().rawValue)])
         pairing = PairingManager(storeURL: storeURL, keys: chosen.store, deferKeys: true)
         Task { await refreshDevices() }
     }

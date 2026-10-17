@@ -276,10 +276,11 @@ public actor LinkHost {
                 // The phone is gone (it gave up waiting for the click) or never confirmed: a phone that did not
                 // receive its key must not stay on the list as paired.
                 for added in await pairing.pairedDevices() where !before.contains(added.id) { try? await pairing.revoke(added.id) }
-                log("pairing.undelivered \(request.name)")
+                log("pairing.undelivered \(sanitizedDeviceName(request.name))")
                 throw error
             }
-            log("pairing.granted \(request.name)")
+            // The cleaned name, as shown in the Pair dialog: the raw one can carry control and bidi characters.
+            log("pairing.granted \(sanitizedDeviceName(request.name))")
         } catch {
             try? await transport.send(try JSONEncoder().encode(PairReply.failed("Pairing was not accepted.")))
             log("pairing.refused \(error)")
@@ -288,6 +289,9 @@ public actor LinkHost {
 
     private func serveSession(_ version: Int, _ deviceID: String, _ cNonce: Data, on transport: LinkTransport,
                               authenticated: () -> Void) async throws {
+        // Same rule as pairing: a 16-byte nonce. An empty one leaves only the host's randomness in the key salt, and
+        // a huge one makes an unauthenticated peer cost an HMAC over it. Ends like a wrong key would.
+        guard cNonce.count == Handshake.nonceLength else { throw LinkError.authFailed }
         // A phone the Mac will not talk to is told why before the close, so it can stop retrying and say so.
         func refuse(_ reason: HandshakeRefusal.Reason) async throws -> Never {
             try? await transport.send(try JSONEncoder().encode(HandshakeRefusal(reason)))
@@ -349,7 +353,7 @@ public actor LinkHost {
             await engine.submit(text)
         case .deny(let requestID, let projectID):
             guard find(requestID, projectID) != nil else { return }
-            await engine.deny(requestID: requestID, projectID: projectID)
+            await engine.deny(requestID: requestID, projectID: projectID ?? latest?.activeProjectID)
         case .approve(let requestID, let method, let auth, let projectID):
             if let reason = approvalRefusal(requestID, projectID, method, auth, c) {
                 log("link.approvalRefused \(reason)")
@@ -358,7 +362,9 @@ public actor LinkHost {
                 return
             }
             log("link.approved \(requestID) via \(method.rawValue) \(auth.rawValue)\(projectID == nil ? "" : " (other project)")")
-            await engine.approve(requestID: requestID, projectID: projectID)
+            // To the project the phone was shown, not whichever is active by the time this arrives: a switch on the
+            // Mac between the last snapshot and this message would otherwise send it to the new project's engine.
+            await engine.approve(requestID: requestID, projectID: projectID ?? latest?.activeProjectID)
         }
     }
 

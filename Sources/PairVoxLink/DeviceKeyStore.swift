@@ -182,23 +182,46 @@ public enum DeviceKeyStores {
     /// Keychain, found no key for the paired phone and told it "revoked".
     static let distributionCertificatePrefixes = ["Developer ID Application:", "Apple Distribution:", "3rd Party Mac Developer Application:"]
 
-    /// True when the running app is signed for distribution (see `distributionCertificatePrefixes`) with a team.
-    public static func runningBuildIsDistributionSigned() -> Bool {
+    /// Certificate names of a local development identity: the only signed builds that keep the key file.
+    static let developmentCertificatePrefixes = ["Apple Development:", "Mac Developer:"]
+
+    /// How the running app is signed, as far as choosing a key store goes.
+    public enum Signing: String, Sendable { case adHoc, development, distribution, unknown }
+
+    /// The running app's signing. `.unknown` when the Security calls fail or the leaf certificate is neither a
+    /// development nor a known distribution identity (an App Store or TestFlight re-signature, for example).
+    public static func runningBuildSigning() -> Signing {
         var code: SecCode?
-        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return .unknown }
         var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return false }
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return .unknown }
         var info: CFDictionary?
         guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let dict = info as? [String: Any],
-              (dict[kSecCodeInfoTeamIdentifier as String] as? String)?.isEmpty == false,
-              let leaf = (dict[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first,
-              let name = SecCertificateCopySubjectSummary(leaf) as String? else { return false }
-        return isDistributionCertificate(name)
+              let dict = info as? [String: Any] else { return .unknown }
+        let team = dict[kSecCodeInfoTeamIdentifier as String] as? String
+        let leaf = (dict[kSecCodeInfoCertificates as String] as? [SecCertificate])?.first
+        // Ad-hoc and linker signatures (make app with SIGN_IDENTITY=-, swift run) carry no team and no certificate.
+        if (team ?? "").isEmpty, leaf == nil { return .adHoc }
+        guard let leaf, let name = SecCertificateCopySubjectSummary(leaf) as String? else { return .unknown }
+        return classify(certificate: name)
+    }
+
+    static func classify(certificate subjectSummary: String) -> Signing {
+        if developmentCertificatePrefixes.contains(where: { subjectSummary.hasPrefix($0) }) { return .development }
+        if distributionCertificatePrefixes.contains(where: { subjectSummary.hasPrefix($0) }) { return .distribution }
+        return .unknown
+    }
+
+    /// True unless the running app is positively a local development build (ad-hoc, or an Apple Development
+    /// certificate). A signature PairVox cannot place counts as distribution, so a release that reaches users through
+    /// an unexpected channel, or a failed Security call, keeps the Keychain rather than falling back to the key file.
+    public static func runningBuildIsDistributionSigned() -> Bool {
+        let signing = runningBuildSigning()
+        return signing != .adHoc && signing != .development
     }
 
     static func isDistributionCertificate(_ subjectSummary: String) -> Bool {
-        distributionCertificatePrefixes.contains { subjectSummary.hasPrefix($0) }
+        classify(certificate: subjectSummary) == .distribution
     }
 
     /// The Keychain for a distribution-signed build, a private file otherwise. `PAIRVOX_KEYSTORE=keychain` forces the

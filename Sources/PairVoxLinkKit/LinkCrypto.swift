@@ -67,6 +67,8 @@ public struct FrameCodec: Sendable {
 /// The three-message handshake that proves both sides hold the pairing key before any application data flows.
 public enum Handshake {
     public static let version = 1
+    /// Bytes in every handshake and pairing nonce, from either side.
+    public static let nonceLength = 16
 
     /// A proof that the sender holds the device key. It covers the protocol version and the device ID as well as
     /// both nonces, and uses a key derived only for proofs, separate from the session keys.
