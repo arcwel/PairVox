@@ -54,7 +54,9 @@ The repo has no single DoD. This one is assembled from `CLAUDE.md`, `docs/HANDOF
 
 ## 3. Task list, in order
 
-Status, 2026-10-16 evening: 0.1 committed (4e77fe3, 03cbeeb, not pushed). 1.1 to 1.5, 2.1 to 2.5, 2.8, 2.9, 4.1, 4.2 and 4.6 implemented in this worktree by three follow-up sessions, uncommitted; the combined tree passes 438 tests with 0 failures and the 5 usual skips. The `pairvox-cli --env-audit` command in section 5 came from the same work. Everything else below is open.
+Status, 2026-10-16 evening: 0.1 committed (4e77fe3, 03cbeeb, not pushed). 1.1 to 1.5, 2.1 to 2.5, 2.8, 2.9, 4.1, 4.2 and 4.6 implemented in this worktree by three follow-up sessions, uncommitted; the combined tree passes 438 tests with 0 failures and the 5 usual skips. The `pairvox-cli --env-audit` command in section 5 came from the same work.
+
+Status, 2026-10-17: 0.3 done ([arcwel/PairVox#1](https://github.com/arcwel/PairVox/pull/1)); getting its CI green surfaced four Swift 6.0 and Linux differences, fixed in d3260e3 to 334ce0c (CLI in Swift 5 mode, soak test memory on Linux, a captured var, the consent folder's macOS path protected on every platform). Also fixed: the protected-folder check no longer depends on the folder existing on disk (a real gap, found by CI), 5.1 to 5.4, 5.5 (not yet checked on screen), 5.6 in part (input level still shares the model), 3.4, 3.5, 3.6, 3.8 and 6.3. 447 tests pass locally. The newest real launch registered its shortcuts at 4.7 s against 0.9 s the day before; worth a look before the 5 s limit trips. Everything else below is open.
 
 Severity is the reviewers' rating confirmed at the cited line. "Scenario" is the input that produces the wrong result. Each task names its acceptance test.
 
