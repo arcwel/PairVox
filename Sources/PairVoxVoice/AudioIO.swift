@@ -118,6 +118,12 @@ public final class AudioIO: @unchecked Sendable {
     /// True while the engine is being stopped and started again on purpose (a device change, a setting, microphone
     /// permission arriving). Speech scheduled in that window waits instead of being dropped.
     private var restartInFlight = false
+    /// Configuration-change restarts scheduled and not yet finished, counted from the moment one is scheduled until
+    /// its worker is done. `restartInFlight` alone left a gap: the worker clears `restartPending` before it gets the
+    /// lifecycle lock, and a direct `restart()` holding that lock cleared `restartInFlight` when it finished, so for a
+    /// moment nothing said a restart was coming (speech in that window was dropped instead of held, and `restartBusy`
+    /// said idle just before the engine was stopped again). Guarded by `lock`.
+    private var configRestartsOutstanding = 0
     /// Buffers waiting for a restart to finish. Touched only on `playerQueue`.
     private var held: [(buffer: AVAudioPCMBuffer, completion: @Sendable () -> Void)] = []
 
@@ -602,6 +608,7 @@ public final class AudioIO: @unchecked Sendable {
         guard !restartPending else { lock.unlock(); return }
         restartPending = true
         restartInFlight = true
+        configRestartsOutstanding += 1
         let now = DispatchTime.now()
         restartTimes.append(now)
         let restarts = restartsInWindowLocked(now: now)
@@ -668,7 +675,9 @@ public final class AudioIO: @unchecked Sendable {
         noteConfigRestartDone()
     }
 
-    private func noteConfigRestartDone() { lock.lock(); completedConfigRestarts += 1; lock.unlock() }
+    private func noteConfigRestartDone() {
+        lock.lock(); completedConfigRestarts += 1; configRestartsOutstanding = max(0, configRestartsOutstanding - 1); lock.unlock()
+    }
 
     /// Speech held for a restart that is not going to happen: finish it quietly, without the "engine isn't
     /// running" message, because the app stopped audio itself.
@@ -748,7 +757,7 @@ public final class AudioIO: @unchecked Sendable {
             lock.lock()
             let running = isRunning
             lock.unlock()
-            lock.lock(); let restarting = restartInFlight; lock.unlock()
+            lock.lock(); let restarting = restartInFlight || configRestartsOutstanding > 0; lock.unlock()
             if restarting, !(running && engine.isRunning) {
                 held.append((buffer, completion))
                 log.log(.info, .audio, "playback.held", ["queued": .int(held.count)])
@@ -916,7 +925,10 @@ public final class AudioIO: @unchecked Sendable {
 
     // Internal views for tests.
     var engineIsRunning: Bool { lock.lock(); defer { lock.unlock() }; return engine.isRunning }
-    var restartBusy: Bool { lock.lock(); defer { lock.unlock() }; return restartPending || restartInFlight }
+    var restartBusy: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return restartPending || restartInFlight || configRestartsOutstanding > 0
+    }
     var droppedBufferCount: Int { statsLock.lock(); defer { statsLock.unlock() }; return droppedBuffers }
 
     /// Mutes the microphone at the voice-processing level (push-to-talk idle state).

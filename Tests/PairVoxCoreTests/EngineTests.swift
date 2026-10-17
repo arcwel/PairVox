@@ -304,6 +304,10 @@ final class ConversationEngineTests: XCTestCase {
         await waitForQueuedAcknowledgement()
         XCTAssertEqual(output.queue.first?.kind, .ack)
         output.playNext(finish: false)                      // it has started
+        // "Started" reaches the engine through an async stream; the answer must not overtake it, or the engine still
+        // sees the acknowledgement as only queued and rightly drops it (the race behind the CI failures).
+        let deadline = Date().addingTimeInterval(2)
+        while await !engine.snapshot.isSpeaking, Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
         backend.emit(.textDelta("The parser has three stages. "))
         await settle()
         XCTAssertEqual(output.queue.map(\.kind), [.ack, .prose], "what is already out loud is not cut off")
