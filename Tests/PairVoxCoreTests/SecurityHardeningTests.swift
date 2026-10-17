@@ -116,11 +116,14 @@ final class ClaudePathTrustTests: XCTestCase {
 
 final class ProjectPathResolutionTests: XCTestCase {
     func testAProjectUnderASymlinkedPathStillOwnsItsFiles() throws {
-        // /tmp is a link to /private/tmp on macOS, and Claude Code reports the resolved path.
-        let name = "pv-resolve-\(UUID().uuidString)"
-        let viaLink = "/tmp/\(name)", real = "/private/tmp/\(name)"
+        // The project is opened through a link (as /tmp is a link to /private/tmp on macOS), and Claude Code reports
+        // the resolved path. The link is made here so the test means the same on macOS and on Linux (CI).
+        let base = (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath
+        let id = UUID().uuidString
+        let real = base + "/pv-resolve-real-\(id)", viaLink = base + "/pv-resolve-link-\(id)"
         try FileManager.default.createDirectory(atPath: real + "/src", withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(atPath: real) }
+        try FileManager.default.createSymbolicLink(atPath: viaLink, withDestinationPath: real)
+        defer { try? FileManager.default.removeItem(atPath: viaLink); try? FileManager.default.removeItem(atPath: real) }
         let policy = PermissionPolicy(projectRoot: viaLink)
         var r = PermissionRequest(requestID: "r", toolName: "Write", input: ["file_path": .string(real + "/hello.txt")])
         var a = policy.assess(r)
@@ -129,7 +132,7 @@ final class ProjectPathResolutionTests: XCTestCase {
         r = PermissionRequest(requestID: "r", toolName: "Write", input: ["file_path": .string(viaLink + "/src/a.txt")])
         a = policy.assess(r)
         XCTAssertEqual(a.risk, .medium)
-        r = PermissionRequest(requestID: "r", toolName: "Write", input: ["file_path": "/private/tmp/somewhere-else/x"])
+        r = PermissionRequest(requestID: "r", toolName: "Write", input: ["file_path": .string(base + "/pv-somewhere-else-\(id)/x")])
         XCTAssertEqual(policy.assess(r).risk, .high)
     }
 }

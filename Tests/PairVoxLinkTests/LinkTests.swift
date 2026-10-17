@@ -841,6 +841,12 @@ final class CrossProjectPhoneTests: XCTestCase {
     }
 
     func settle() async { try? await Task.sleep(nanoseconds: 150_000_000) }
+    /// Waits until the engine has seen exactly these calls (or two seconds pass): a fixed 150 ms wait was too short
+    /// under a full test run and failed now and then. Absence checks keep `settle()`.
+    func settle(until expected: [String], _ engine: FakeEngine) async {
+        let deadline = Date().addingTimeInterval(2)
+        while engine.calls != expected, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+    }
 
     func testHighRiskByVoiceNeedsTheMacSwitchAndASecondConfirmationOnThePhone() async throws {
         let h = LinkTests()
@@ -850,14 +856,14 @@ final class CrossProjectPhoneTests: XCTestCase {
         try await client.send(.approve(requestID: "H", method: .voice, auth: .faceID))
         await settle(); XCTAssertTrue(engine.calls.isEmpty)
         try await client.send(.approve(requestID: "H", method: .tap, auth: .none))
-        await settle(); XCTAssertEqual(engine.calls, ["approve:H"])
+        await settle(until: ["approve:H"], engine); XCTAssertEqual(engine.calls, ["approve:H"])
         // Switch on: voice needs Face ID, Touch ID or the passcode as well.
         snap.voiceHighRisk = true
         (host, engine, client) = try await connected(h, snap)
         try await client.send(.approve(requestID: "H", method: .voice, auth: .none))
         await settle(); XCTAssertTrue(engine.calls.isEmpty, "the phrase alone is not enough on the phone")
         try await client.send(.approve(requestID: "H", method: .voice, auth: .touchID))
-        await settle(); XCTAssertEqual(engine.calls, ["approve:H"])
+        await settle(until: ["approve:H"], engine); XCTAssertEqual(engine.calls, ["approve:H"])
         _ = host
     }
 
@@ -870,7 +876,7 @@ final class CrossProjectPhoneTests: XCTestCase {
         snap.voiceNeedsScreen = true
         (_, engine, client) = try await connected(h, snap)
         try await client.send(.approve(requestID: "H", method: .voice, auth: .passcode))
-        await settle(); XCTAssertEqual(engine.calls, ["approve:H"])
+        await settle(until: ["approve:H"], engine); XCTAssertEqual(engine.calls, ["approve:H"])
     }
 
     func testARequestInAnotherProjectIsAnsweredInThatProjectUnderTheSameRules() async throws {
@@ -886,12 +892,12 @@ final class CrossProjectPhoneTests: XCTestCase {
         await settle(); XCTAssertTrue(engine.calls.isEmpty)
         // With the project: medium by voice works and goes to that project.
         try await client.send(.approve(requestID: "W1", method: .voice, auth: .none, projectID: "web"))
-        await settle(); XCTAssertEqual(engine.calls, ["approve:W1@web"])
+        await settle(until: ["approve:W1@web"], engine); XCTAssertEqual(engine.calls, ["approve:W1@web"])
         // A wrong project does not match.
         try await client.send(.approve(requestID: "W1", method: .tap, auth: .none, projectID: "api"))
         // High risk elsewhere obeys the same rule: voice without the switch is refused.
         try await client.send(.approve(requestID: "W2", method: .voice, auth: .faceID, projectID: "web"))
-        await settle(); XCTAssertEqual(engine.calls, ["approve:W1@web"])
+        await settle(until: ["approve:W1@web"], engine); XCTAssertEqual(engine.calls, ["approve:W1@web"])
         try await client.send(.deny(requestID: "W2", projectID: "web"))
         await settle(); XCTAssertEqual(engine.calls.last, "deny:W2@web")
     }

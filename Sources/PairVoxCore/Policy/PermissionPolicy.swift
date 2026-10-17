@@ -209,8 +209,12 @@ public struct PermissionPolicy: Sendable {
 
     /// PairVox's own settings (the consent store) and the Claude Code configuration folder.
     static var protectedFolders: [String] {
-        [SettingsStore.defaultURL().deletingLastPathComponent().path, NSHomeDirectory() + "/.claude"]
-            .map { FolderScope.resolved($0) }
+        // The macOS location is listed as well as wherever this platform keeps Application Support (Linux:
+        // ~/.local/share), so a command aimed at the Mac app's consent store rates the same on every platform.
+        let macOS = NSHomeDirectory() + "/Library/Application Support/PairVox"
+        let folders = [SettingsStore.defaultURL().deletingLastPathComponent().path, macOS, NSHomeDirectory() + "/.claude"]
+        var seen = Set<String>()
+        return folders.map { FolderScope.resolved($0) }.filter { seen.insert($0).inserted }
     }
 
     static func isSensitivePath(_ path: String) -> Bool {
