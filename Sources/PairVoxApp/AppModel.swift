@@ -780,6 +780,12 @@ final class AppModel: ObservableObject {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         hasAPIKey = KeychainStore.saveAPIKey(trimmed)
+        guard hasAPIKey else {
+            // Restarting now would only produce "no key is saved" for every project; say what actually failed.
+            log.log(.error, .app, "apiKey.saveFailed", [:])
+            errorMessage = "The API key could not be saved to the Keychain, so nothing changed. Try again, or check Keychain Access."
+            return
+        }
         if settings.authKind == .apiKey, !sessionOrder.isEmpty { restartAllSessions() }
     }
 
@@ -874,13 +880,12 @@ final class AppModel: ObservableObject {
         republishToPhone()
         if isActive {
             phone.engineBox.setActive(session.engine)
-            // Voice commands ("faster", "summary mode") change these inside the engine;
-            // mirror them into settings (but not the engine's initial per-project values).
-            if session.receivedFirstSnapshot {
+            // Voice commands ("faster", "summary mode") change these inside the engine; only such a change is copied
+            // into General, never a project's own starting values (see `SettingsMirror`).
+            if let mirrored = SettingsMirror.apply(previous: session.receivedFirstSnapshot ? previous : nil,
+                                                   current: snap, to: settings) {
                 syncingFromEngine = true
-                if abs(snap.speechRate - settings.speechRate) > 0.001 { settings.speechRate = snap.speechRate }
-                if snap.speechMode != settings.speechMode { settings.speechMode = snap.speechMode }
-                if snap.conversationMode != settings.conversationMode { settings.conversationMode = snap.conversationMode }
+                settings = mirrored
                 syncingFromEngine = false
             }
             session.receivedFirstSnapshot = true
@@ -916,7 +921,14 @@ final class AppModel: ObservableObject {
     }
 
     private func settingsChanged(from old: AppSettings) {
-        try? store.save(settings)
+        do {
+            try store.save(settings)
+        } catch {
+            // A revoked folder grant or a switched-off consent that is not on disk comes back at the next launch.
+            log.log(.error, .app, "settings.saveFailed", ["error": .string(error.localizedDescription)])
+            errorMessage = "Settings could not be saved (\(error.localizedDescription)). They apply until PairVox quits; "
+                + "a folder access you removed or a switch you turned off would come back at the next launch."
+        }
         logSettingChanges(from: old)
         if old.phoneLinkEnabled != settings.phoneLinkEnabled || old.phoneLinkPort != settings.phoneLinkPort {
             phone.apply(enabled: settings.phoneLinkEnabled, port: settings.phoneLinkPort)

@@ -407,8 +407,11 @@ private struct AccountSettings: View {
                     Text(model.setup.claudePath ?? "Not found").textSelection(.enabled).foregroundStyle(.secondary)
                 }
                 LabeledContent("Version") { Text(model.setup.cliVersion ?? "–").foregroundStyle(.secondary) }
-                TextField("Custom path (optional)", text: Binding(get: { model.settings.claudePathOverride ?? "" },
-                                                                  set: { model.settings.claudePathOverride = $0.isEmpty ? nil : $0 }))
+                // Committed on Return or when the field loses focus, so a half-typed path is never checked.
+                CommitTextField(title: "Custom path (optional)", value: model.settings.claudePathOverride ?? "") { text in
+                    let trimmed = text.trimmingCharacters(in: .whitespaces)
+                    model.settings.claudePathOverride = trimmed.isEmpty ? nil : trimmed
+                }
                 Button("Restart Session") { model.restartSession() }
             }
         }
@@ -507,12 +510,15 @@ private struct ProjectSettings: View {
                         Text("Brainstorm").tag(ConversationMode?.some(.brainstorm))
                         Text("Execute").tag(ConversationMode?.some(.execute))
                     }
-                    TextField("Model (blank = General)", text: Binding(get: { prefs(path).model ?? "" }, set: { v in
-                        update(path) { $0.model = v.trimmingCharacters(in: .whitespaces).isEmpty ? nil : v.trimmingCharacters(in: .whitespaces) }
-                    }))
-                    TextField("Words to listen for (comma separated)", text: Binding(get: { prefs(path).vocabulary.joined(separator: ", ") }, set: { v in
+                    CommitTextField(title: "Model (blank = General)", value: prefs(path).model ?? "") { v in
+                        let trimmed = v.trimmingCharacters(in: .whitespaces)
+                        update(path) { $0.model = trimmed.isEmpty ? nil : trimmed }
+                    }
+                    // A draft, parsed on commit: parsing per keystroke dropped the comma just typed.
+                    CommitTextField(title: "Words to listen for (comma separated)",
+                                    value: prefs(path).vocabulary.joined(separator: ", ")) { v in
                         update(path) { $0.vocabulary = v.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
-                    }))
+                    }
                     Toggle("Don't announce this project's requests aloud", isOn: Binding(get: { prefs(path).muteAnnouncements }, set: { v in update(path) { $0.muteAnnouncements = v } }))
                     Text("A muted project's requests still appear in the list and badges. Changes to the model and the mode apply to the next session in this project.").font(.caption).foregroundStyle(.secondary)
                 }

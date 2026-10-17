@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#if canImport(Darwin)
 import Darwin
+#endif
+import Foundation
 import XCTest
 @testable import PairVoxCore
 
@@ -9,13 +12,21 @@ import XCTest
 /// `PAIRVOX_SOAK_SECONDS` sets how long it runs (default 8; `scripts/soak.sh` runs it for minutes).
 final class EngineSoakTests: XCTestCase {
     /// Resident memory of this process in bytes.
+    /// On Linux (CI) it is read from /proc; 0 when unavailable, which the memory check treats as "not measured".
     static func residentBytes() -> UInt64 {
+        #if canImport(Darwin)
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count) }
         }
         return result == KERN_SUCCESS ? info.resident_size : 0
+        #else
+        // /proc/self/statm: size resident shared ... in pages.
+        guard let text = try? String(contentsOfFile: "/proc/self/statm", encoding: .utf8),
+              let pages = text.split(separator: " ").dropFirst().first.flatMap({ UInt64($0) }) else { return 0 }
+        return pages * 4096
+        #endif
     }
 
     struct Rng { var state: UInt64
