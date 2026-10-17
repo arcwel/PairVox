@@ -103,7 +103,11 @@ final class PhoneLinkModel: ObservableObject {
             await host.setConnectionObserver { [weak self] count in Task { @MainActor in self?.connectionsChanged(count) } }
         }
         do {
-            let l = try TCPListener(port: UInt16(wanted), allow: { TailnetAddress.isAllowedPeer($0) }) { transport in
+            // Bound to the Tailscale address (or loopback for a userspace forward), not every interface: the port is
+            // then closed on Wi-Fi, Ethernet and hotspots, and the address check below is a second gate, not the only one.
+            let bind = TailnetAddress.listenAddress()
+            log.log(.info, .app, "phoneLink.bind", ["address": .string(bind)])
+            let l = try TCPListener(port: UInt16(wanted), bindTo: bind, allow: { TailnetAddress.isAllowedPeer($0) }) { transport in
                 Task { await host.serve(transport) }
             }
             listener = l

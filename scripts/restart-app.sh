@@ -29,12 +29,17 @@ SRC=".build/xcode/Build/Products/Release/PairVox.app"
 BIN="$ROOT/dist/PairVox.app/Contents/MacOS/PairVox"
 # Only the copy in this checkout's dist/ counts: an anchored, literal match (pgrep -f is a regular expression).
 running() { pgrep -f "^$(printf '%s' "$BIN" | sed 's/[][\.*^$+?(){}|/]/\\&/g')\$" >/dev/null; }
+# Every running PairVox, from any checkout: the bundle path of each (one per line). Two instances trample each other's
+# sessions, and a copy from another checkout used to look "not running" here, so a second one was opened.
+running_bundles() { { ps -axo command= 2>/dev/null || true; } | sed -n 's#^\(/.*/PairVox\.app\)/Contents/MacOS/PairVox$#\1#p'; }
+other_running() { running_bundles | grep -vxF "$ROOT/dist/PairVox.app" | head -1 || true; }
 say() { [[ $JSON -eq 1 ]] || echo "$*"; }
 was_running=false swapped=false launched=false
 pruned=()
 
-# Every PairVox.app and PairVoxPhone.app under the repo except dist/ (the running app), the restart source and the
-# newest phone build: a stale copy is what `open` or a device install reaches for by mistake. Each is unregistered
+# Every PairVox.app and PairVoxPhone.app under the repo except: any checkout's dist/ app (this one's, and each
+# worktree's, which another session may be running), the restart source, the newest phone build, and anything
+# running right now. A stale copy is what `open` or a device install reaches for by mistake. Each is unregistered
 # from Launch Services before it goes.
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 prune() {
@@ -42,8 +47,11 @@ prune() {
   # Missing folders and an empty result are fine here; pipefail must not turn them into an exit.
   newest_phone=$({ find "$ROOT/.build" "$ROOT/.worktrees" -maxdepth 7 -type d -name PairVoxPhone.app -path "*iphoneos*" -print0 2>/dev/null || true; } \
     | { xargs -0 stat -f '%m %N' 2>/dev/null || true; } | sort -rn | head -1 | cut -d' ' -f2-)
+  local live; live=$(running_bundles)
   while IFS= read -r -d '' a; do
     [[ "$a" == "$keep_mac" || "$a" == "$keep_src" || "$a" == "$newest_phone" ]] && continue
+    [[ "$a" == */dist/PairVox.app ]] && continue                                  # another checkout's installed app
+    if [[ -n "$live" ]] && grep -qxF "$a" <<<"$live"; then say "Kept ${a#"$ROOT"/}: it is running."; continue; fi
     if [[ $DRY -eq 1 ]]; then say "Would remove ${a#"$ROOT"/}"; pruned+=("${a#"$ROOT"/}"); continue; fi
     "$LSREGISTER" -u "$a" >/dev/null 2>&1 || true
     find "$a" -delete 2>/dev/null || { finish false "could not remove $a" 1; }
@@ -86,6 +94,11 @@ fi
 [[ -d "$SRC" ]] || finish false "No build at $SRC. Run scripts/build-app.sh." 1
 # Check the new build before anything is quit or deleted.
 codesign --verify --deep --strict "$SRC" 2>/dev/null || finish false "The build at $SRC is incomplete or its signature is broken; nothing was changed." 1
+
+other=$(other_running)
+if [[ -n "$other" ]]; then
+  finish false "Another PairVox is running from $other. Quit it first: two instances would share and overwrite each other's sessions." 1
+fi
 
 if [[ $DRY -eq 1 ]]; then
   say "PairVox is $($was_running && echo running || echo not running). Would $($was_running && echo 'quit it, ')copy $SRC to dist/PairVox.app and open it."
