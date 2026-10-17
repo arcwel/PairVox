@@ -209,6 +209,11 @@ public actor LinkHost {
             do {
                 let frame = try c.codec.seal(try JSONEncoder().encode(item.message))
                 let transport = c.transport
+                // Marked before the send, not after it. The send is an await, and while this actor waits there the
+                // phone can already have the card and answer it; marking afterwards refused that answer as "not shown
+                // on this phone yet" (seen on CI with the in-memory transport). A send that fails closes the
+                // connection below, so nothing can be approved on the strength of a card that did not go out.
+                for k in item.presentedKeys { c.presented[k] = clock() }
                 try await Self.within(Self.sendTimeout, transport) { try await transport.send(frame) }
             } catch {
                 c.outbox.removeAll()
@@ -219,7 +224,6 @@ public actor LinkHost {
                 return
             }
             c.lastSent = clock()
-            for k in item.presentedKeys { c.presented[k] = clock() }
         }
         c.writing = false
     }

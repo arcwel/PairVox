@@ -840,6 +840,47 @@ final class ControlChannelTests: XCTestCase {
     }
 }
 
+/// A transport whose send has delivered the frame but takes a while to return, as a real write can. While the host
+/// waits there, the phone already has what was sent and can answer it.
+final class LateReturnTransport: LinkTransport, @unchecked Sendable {
+    private let inner: LinkTransport
+    private let lock = NSLock()
+    private var lateBy: TimeInterval = 0
+    init(_ inner: LinkTransport) { self.inner = inner }
+    var peer: String? { inner.peer }
+    func returnLate(by seconds: TimeInterval) { lock.lock(); lateBy = seconds; lock.unlock() }
+    func send(_ data: Data) async throws {
+        try await inner.send(data)
+        lock.lock(); let wait = lateBy; lock.unlock()
+        if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+    }
+    func receive() async throws -> Data { try await inner.receive() }
+    func close() async { await inner.close() }
+}
+
+final class ShownBeforeSentTests: XCTestCase {
+    /// The race behind the CI failures of the cross-project phone tests: the host marked a request as shown only
+    /// after its send returned, so a phone that answered while the host was still inside that send was refused
+    /// ("not shown on this phone yet"), permanently. The request now counts as shown before the send.
+    func testAnAnswerThatArrivesWhileTheSendIsStillReturningIsAccepted() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let (a, b) = MemoryTransport.pair()
+        let late = LateReturnTransport(b)
+        Task { await host.serve(late) }
+        let client = try await LinkClient.connect(over: a, deviceID: id, psk: psk)
+        late.returnLate(by: 1.0)
+        await host.publish(h.snapshot(id: "R"))
+        _ = try await h.nextSnapshot(client)
+        try await client.send(.approve(requestID: "R", method: .tap, auth: .none))
+        let deadline = Date().addingTimeInterval(0.8)   // well inside the host's one-second send
+        while engine.calls.isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(engine.calls, ["approve:R"])
+        withExtendedLifetime(host) {}
+    }
+}
+
 final class CrossProjectPhoneTests: XCTestCase {
     func high(id: String = "H", project: String? = nil, name: String? = nil, screen: Bool = false) -> LinkRequest {
         LinkRequest(requestID: id, summary: "Run: git push", spokenPrompt: "x", risk: "high", reasons: [], voiceApprovable: false,
