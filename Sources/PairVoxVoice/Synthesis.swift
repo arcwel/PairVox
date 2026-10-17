@@ -30,9 +30,14 @@ public enum SynthesisRecovery {
         guard chars.count >= 24 else { return nil }
         let mid = chars.count / 2
         let window = max(6, chars.count / 4)
+        // Plain loops: the lazy flatMap-then-first form made the CI compiler give up type-checking (2026-10-17).
         func nearest(_ matches: (Character) -> Bool) -> Int? {
-            (0...window).lazy.flatMap { [mid - $0, mid + $0] }
-                .first { $0 > 4 && $0 < chars.count - 4 && matches(chars[$0]) }
+            for distance in 0...window {
+                for i in [mid - distance, mid + distance] where i > 4 && i < chars.count - 4 && matches(chars[i]) {
+                    return i
+                }
+            }
+            return nil
         }
         guard let i = nearest({ ",;:".contains($0) }).map({ $0 + 1 }) ?? nearest({ $0 == " " }) else { return nil }
         let a = String(chars[..<i]).trimmingCharacters(in: .whitespaces)

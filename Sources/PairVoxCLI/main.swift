@@ -9,6 +9,13 @@
 
 import Foundation
 import PairVoxCore
+// `stdout` is a C global; Glibc's copy is not marked concurrency-safe, so Swift 6 refuses the reference below
+// unless the import is `@preconcurrency` (the Darwin SDK already annotates it).
+#if canImport(Glibc)
+@preconcurrency import Glibc
+#elseif canImport(Musl)
+@preconcurrency import Musl
+#endif
 
 // One line at a time even when output is piped or redirected, so scripts (and `tee`) see it as it happens.
 setvbuf(stdout, nil, _IOLBF, 0)
