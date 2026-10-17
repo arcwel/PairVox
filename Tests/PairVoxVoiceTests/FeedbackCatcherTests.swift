@@ -212,6 +212,27 @@ final class FeedbackCatcherTests: XCTestCase {
         XCTAssertTrue(left.contains("pairvox.log"), "only feedback recordings may be pruned")
     }
 
+    /// The output ring is ten seconds of samples (1.9 MB at 48 kHz). It used to be built on every tap callback,
+    /// about 44 MB/s while speaking; now once per playback rate.
+    func testOutputRingIsBuiltOncePerRateNotPerCallback() {
+        let catcher = FeedbackCatcher(directory: { nil }, runID: { "ring" })
+        func buffer(rate: Double) -> AVAudioPCMBuffer {
+            let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
+            let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2048)!
+            b.frameLength = 2048
+            return b
+        }
+        for _ in 0..<200 { catcher.noteOutput(buffer(rate: 48_000)) }
+        XCTAssertEqual(catcher.outputRingCount, 1, "200 callbacks at one rate build one ring")
+        for _ in 0..<50 { catcher.noteOutput(buffer(rate: 16_000)) }   // a call-mode headset arrived
+        XCTAssertEqual(catcher.outputRingCount, 2, "a new rate builds one new ring")
+        for _ in 0..<50 { catcher.noteOutput(buffer(rate: 16_000)) }
+        XCTAssertEqual(catcher.outputRingCount, 2)
+        catcher.setEnabled(false)
+        for _ in 0..<50 { catcher.noteOutput(buffer(rate: 16_000)) }
+        XCTAssertEqual(catcher.outputRingCount, 2, "nothing is built while the catcher is off")
+    }
+
     func testRingKeepsTheLatestSamplesAfterWrapping() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pairvox-feedback-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }

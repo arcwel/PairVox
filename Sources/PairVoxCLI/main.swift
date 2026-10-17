@@ -28,6 +28,8 @@ struct Options {
     var rawLog: String?
     var logDir: String?
     var logText = false
+    var envAudit = false
+    var json = false
 }
 
 func usage() -> Never {
@@ -50,6 +52,8 @@ func usage() -> Never {
       --raw-log FILE        Append raw stream-json lines to FILE
       --log [DIR]           Write structured diagnostics (JSON lines) to DIR (default ~/Library/Logs/PairVox)
       --log-text            With --log, also record conversation text (off by default)
+      --env-audit           Print which login-shell variables the child never gets (names only), then exit
+      --json                With --env-audit, print a JSON object instead of text
 
     Type a message and press Enter. Typing while it talks interrupts it (barge-in).
     Voice commands work as text: stop, repeat that, details, read the code, skip,
@@ -91,12 +95,37 @@ func parseOptions() -> Options {
             if let upcoming = args.first, !upcoming.hasPrefix("--") { o.logDir = (next(a) as NSString).expandingTildeInPath }
             else { o.logDir = ("~/Library/Logs/PairVox" as NSString).expandingTildeInPath }
         case "--log-text": o.logText = true
+        case "--env-audit": o.envAudit = true
+        case "--json": o.json = true
         default:
             FileHandle.standardError.write(Data("Unknown option \(a). Try --help.\n".utf8))
             exit(2)
         }
     }
+    if o.json && !o.envAudit {
+        FileHandle.standardError.write(Data("--json only applies to --env-audit.\n".utf8))
+        exit(2)
+    }
     return o
+}
+
+/// `--env-audit`: shows what `ChildEnvironment` drops from this Mac's login shell. Names only, never a value.
+/// Exit 0 with the report; exit 2 when the login shell could not be read (the report would describe the wrong
+/// environment).
+func runEnvironmentAudit(json: Bool) async -> Never {
+    let read = await ShellEnvironment.readLoginShell()
+    guard read.shellWasRead else {
+        FileHandle.standardError.write(Data("Could not read the login shell (\(read.shell)); no audit.\n".utf8))
+        exit(2)
+    }
+    let audit = EnvironmentAudit(environment: read.environment)
+    if json {
+        print(audit.jsonReport())
+    } else {
+        print("Child environment audit · login shell \(read.shell)")
+        print(audit.textReport())
+    }
+    exit(0)
 }
 
 /// Reads stdin lines on a background thread.
@@ -110,6 +139,7 @@ func stdinLines() -> AsyncStream<String> {
 }
 
 let opts = parseOptions()
+if opts.envAudit { await runEnvironmentAudit(json: opts.json) }
 if let dir = opts.logDir {
     DiagnosticLog.shared.configure(.init(directory: URL(fileURLWithPath: dir, isDirectory: true), minLevel: .debug,
                                          includeContent: opts.logText))
@@ -133,7 +163,7 @@ if let v = opts.apiKeyEnv {
     auth = .apiKey(key)
 }
 
-let version = await ClaudeLocator.version(of: claude, environment: env) ?? "unknown version"
+let version = await ClaudeLocator.version(of: claude, environment: ChildEnvironment.filter(env)) ?? "unknown version"
 Term.dim("PairVox CLI · \(claude.path) (\(version)) · \(auth.kind == .subscription ? "Claude subscription login" : "API key")")
 Term.dim("Project: \(opts.cwd) · speech: \(opts.speechMode.spokenName) · mode: \(opts.conversationMode.rawValue)")
 

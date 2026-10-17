@@ -175,14 +175,14 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
             if case .success(var buffer) = result {
                 var report = AudioIO.inspect(buffer)
                 if !report.isClean {
+                    // The sentence identifies the fault for `--tts-probe`, but it is reply text: with conversation-text
+                    // logging off only its length and a hash are written (docs/DEV_ENVIRONMENT.md says how to reproduce).
                     self.log.log(.error, .tts, "synth.corrupt",
                                  ["id": .int(next.id), "engine": .string(self.synthesizer.displayName), "attempt": 1,
                                   "peak": .double(Double(report.peak)), "nonFinite": .int(report.nonFinite),
                                   "overRange": .int(report.overRange), "noisyWindows": .int(report.noisyWindows),
-                                  "highBand": .double(Double(report.maxHighBandShare)), "frames": .int(report.frames),
-                                  // The sentence itself, whatever the conversation-text setting: a corrupt one is the
-                                  // only way to reproduce the fault headless (`--tts-probe`).
-                                  "text": .string(next.text)])
+                                  "highBand": .double(Double(report.maxHighBandShare)), "frames": .int(report.frames)]
+                                    .merging(self.log.contentFingerprint(next.text)) { $1 })
                     if let again = try? await self.synthesizeInPieces(next.text, rate: r) {
                         buffer = again
                         report = AudioIO.inspect(again)

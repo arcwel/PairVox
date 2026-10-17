@@ -124,11 +124,17 @@ public struct PendingPermission: Sendable, Equatable {
     public var explanation: Explanation = .none
     /// Questions the user asked about this request before deciding, and the answers.
     public var questions: [AdvisorTurn] = []
+    /// When the request arrived. A spoken yes stops counting after `Announcer.staleAfter`; a click still works.
+    public var receivedAt: Date
 
-    public init(request: PermissionRequest, assessment: PermissionAssessment) {
+    public init(request: PermissionRequest, assessment: PermissionAssessment, receivedAt: Date = Date()) {
         self.request = request
         self.assessment = assessment
+        self.receivedAt = receivedAt
     }
+
+    /// Older than the age limit every voice path shares (the announcer's and the phone link's).
+    public func isStale(now: Date) -> Bool { now.timeIntervalSince(receivedAt) > Announcer.staleAfter }
 }
 
 public struct UsageSnapshot: Sendable, Equatable {

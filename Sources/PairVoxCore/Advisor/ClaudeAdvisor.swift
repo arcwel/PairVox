@@ -3,7 +3,11 @@
 import Foundation
 
 /// Asks the user's own `claude` CLI, in a separate one-shot call, to explain a request. The call can only read
-/// files in the project (Read, Grep, Glob), loads no project settings or hooks, and cannot approve anything.
+/// files in the project: Read, Grep and Glob are the only tools offered (`--tools`) and every other built-in tool
+/// is denied by name as well (`--disallowedTools`); no MCP server loads (`--strict-mcp-config` with an empty
+/// `--mcp-config`); none of the repository's settings or hooks apply (`--setting-sources user`: the user's own
+/// `~/.claude/settings.json` still does); nothing is persisted; and it cannot approve anything, since it talks to
+/// no session. It runs with the same filtered environment as the session (`ChildEnvironment`).
 public struct ClaudeAdvisor: RequestAdvisor {
     public var executable: URL
     public var workingDirectory: URL
@@ -31,9 +35,27 @@ public struct ClaudeAdvisor: RequestAdvisor {
         try await run(AdvisorPrompt.question(question, request: request, assessment: assessment, project: project, earlier: earlier))
     }
 
+    /// The only tools the advisor may use.
+    static let allowedTools = ["Read", "Grep", "Glob"]
+
+    /// Built-in tools denied by name as well, so a future CLI default for `--tools` cannot widen the call: everything
+    /// that writes, runs code, reaches the network, starts another agent or changes the session.
+    static let disallowedTools = [
+        "Bash", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch", "Agent", "Task", "TodoWrite",
+        "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "Skill", "KillShell", "BashOutput", "EnterPlanMode",
+        "ExitPlanMode",
+    ]
+
+    /// Passed as the one `--mcp-config`, so `--strict-mcp-config` leaves the call with no MCP server at all.
+    static let emptyMCPConfig = #"{"mcpServers":{}}"#
+
     func arguments(prompt: String) -> [String] {
         ["-p", "--model", model, "--output-format", "text",
-         "--tools", "Read,Grep,Glob",
+         "--tools", Self.allowedTools.joined(separator: ","),
+         "--disallowedTools", Self.disallowedTools.joined(separator: ","),
+         // No MCP servers: the user's own servers could act (send, post, write) with no permission card reaching PairVox.
+         "--mcp-config", Self.emptyMCPConfig,
+         "--strict-mcp-config",
          // User-level settings only: a repository's own hooks and allow rules must not run for this call either.
          "--setting-sources", "user",
          "--no-session-persistence",
@@ -41,9 +63,14 @@ public struct ClaudeAdvisor: RequestAdvisor {
          "--", prompt]
     }
 
+    /// The same filtered environment the session gets (`ChildEnvironment`), with the chosen auth.
+    func environment() -> [String: String] {
+        LaunchConfiguration(executable: executable, workingDirectory: workingDirectory, auth: auth,
+                            baseEnvironment: baseEnvironment).environment()
+    }
+
     func run(_ prompt: String) async throws -> String {
-        let environment = LaunchConfiguration(executable: executable, workingDirectory: workingDirectory, auth: auth,
-                                              baseEnvironment: baseEnvironment).environment()
+        let environment = environment()
         let output: ProcessRunner.Output
         do {
             output = try await ProcessRunner.run(executable, arguments: arguments(prompt: prompt), environment: environment,

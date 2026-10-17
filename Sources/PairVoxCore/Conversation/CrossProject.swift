@@ -136,7 +136,10 @@ public struct Announcer: Sendable {
         while what.hasSuffix(".") { what.removeLast() }
         var body = "Quick one from \(who): \(what)."
         if waiting > 1 { body += " \(waiting - 1) more waiting." }
-        if item.voiceApprovable { return body + " Say approve, deny, tell me more, or switch." }
+        // An announcement is a small surface like the menu bar: it offers "approve" only for a request the one line
+        // fully describes. A long command was never read to this listener, so it is reviewed on its card.
+        if item.voiceApprovable && item.fitsCompactSurface { return body + " Say approve, deny, tell me more, or switch." }
+        if item.voiceApprovable { return body + " That one is too long to approve from here. Say tell me more, switch, or use the card." }
         let canByVoice = settings.voiceHighRisk && (!item.needsScreen || settings.voiceNeedsScreen)
         let name = settings.speakProjectNames ? " \(item.projectName)" : ""
         return body + (canByVoice ? " This needs care. Say tell me more, switch, or confirm high risk\(name)."
@@ -203,6 +206,8 @@ public enum AnnouncementRouter {
                 return .say(settings.voiceHighRisk ? "That one needs care. Say confirm high risk \(who), or use the card."
                                                    : "That one needs a click. Use the card, or say switch.")
             }
+            // The same gate the menu bar applies: nothing is approved from here that the one line did not fully describe.
+            if !item.fitsCompactSurface { return .say("That one is too long to approve from here. Use the card, or say switch.") }
             if stale { return .say("That request is old. Use the card, or say switch.") }
             return .approve(item, needsSecondConfirmation: false)
         case .confirmHighRisk(let project):

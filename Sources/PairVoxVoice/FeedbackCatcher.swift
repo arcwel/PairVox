@@ -193,6 +193,9 @@ final class FeedbackCatcher: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + Self.afterSeconds) { [self] in write(hit, speaking: speaking, index: index) }
     }
 
+    /// How many output rings have been built: one per playback rate, not one per tap callback. Guarded by `lock`.
+    private var outputRingsBuilt = 0
+
     /// What PairVox played (mono, any rate), from the mixer tap.
     func noteOutput(_ buffer: AVAudioPCMBuffer) {
         guard let data = buffer.floatChannelData, buffer.frameLength > 0 else { return }
@@ -200,14 +203,20 @@ final class FeedbackCatcher: @unchecked Sendable {
         var peak: Float = 0
         vDSP_maxmgv(data[0], 1, &peak, vDSP_Length(buffer.frameLength))
         let rate = buffer.format.sampleRate
-        let fresh = rate > 0 ? Ring(seconds: Self.ringSeconds, rate: rate) : nil
         lock.lock()
         defer { lock.unlock() }
-        guard enabled else { return }
-        if out == nil || out!.rate != rate { out = fresh }
+        guard enabled, rate > 0 else { return }
+        // The ring is ten seconds of samples (1.9 MB at 48 kHz); it is built once per rate, under the lock, and
+        // never on a callback that only appends.
+        if out == nil || out!.rate != rate {
+            out = Ring(seconds: Self.ringSeconds, rate: rate)
+            outputRingsBuilt += 1
+        }
         out?.append(samples)
         if peak > Self.audibleOutput { lastAudibleOutput = .now() }
     }
+
+    var outputRingCount: Int { lock.lock(); defer { lock.unlock() }; return outputRingsBuilt }
 
     private static let nextFile = NSLock()
     private static var fileCounter = 0

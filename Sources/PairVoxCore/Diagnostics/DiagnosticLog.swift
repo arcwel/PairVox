@@ -124,6 +124,14 @@ public final class DiagnosticLog: @unchecked Sendable {
         return .string("<\(text.count) chars>")
     }
 
+    /// Conversation text for a line that must identify one sentence without quoting it (`synth.corrupt`): the text
+    /// itself when content logging is on, otherwise its length (`chars`) and the first 16 hex characters of its
+    /// SHA-256 (`sha256`), enough to match the sentence when it is tried again with `--tts-probe`.
+    public func contentFingerprint(_ text: String) -> [String: LogValue] {
+        if includeContent { return ["text": content(text, limit: 2_000)] }
+        return ["chars": .int(text.count), "sha256": .string(String(TextDigest.sha256Hex(text).prefix(16)))]
+    }
+
     /// Blocks until queued lines are on disk (call before reading the files or exiting).
     public func flush() { queue.sync { try? handle?.synchronize() } }
 

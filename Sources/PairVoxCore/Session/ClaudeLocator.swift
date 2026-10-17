@@ -73,23 +73,38 @@ public enum ClaudeLocator {
 /// Reads the user's login-shell environment (PATH etc.), which GUI apps don't get.
 public enum ShellEnvironment {
     public static func loginShellEnvironment(timeout: TimeInterval = 5) async -> [String: String] {
+        await readLoginShell(timeout: timeout).environment
+    }
+
+    /// The login shell's environment plus whether the shell was actually read. When it was not (no executable
+    /// shell, a timeout, or output without the marker) `environment` is this process's own, PATH merged.
+    public struct LoginShellRead: Sendable {
+        public var environment: [String: String]
+        public var shell: String
+        public var shellWasRead: Bool
+    }
+
+    public static func readLoginShell(timeout: TimeInterval = 5) async -> LoginShellRead {
         var env = ProcessInfo.processInfo.environment
         let shell = env["SHELL"].flatMap { FileManager.default.isExecutableFile(atPath: $0) ? $0 : nil } ?? "/bin/zsh"
-        guard FileManager.default.isExecutableFile(atPath: shell) else { return env }
-        let marker = "__PAIRVOX_ENV__"
-        let script = "echo \(marker); env"
-        if let r = try? await ProcessRunner.run(URL(fileURLWithPath: shell), arguments: ["-l", "-i", "-c", script],
-                                                environment: env, timeout: timeout),
-           let range = r.stdout.range(of: marker + "\n") {
-            for line in r.stdout[range.upperBound...].split(separator: "\n") {
-                guard let eq = line.firstIndex(of: "=") else { continue }
-                let key = String(line[..<eq])
-                guard !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { continue }
-                env[key] = String(line[line.index(after: eq)...])
+        var wasRead = false
+        if FileManager.default.isExecutableFile(atPath: shell) {
+            let marker = "__PAIRVOX_ENV__"
+            let script = "echo \(marker); env"
+            if let r = try? await ProcessRunner.run(URL(fileURLWithPath: shell), arguments: ["-l", "-i", "-c", script],
+                                                    environment: env, timeout: timeout),
+               let range = r.stdout.range(of: marker + "\n") {
+                wasRead = true
+                for line in r.stdout[range.upperBound...].split(separator: "\n") {
+                    guard let eq = line.firstIndex(of: "=") else { continue }
+                    let key = String(line[..<eq])
+                    guard !key.isEmpty, key.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else { continue }
+                    env[key] = String(line[line.index(after: eq)...])
+                }
             }
         }
         env["PATH"] = mergedPath(env["PATH"], prepending: [])
-        return env
+        return LoginShellRead(environment: env, shell: shell, shellWasRead: wasRead)
     }
 
     /// Merges a PATH value with standard locations, removing duplicates.

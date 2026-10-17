@@ -142,6 +142,55 @@ final class CrossProjectTests: XCTestCase {
         guard case .approve = route(.confirmHighRisk(project: "website"), item: screen, settings: on) else { return XCTFail() }
     }
 
+    // MARK: Task 1.4: an announcement offers "approve" only for what its one line fully describes
+
+    func testALongCommandIsNotApprovableFromAnAnnouncement() throws {
+        let long = "cd /Users/dev/app && swift build --build-system native && swift test --filter LinkTests && git status --short && ls -la .build/arm64-apple-macosx/debug | head -40"
+        let req = PermissionRequest(requestID: "L", toolName: "Bash", input: ["command": .string(long)])
+        let item = PendingPermission(request: req, assessment: PermissionPolicy(projectRoot: "/Users/dev/app", voiceFromSummary: true).assess(req))
+        XCTAssertTrue(item.assessment.voiceApprovable, "in its own project, with the owner's setting, the summary line is enough")
+        XCTAssertFalse(item.assessment.fitsCompactSurface, "but the line does not describe the whole command")
+        let i = inbox([("web", "website", item)])
+        var a = Announcer()
+        let s = AnnouncementSettings()
+        let ann = try XCTUnwrap(a.next(inbox: i, activeProjectID: "api", activity: idle(t0 - 5), settings: s, now: t0))
+        XCTAssertFalse(ann.text.contains("Say approve"), ann.text)
+        XCTAssertTrue(ann.text.contains("too long"), ann.text)
+        guard case .say(let said) = AnnouncementRouter.resolve(.approve, announcement: ann, inbox: i, settings: s, now: t0 + 2) else {
+            return XCTFail("a long command was never read to this listener, so approve must not go through")
+        }
+        XCTAssertTrue(said.contains("card"), said)
+        // The other answers still work: the request can be refused, explained or switched to.
+        guard case .deny = AnnouncementRouter.resolve(.deny, announcement: ann, inbox: i, settings: s, now: t0 + 2) else { return XCTFail() }
+        guard case .switchTo = AnnouncementRouter.resolve(.switchHere, announcement: ann, inbox: i, settings: s, now: t0 + 2) else { return XCTFail() }
+        guard case .overview = AnnouncementRouter.resolve(.tellMore, announcement: ann, inbox: i, settings: s, now: t0 + 2) else { return XCTFail() }
+        // The high-risk phrase is not a way around it: the request is not high risk.
+        var on = AnnouncementSettings(); on.voiceHighRisk = true
+        guard case .say = AnnouncementRouter.resolve(.confirmHighRisk(project: "website"), announcement: ann, inbox: i, settings: on, now: t0 + 2) else { return XCTFail() }
+    }
+
+    func testTheEnvCopyFromAnotherProjectIsNeverApprovedByVoice() throws {
+        let req = PermissionRequest(requestID: "E", toolName: "Bash", input: ["command": .string("cp /Users/dev/app/.env /Users/dev/app/public/env.txt")])
+        let item = PendingPermission(request: req, assessment: PermissionPolicy(projectRoot: "/Users/dev/app", voiceFromSummary: true).assess(req))
+        let i = inbox([("web", "website", item)])
+        var a = Announcer()
+        let ann = try XCTUnwrap(a.next(inbox: i, activeProjectID: "api", activity: idle(t0 - 5), settings: AnnouncementSettings(), now: t0))
+        XCTAssertTrue(ann.text.hasPrefix("Quick one from website: Claude wants to run a command."), ann.text)
+        XCTAssertTrue(ann.text.contains("needs a click"), ann.text)
+        guard case .say = AnnouncementRouter.resolve(.approve, announcement: ann, inbox: i, settings: AnnouncementSettings(), now: t0 + 2) else { return XCTFail() }
+    }
+
+    func testAShortRequestIsStillApprovableFromAnAnnouncement() throws {
+        let req = PermissionRequest(requestID: "S", toolName: "Bash", input: ["command": .string("swift test")])
+        let item = PendingPermission(request: req, assessment: PermissionPolicy(projectRoot: "/Users/dev/app").assess(req))
+        XCTAssertTrue(item.assessment.fitsCompactSurface)
+        let i = inbox([("web", "website", item)])
+        var a = Announcer()
+        let ann = try XCTUnwrap(a.next(inbox: i, activeProjectID: "api", activity: idle(t0 - 5), settings: AnnouncementSettings(), now: t0))
+        XCTAssertTrue(ann.text.hasSuffix("Say approve, deny, tell me more, or switch."), ann.text)
+        guard case .approve = AnnouncementRouter.resolve(.approve, announcement: ann, inbox: i, settings: AnnouncementSettings(), now: t0 + 2) else { return XCTFail() }
+    }
+
     func testAnOldRequestCannotBeApprovedByVoice() {
         // The request has been waiting 310 s by the time the announcement is made and answered.
         guard case .say(let s) = route(.approve, item: pending("A"), at: 312, announcedFor: 310) else { return XCTFail("a stale request must not be approved by voice") }

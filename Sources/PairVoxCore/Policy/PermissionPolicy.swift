@@ -72,6 +72,7 @@ public struct PermissionPolicy: Sendable {
         var spoken: String
         var summary: String
         var screenOnly = false
+        var screenReason = "Check it on screen."
 
         switch r.toolName {
         case let t where PermissionPolicy.readOnlyTools.contains(t):
@@ -128,9 +129,21 @@ public struct PermissionPolicy: Sendable {
             let more = steps > 1 ? " and \(steps - 1) more \(steps == 2 ? "step" : "steps") shown on screen" : ""
             // With the summary setting off, the whole command is read, so that a yes covers only what was heard.
             spoken = voiceFromSummary ? "Claude wants to run \(firstStep)\(more). Allow?" : "Claude wants to run \(narration.text). Allow?"
-            // Without the summary setting, a spoken yes must cover exactly what was heard.
-            screenOnly = (narration.partial && !voiceFromSummary)
-                || bash.reasons.contains { BashRisk.networkReasons.contains($0) }
+            // The summary line stands for an ordinary multi-step command, never for one PairVox cannot describe:
+            // a step whose readout collapses to "a command", or a construct that hides what runs or where output
+            // goes (redirection, substitution, backticks, heredocs, process substitution). Those stay screen-only
+            // whatever the setting, as does anything that reaches the network.
+            let reachesNetwork = bash.reasons.contains { BashRisk.networkReasons.contains($0) }
+            let undescribable = narration.unspeakable || firstStep == "a command"
+            // Without the summary setting, a spoken yes must also cover exactly what was heard.
+            screenOnly = undescribable || reachesNetwork || (narration.partial && !voiceFromSummary)
+            if reachesNetwork {
+                screenReason = "The command reaches the network. Check it on screen."
+            } else if undescribable {
+                screenReason = "The command has a part that cannot be read out (redirection, substitution, a heredoc, or a step with no short name). Check it on screen."
+            } else if screenOnly {
+                screenReason = "The command is too long or complex to read out. Check it on screen."
+            }
 
         default:
             risk = .medium
@@ -146,15 +159,15 @@ public struct PermissionPolicy: Sendable {
         }
         var voiceOK = risk < .high && !screenOnly
         if screenOnly, risk < .high {
-            reasons.append(voiceFromSummary ? "The command reaches the network. Check it on screen."
-                                            : "The command is too long or complex to read out, or reaches the network. Check it on screen.")
+            reasons.append(screenReason)
         }
         if r.requiresUserInteraction {
             voiceOK = false
             reasons.append("This request needs you at the screen.")
         }
         if !voiceOK {
-            spoken = spoken.replacingOccurrences(of: " Allow?", with: ". Please confirm on screen.")
+            // Every prompt ends ". Allow?", so the sentence before it keeps its own full stop.
+            spoken = spoken.replacingOccurrences(of: " Allow?", with: " Please confirm on screen.")
         }
         let auto = risk == .low && voiceOK && !r.requiresUserInteraction
             && PermissionPolicy.readOnlyTools.contains(r.toolName) && !PermissionPolicy.neverAutoApprove.contains(r.toolName)
@@ -254,7 +267,10 @@ public enum BashRisk {
         Rule(pattern: #"\bgit\s+(fetch|pull|clone|remote|ls-remote|submodule)\b"#, level: .medium, reason: "Accesses the network."),
         Rule(pattern: #"\b(gh|docker|podman|kubectl|aws|gcloud|az|terraform|heroku|vercel|fly|flyctl)\s"#, level: .medium, reason: "Uses a tool that acts on outside services."),
         Rule(pattern: #"\b(curl|wget)\s"#, level: .medium, reason: "Accesses the network."),
-        Rule(pattern: #"\b(npm|yarn|pnpm)\s+(i|install|add)\b|\bpip3?\s+install\b|\bbrew\s+(install|upgrade|uninstall)\b|\bcargo\s+install\b"#, level: .medium, reason: "Installs packages."),
+        Rule(pattern: #"\b(npm|yarn|pnpm)\s+(i|install|add)\b|\bpip3?\s+install\b|\bbrew\s+(install|upgrade|uninstall)\b|\bcargo\s+(install|add)\b"#, level: .medium, reason: "Installs packages."),
+        Rule(pattern: #"\bgo\s+(get|install)\b|\bgem\s+install\b|\bpipx\s+install\b|\bcomposer\s+(install|require|update)\b"#, level: .medium, reason: "Installs packages."),
+        Rule(pattern: #"\b(npx|bunx|uvx)\s|\b(yarn|pnpm)\s+dlx\b|\bnpm\s+(exec|x)\b|\bpipx\s+run\b"#, level: .medium, reason: "Downloads and runs a package."),
+        Rule(pattern: #"\b(open|xdg-open)\s[^|;&]*\b[a-z][a-z0-9+.-]*://"#, level: .medium, reason: "Opens a URL in another app."),
         Rule(pattern: #"\bmv\s"#, level: .medium, reason: "Moves or renames files."),
         Rule(pattern: #"\bgit\s+(commit|merge|rebase|checkout|switch|stash|tag)\b"#, level: .medium, reason: "Changes git state."),
         Rule(pattern: #"(^|[^>])>\s*[^\s&]"#, level: .medium, reason: "Writes a file via redirection."),
@@ -264,9 +280,20 @@ public enum BashRisk {
     ]
 
 
-    /// Reasons that mean the command reaches another machine or service.
-    static let networkReasons: Set<String> = ["Connects to another machine.", "Accesses the network.",
-                                              "Uses a tool that acts on outside services.", "Pipes a download into a shell."]
+    /// Reasons that mean the command reaches another machine or service, including fetching code to install or run.
+    /// A request with any of these is never approved from a spoken summary, and `FolderScope.shellDisqualifiers`
+    /// is built on this set so a folder shell grant refuses the same commands.
+    public static let networkReasons: Set<String> = ["Connects to another machine.", "Accesses the network.",
+                                                     "Uses a tool that acts on outside services.", "Pipes a download into a shell.",
+                                                     "Installs packages.", "Downloads and runs a package.",
+                                                     "Opens a URL in another app."]
+
+    static let downloaderNames: Set<String> = ["curl", "wget", "fetch"]
+    static let remoteShellNames: Set<String> = ["ssh", "scp", "rsync", "nc", "ncat", "netcat", "telnet", "ftp", "sftp", "tftp", "socat"]
+    static let outsideServiceTools: Set<String> = ["gh", "docker", "podman", "kubectl", "aws", "gcloud", "az", "terraform",
+                                                   "heroku", "vercel", "fly", "flyctl"]
+    static let networkGitSubcommands: Set<String> = ["fetch", "pull", "clone", "remote", "ls-remote", "submodule"]
+    static let packageRunners: Set<String> = ["npx", "bunx", "uvx"]
 
     static let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "python", "python3",
                                           "node", "deno", "bun", "ruby", "perl", "php", "lua"]
@@ -278,6 +305,11 @@ public enum BashRisk {
         /// Program name without its directory, with leading `VAR=value` words and wrappers like `env` skipped.
         var program: String
         var args: [String]
+    }
+
+    /// The word as the shell sees it after quote removal: `cu''rl` → `curl`, `"cu"rl` → `curl`, `cu\rl` → `curl`.
+    static func unquoted(_ word: String) -> String {
+        word.filter { $0 != "'" && $0 != "\"" && $0 != "\\" }
     }
 
     /// Splits a command at `&&`, `||`, `;`, `|`, `&` and newlines (quotes are not honored, which only errs toward more segments).
@@ -299,7 +331,9 @@ public enum BashRisk {
                 while let w = rest.first, (w.contains("=") && !w.hasPrefix("-") && !w.contains("/") ) || wrapperNames.contains((w as NSString).lastPathComponent) {
                     rest = rest.dropFirst()
                 }
-                let program = rest.first.map { ($0 as NSString).lastPathComponent } ?? ""
+                // Quotes and backslashes inside a word are removed by the shell before it looks the program up, so
+                // `cu''rl`, `"cu"rl` and `cu\rl` all run curl and are matched as curl.
+                let program = rest.first.map { (unquoted($0) as NSString).lastPathComponent } ?? ""
                 out.append(Segment(separator: separator, words: words, program: program, args: Array(rest.dropFirst())))
             }
             current = ""
@@ -349,6 +383,7 @@ public enum BashRisk {
                 if a.contains("-c") || sub == "config" || sub == "alias" {
                     found.append((.medium, "Runs a nested shell or evaluates text as code."))
                 }
+                if networkGitSubcommands.contains(sub) { found.append((.medium, "Accesses the network.")) }
                 let subArgs = Array(rest.dropFirst())
                 let subFlags = subArgs.filter { $0.hasPrefix("-") }
                 switch sub {
@@ -384,7 +419,18 @@ public enum BashRisk {
             if ["npm", "yarn", "pnpm", "cargo", "gem", "twine"].contains(p), a.contains("publish") {
                 found.append((.high, "Publishes a package."))
             }
-            if ["curl", "wget", "fetch"].contains(p) { sawDownloader = true }
+            // Network reach by program name, so a quoted or escaped spelling rates like the plain one.
+            if downloaderNames.contains(p) { sawDownloader = true; found.append((.medium, "Accesses the network.")) }
+            if remoteShellNames.contains(p) { found.append((.medium, "Connects to another machine.")) }
+            if outsideServiceTools.contains(p) { found.append((.medium, "Uses a tool that acts on outside services.")) }
+            if packageRunners.contains(p) || (["yarn", "pnpm"].contains(p) && a.first == "dlx")
+                || (p == "npm" && ["exec", "x"].contains(a.first ?? "")) || (p == "pipx" && a.first == "run") {
+                found.append((.medium, "Downloads and runs a package."))
+            }
+            if installsPackages(program: p, args: a) { found.append((.medium, "Installs packages.")) }
+            if ["open", "xdg-open"].contains(p), a.contains(where: { $0.range(of: #"^[a-z][a-z0-9+.-]*://"#, options: .regularExpression) != nil || $0.hasPrefix("www.") }) {
+                found.append((.medium, "Opens a URL in another app."))
+            }
             if shellNames.contains(p), seg.separator == "|", sawDownloader {
                 found.append((.high, "Pipes a download into a shell."))
             }
@@ -395,17 +441,43 @@ public enum BashRisk {
         return found
     }
 
+    /// Package managers fetching code: `npm install x`, `pip install x`, `go get x`, `brew install x`, and the rest.
+    static func installsPackages(program p: String, args a: [String]) -> Bool {
+        let sub = a.first(where: { !$0.hasPrefix("-") }) ?? ""
+        switch p {
+        case "npm", "yarn", "pnpm": return ["i", "install", "add"].contains(sub)
+        case "pip", "pip3", "pipx", "gem", "cargo": return ["install", "add"].contains(sub)
+        case "brew": return ["install", "upgrade", "uninstall", "reinstall"].contains(sub)
+        case "go": return ["get", "install"].contains(sub)
+        case "composer": return ["install", "require", "update"].contains(sub)
+        default: return false
+        }
+    }
+
     /// What is said aloud for a Bash request. `partial` is true when the readout cannot stand for the whole command,
-    /// so a spoken yes would approve something the person did not hear.
-    static func narration(_ command: String, pronunciation: Pronunciation) -> (text: String, partial: Bool) {
+    /// so a spoken yes would approve something the person did not hear. `unspeakable` is the stricter subset that no
+    /// summary line can stand for either: a construct that hides what runs or where output goes, or a step the
+    /// narrator can only call "a command".
+    static func narration(_ command: String, pronunciation: Pronunciation) -> (text: String, partial: Bool, unspeakable: Bool) {
         let segs = segments(command)
-        let hidden = command.contains("$(") || command.contains("`") || command.contains("<<") || command.contains(">")
-            || command.contains("<(")
+        let hidden = hidesWhatRuns(command)
         let parts = segs.map { ToolNarrator.commandSummary(([$0.program] + $0.args).joined(separator: " "), pronunciation: pronunciation) }
         let text = parts.count <= 1 ? (parts.first ?? "a command")
             : "a command with \(parts.count) steps: " + parts.joined(separator: ", then ")
-        let partial = segs.count > 3 || hidden || text.count > 160 || parts.contains("a command")
-        return (text, partial)
+        let unspeakable = hidden || parts.isEmpty || parts.contains("a command")
+        let partial = segs.count > 3 || text.count > 160 || unspeakable
+        return (text, partial, unspeakable)
+    }
+
+    /// Constructs a one-line readout cannot convey: command substitution (`$(`, backticks), heredocs and here-strings
+    /// (`<<`), process substitution (`<(`, `>(`) and redirection into a file (`>`). Joining stderr to stdout (`2>&1`,
+    /// `>&2`) writes nothing, so it does not count.
+    static func hidesWhatRuns(_ command: String) -> Bool {
+        if command.contains("$(") || command.contains("`") || command.contains("<<") || command.contains("<(") || command.contains(">(") {
+            return true
+        }
+        let withoutFdJoins = command.replacingOccurrences(of: #"[0-9]*>&[0-9]+"#, with: "", options: .regularExpression)
+        return withoutFdJoins.contains(">")
     }
 
     /// Commands that only read and print, when they stand alone (no chaining, redirection or substitution).

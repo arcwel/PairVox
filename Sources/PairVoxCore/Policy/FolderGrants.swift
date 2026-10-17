@@ -56,13 +56,15 @@ public enum FolderScope {
     }
 
     /// Reasons (from `BashRisk`) that mean a command reaches beyond its own folder or runs code PairVox cannot read.
-    static let shellDisqualifiers: Set<String> = [
-        "Connects to another machine.", "Accesses the network.", "Installs packages.", "Touches your home folder.",
+    /// Everything `BashRisk.networkReasons` holds (one list, so the two cannot drift apart), plus the reasons that
+    /// keep a command out of a folder grant without reaching the network.
+    static let shellDisqualifiers: Set<String> = BashRisk.networkReasons.union([
+        "Touches your home folder.",
         "Mentions a file that looks sensitive (credentials, keys, shell or git config).",
         "Runs a nested shell or evaluates text as code.", "Opens a file or URL with another app.",
-        "Pushes to a remote.", "Force-pushes to a remote.", "Uses a tool that acts on outside services.",
-        "Deletes files recursively or forcefully.", "Pipes a download into a shell.",
-    ]
+        "Pushes to a remote.", "Force-pushes to a remote.",
+        "Deletes files recursively or forcefully.",
+    ])
 
     /// The grant that covers a shell command, if any. Heuristic and deliberately narrow: anything it cannot
     /// confidently place inside the folder still asks.

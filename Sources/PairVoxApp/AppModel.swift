@@ -164,7 +164,7 @@ final class AppModel: ObservableObject {
             errorMessage = "The Claude path set in Settings was not used. \(why)"
         }
         setup.cliVersion = nil
-        if let exe { setup.cliVersion = await ClaudeLocator.version(of: exe, environment: loginEnvironment) }
+        if let exe { setup.cliVersion = await ClaudeLocator.version(of: exe, environment: ChildEnvironment.filter(loginEnvironment)) }
         setup.microphone = VoicePermissions.microphone
         setup.speechRecognition = VoicePermissions.speechRecognition
         setup.checking = false
@@ -313,6 +313,9 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self?.errorMessage = "This audio device kept restarting, so PairVox turned echo cancellation off for this session. Use headphones, or push to talk."
             }
+        }
+        voice.audio.onRestartLoop = { [weak self] message in
+            Task { @MainActor in self?.errorMessage = message }
         }
         voice.audio.onPlaybackDropped = { [weak self] in
             Task { @MainActor in
@@ -969,6 +972,10 @@ final class AppModel: ObservableObject {
         if old.voiceApprovesNeedsScreen != settings.voiceApprovesNeedsScreen {
             let on = settings.voiceApprovesNeedsScreen
             broadcast { await $0.setVoiceApprovesNeedsScreen(on) }
+        }
+        if old.approveByVoiceFromSummary != settings.approveByVoiceFromSummary {
+            let on = settings.approveByVoiceFromSummary
+            broadcast { await $0.setApproveByVoiceFromSummary(on) }
         }
         if old.macSecondConfirmation != settings.macSecondConfirmation {
             let on = settings.macSecondConfirmation

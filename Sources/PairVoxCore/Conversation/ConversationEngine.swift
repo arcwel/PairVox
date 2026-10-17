@@ -75,6 +75,9 @@ public actor ConversationEngine {
     private var pauseWatchdogSeconds: Double = 12
     func setPauseWatchdog(seconds: Double) { pauseWatchdogSeconds = seconds }
     private var nextEntryID = 1
+    /// The clock the age limit on spoken approvals reads; tests replace it.
+    private var now: @Sendable () -> Date = { Date() }
+    func setClock(_ clock: @escaping @Sendable () -> Date) { now = clock }
     private var spokenAuthProblem = false
     private var userIsSpeaking = false
     private var transcribing = false
@@ -345,6 +348,27 @@ public actor ConversationEngine {
 
     public func setVoiceApprovesNeedsScreen(_ on: Bool) { config.voiceApprovesNeedsScreen = on }
 
+    /// Turns "approve by voice from the summary" on or off for the running session. The request on screen and the
+    /// ones waiting behind it are rated again, so a yes spoken after the change follows the new rule; what was
+    /// already said is not repeated.
+    public func setApproveByVoiceFromSummary(_ on: Bool) {
+        guard config.approveByVoiceFromSummary != on else { return }
+        config.approveByVoiceFromSummary = on
+        rebuildPolicy()
+        if var pending = snapshot.pendingPermission {
+            pending.assessment = policy.assess(pending.request)
+            snapshot.pendingPermission = pending
+        }
+        permissionQueue = permissionQueue.map { var p = $0; p.assessment = policy.assess(p.request); return p }
+        snapshot.queuedPermissions = permissionQueue
+        publish()
+    }
+
+    private func rebuildPolicy() {
+        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants,
+                                  voiceFromSummary: config.approveByVoiceFromSummary)
+    }
+
     /// Set while the owner wants Touch ID or a password after a spoken high-risk approval; nil turns it off.
     public func setSecondConfirmation(_ confirm: (@Sendable () async -> Bool)?) { secondConfirmation = confirm }
 
@@ -453,7 +477,7 @@ public actor ConversationEngine {
     /// Replaces the folder grants in force, for example after the user removed one in Settings.
     public func setFolderGrants(_ grants: [FolderGrant]) {
         config.folderGrants = grants
-        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: grants, voiceFromSummary: config.approveByVoiceFromSummary)
+        rebuildPolicy()
     }
 
     /// Asks whether Claude may work in the project folder without asking each time. Edits and shell commands are
@@ -494,7 +518,7 @@ public actor ConversationEngine {
             } else {
                 config.folderGrants.append(FolderGrant(path: offer.folder, allowShell: false))
             }
-            policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants, voiceFromSummary: config.approveByVoiceFromSummary)
+            rebuildPolicy()
             grantHandler?(.granted(path: offer.folder, shell: shell))
             log.log(.info, .policy, "folderGrant.granted", ["kind": "\(offer.kind)"])
             appendEntry(.system, shell ? "Shell commands in \(offer.folder) are now allowed without asking."
@@ -710,7 +734,7 @@ public actor ConversationEngine {
     public func setPronunciation(_ dictionary: [String: String]) {
         config.pronunciation = dictionary
         pronunciation = Pronunciation(dictionary: dictionary)
-        policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants, voiceFromSummary: config.approveByVoiceFromSummary)
+        rebuildPolicy()
         planner.pronunciation = pronunciation
     }
 
@@ -830,9 +854,13 @@ public actor ConversationEngine {
                 }
                 break
             }
-            // Spoken approvals only count for requests the policy rates as voice-approvable.
+            // Spoken approvals only count for requests the policy rates as voice-approvable, and only while the
+            // request is fresh: one left waiting takes no stray yes from the room.
             guard let pending = snapshot.pendingPermission else { break }
-            if pending.assessment.voiceApprovable {
+            if pending.isStale(now: now()) {
+                log.log(.info, .policy, "permission.staleVoiceApproval", ["tool": .string(pending.request.toolName)])
+                speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
+            } else if pending.assessment.voiceApprovable {
                 approvePending(always: command == .approveAlways)
             } else if canConfirmHighRiskByVoice(pending) {
                 speak([make("That one is high risk. Say confirm high risk to allow it, or use the button.", .notice)],
@@ -847,7 +875,8 @@ public actor ConversationEngine {
         case .approveAllWaiting:
             guard let head = snapshot.pendingPermission else { break }
             let waiting = [head] + permissionQueue
-            let eligible = waiting.filter { $0.assessment.voiceApprovable }
+            let clock = now()
+            let eligible = waiting.filter { $0.assessment.voiceApprovable && !$0.isStale(now: clock) }
             guard !eligible.isEmpty else {
                 speak([make("None of these can be allowed by voice. Please use the buttons.", .notice)], record: false, force: true)
                 break
@@ -874,6 +903,11 @@ public actor ConversationEngine {
             }
         case .confirmHighRisk:
             guard !catchUpOpen, let pending = snapshot.pendingPermission, canConfirmHighRiskByVoice(pending) else { break }
+            if pending.isStale(now: now()) {
+                log.log(.info, .policy, "permission.staleVoiceApproval", ["tool": .string(pending.request.toolName)])
+                speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
+                break
+            }
             log.log(.info, .policy, "permission.spokenHighRisk", ["tool": .string(pending.request.toolName)])
             if let confirm = secondConfirmation {
                 // Touch ID or the login password, asked after the spoken phrase.
@@ -961,7 +995,7 @@ public actor ConversationEngine {
                 try? backend?.respond(to: request, decision: .allow)
                 break
             }
-            let pending = PendingPermission(request: request, assessment: assessment)
+            let pending = PendingPermission(request: request, assessment: assessment, receivedAt: now())
             if snapshot.pendingPermission != nil {
                 // Never replace the request the user is looking at or has just heard.
                 permissionQueue.append(pending)

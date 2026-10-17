@@ -82,25 +82,21 @@ public struct LaunchConfiguration: Sendable, Equatable {
         return args
     }
 
-    /// Environment for the child process.
+    /// Environment for the child process: the login shell's variables minus everything that could redirect,
+    /// replace or expose credentials (`ChildEnvironment`), then the auth the user chose.
     public func environment() -> [String: String] {
-        var env = baseEnvironment
-        // Never inherit nested-session markers from a parent Claude Code process.
-        for key in env.keys where key == "CLAUDECODE" || key.hasPrefix("CLAUDE_CODE_SESSION") {
-            env.removeValue(forKey: key)
-        }
+        var env = ChildEnvironment.filter(baseEnvironment)
         // Make sure the CLI (often a Node script) can find node and friends.
         let cliDir = executable.deletingLastPathComponent().path
         env["PATH"] = ShellEnvironment.mergedPath(env["PATH"], prepending: [cliDir])
 
         switch auth {
         case .subscription:
-            // An exported key would silently override the subscription login.
-            env.removeValue(forKey: "ANTHROPIC_API_KEY")
-            env.removeValue(forKey: "ANTHROPIC_AUTH_TOKEN")
+            // Nothing is set: the child uses its own login. The filter has already removed any exported key or
+            // token that would silently override it.
+            break
         case .apiKey(let key):
             env["ANTHROPIC_API_KEY"] = key
-            env.removeValue(forKey: "ANTHROPIC_AUTH_TOKEN")
         }
         return env
     }

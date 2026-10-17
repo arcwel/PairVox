@@ -34,11 +34,47 @@ public final class AudioIO: @unchecked Sendable {
     }
     private var _onFrame: (([Float]) -> Void)?
     private let frameLock = NSLock()
+    /// A configuration-change restart is waiting for the route to settle. Guarded by `lock`.
     private var restartPending = false
     /// Called when the audio route changed and capture restarted.
     public var onRestart: (() -> Void)?
     /// Called when speech was dropped because the audio engine wasn't running.
     public var onPlaybackDropped: (() -> Void)?
+    /// Called once per restart storm (see `restartLoopLimit`) with a sentence for the user: the engine keeps
+    /// restarting, so interrupted sentences are no longer replayed until the device settles.
+    public var onRestartLoop: ((String) -> Void)?
+
+    /// Serializes `start()`, `stop()`, `restart()` and the configuration-change restart. They come from the
+    /// settings path (a detached task), the device-change listener (main) and the restart worker; without one
+    /// lock a second start rebuilt the engine the first had just started, leaving `isRunning` true on an
+    /// engine that never ran. Recursive so a callback that calls back in from the same thread cannot deadlock.
+    private let lifecycle = NSRecursiveLock()
+    /// True from a `start()` until the app calls `stop()`. A restart that failed leaves it true, so the next
+    /// device change tries again instead of leaving PairVox silent and deaf. Guarded by `lock`.
+    private var desiredRunning = false
+
+    // Knobs for tests. Internal, so the test target can shorten waits and inject failures.
+    /// Returns an error to make the next start fail (the flaky first `engine.start()`, without a flaky device).
+    var startFailureInjector: (@Sendable () -> Error?)?
+    /// How long the route must stay quiet before a configuration-change restart, and the longest wait.
+    var settleQuiet: TimeInterval = 1.0
+    var settleMaxWait: TimeInterval = 6.0
+    /// A failed configuration-change restart is tried again this many times, this far apart.
+    var restartRetries = 2
+    var restartRetryDelay: TimeInterval = 0.5
+    /// Stands in for `convert(_:to:)` when set (a converter that fails, in tests).
+    var playbackConverterOverride: (@Sendable (AVAudioPCMBuffer, AVAudioFormat) -> AVAudioPCMBuffer?)?
+    /// Configuration-change restarts that ran to an outcome (success or final failure). Guarded by `lock`.
+    private(set) var completedConfigRestarts = 0
+
+    /// Restarts are counted over this window to recognise a device that keeps reconfiguring.
+    static let restartLoopWindow: TimeInterval = 20
+    /// With echo cancellation on, this many restarts in the window turn it off (voice processing makes
+    /// some devices renegotiate without end).
+    static let voiceProcessingRestartLimit = 3
+    /// On any route (Bluetooth has no echo cancellation to turn off), this many restarts in the window stop
+    /// the replay of interrupted sentences, so the same sentence does not start over and over, and tell the user.
+    static let restartLoopLimit = 4
 
     public var voiceProcessingEnabled = true
     public private(set) var isRunning = false
@@ -75,7 +111,10 @@ public final class AudioIO: @unchecked Sendable {
     public private(set) var voiceProcessingSkipReason: String?
     /// Called when repeated restarts made PairVox turn echo cancellation off for this session.
     public var onVoiceProcessingAutoDisabled: (() -> Void)?
+    /// When the recent restarts happened. Guarded by `lock`.
     private var restartTimes: [DispatchTime] = []
+    /// The restart-loop message has been surfaced for the current storm. Guarded by `lock`.
+    private var restartLoopAnnounced = false
     /// True while the engine is being stopped and started again on purpose (a device change, a setting, microphone
     /// permission arriving). Speech scheduled in that window waits instead of being dropped.
     private var restartInFlight = false
@@ -113,7 +152,12 @@ public final class AudioIO: @unchecked Sendable {
     private var droppedBuffers = 0
     private var playbackEstimateEnd: DispatchTime?
     /// Opt-in: record exactly what PairVox plays into the log folder (see `PlaybackRecorder`).
-    public var recordPlayback = false
+    public var recordPlayback = false { didSet { if recordPlayback { refreshLogDirectory() } } }
+    /// The log folder, cached for the output tap. The tap must not ask `DiagnosticLog` (a `queue.sync` hop):
+    /// a log rotation would stall the tap, and `stop()` waits for the tap to return.
+    private let logDirectory = OSAllocatedUnfairLock<URL?>(initialState: nil)
+    private func refreshLogDirectory() { let dir = log.directory; logDirectory.withLock { $0 = dir } }
+    var cachedLogDirectory: URL? { logDirectory.withLock { $0 } }
     /// Saves the last seconds of microphone and playback audio when the microphone hears a loud single-tone
     /// howl (acoustic feedback), so it can be listened to afterwards. On by default; nothing is written
     /// unless a howl is detected (see `FeedbackCatcher`).
@@ -136,30 +180,35 @@ public final class AudioIO: @unchecked Sendable {
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
     }
 
-    /// A fresh engine and player, and a configuration-change observer bound to the new engine.
+    /// A fresh engine and player, and a configuration-change observer bound to the new engine. Call holding
+    /// `lifecycle`; the swap itself happens under `lock` so readers on other threads see one engine or the other.
     private func rebuildEngine() {
         playerQueue.sync {
             engineGeneration += 1
             player.stop()
             notePlayer(playing: false)
             if engine.isRunning { engine.stop() }
-            engine = AVAudioEngine()
-            player = AVAudioPlayerNode()
-            engine.attach(player)
+            let fresh = AVAudioEngine(), freshPlayer = AVAudioPlayerNode()
+            fresh.attach(freshPlayer)
+            lock.lock()
+            engine = fresh
+            player = freshPlayer
+            lock.unlock()
             playbackEstimateEnd = nil
         }
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
-            self?.restartAfterConfigurationChange()
+            self?.handleConfigurationChange()
         }
     }
 
-    /// A headset or microphone appeared or went away. Restart only when that changes whether we can capture.
-    private func defaultInputChanged() {
+    /// A headset or microphone appeared or went away. Restart only when that changes whether we can capture,
+    /// or when the engine should be running and is not (an earlier restart failed on a half-switched device).
+    func defaultInputChanged() {
         lock.lock()
-        let running = isRunning
+        let running = isRunning, wanted = desiredRunning
         lock.unlock()
         if separateActive {
             let inputChanged = AudioRoute.inputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID) != captureInputSignature
@@ -167,16 +216,19 @@ public final class AudioIO: @unchecked Sendable {
             var fields = AudioRoute.fields()
             fields["inputChanged"] = .bool(inputChanged)
             fields["outputChanged"] = .bool(outputChanged)
+            fields["ioRunning"] = .bool(running)
             log.log(.info, .audio, "input.defaultChanged", fields)
-            if running, outputChanged { restartAfterConfigurationChange() }
+            if running, outputChanged { handleConfigurationChange() }
             else if running, inputChanged { restartCapture() }
+            else if !running, wanted { handleConfigurationChange() }
             return
         }
         let now = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
         var fields = AudioRoute.fields()
         fields["signatureChanged"] = .bool(now != startSignature)
+        fields["ioRunning"] = .bool(running)
         log.log(.info, .audio, "input.defaultChanged", fields)
-        if running, now != startSignature { restartAfterConfigurationChange() }
+        if (running && now != startSignature) || (!running && wanted) { handleConfigurationChange() }
     }
 
     // MARK: Lifecycle
@@ -184,11 +236,20 @@ public final class AudioIO: @unchecked Sendable {
     /// Starts playback, and capture too when `captureWanted` and a microphone exists. With no microphone
     /// (or no permission yet) it runs output-only so replies are still spoken.
     public func start(captureWanted: Bool = true) throws {
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
+        try startHoldingLifecycle(captureWanted: captureWanted)
+    }
+
+    private func startHoldingLifecycle(captureWanted: Bool) throws {
         lock.lock()
         let already = isRunning
+        desiredRunning = true
         lock.unlock()
         if already { return }
         captureWantedLast = captureWanted
+        if let injected = startFailureInjector?() { throw injected }
+        refreshLogDirectory()
         rebuildEngine()
 
         lock.lock()
@@ -263,6 +324,7 @@ public final class AudioIO: @unchecked Sendable {
         guard announce else { return }
         var fields: [String: LogValue] = ["captureAvailable": false, "reason": .string(reason),
                                           "pinnedOut": .string(route.output?.name ?? "-"),
+                                          "outRate": .int(Int(outputFormat.sampleRate)),
                                           "playerRate": .int(Int(playerFormat.sampleRate))]
         fields.merge(AudioRoute.fields()) { a, _ in a }
         log.log(.warning, .audio, "engine.started.outputOnly", fields)
@@ -437,6 +499,8 @@ public final class AudioIO: @unchecked Sendable {
         startSignature = AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
         var fields: [String: LogValue] = ["voiceProcessing": .bool(vpApplied), "inRate": .int(Int(format.sampleRate)),
                                           "inChannels": .int(Int(format.channelCount)), "captureAvailable": true,
+                                          "outRate": .int(Int(outputFormat.sampleRate)),
+                                          "playerRate": .int(Int(playerFormat.sampleRate)),
                                           "pinnedIn": "system default",
                                           "pinnedOut": .string(vpApplied ? "system default" : (route.output?.name ?? "-"))]
         fields.merge(AudioRoute.fields()) { a, _ in a }
@@ -444,7 +508,19 @@ public final class AudioIO: @unchecked Sendable {
         onCaptureAvailabilityChange?(true)
     }
 
+    /// Stops the engine until the next `start()`. A device change no longer restarts it.
     public func stop() {
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
+        lock.lock()
+        desiredRunning = false
+        restartTimes.removeAll()
+        restartLoopAnnounced = false
+        lock.unlock()
+        stopHoldingLifecycle()
+    }
+
+    private func stopHoldingLifecycle() {
         // Only the flag is guarded: player.stop() fires buffer completions that may
         // call back into schedule(), which takes the same lock.
         lock.lock()
@@ -468,58 +544,143 @@ public final class AudioIO: @unchecked Sendable {
         log.log(.info, .audio, "engine.stopped")
     }
 
-    private func restartAfterConfigurationChange() {
+    /// What the restart counter asks for. Pure, so the decision can be tested on a Bluetooth-shaped route
+    /// (echo cancellation off) without a headset.
+    enum RestartLoopAction: Equatable { case none, disableVoiceProcessing, suppressReplay }
+
+    static func restartLoopAction(restartsInWindow: Int, voiceProcessingEnabled: Bool, echoCancellationActive: Bool) -> RestartLoopAction {
+        // A device that keeps reconfiguring under voice processing (seen with Bluetooth headsets) would restart
+        // forever, cutting every sentence. Give up on voice processing first.
+        if restartsInWindow >= voiceProcessingRestartLimit, voiceProcessingEnabled, echoCancellationActive { return .disableVoiceProcessing }
+        // Past that, or on a route that never had it (Bluetooth, output-only), stop replaying what each restart
+        // interrupts: A2DP and HFP flipping otherwise restart the same sentence over and over.
+        if restartsInWindow >= restartLoopLimit { return .suppressReplay }
+        return .none
+    }
+
+    /// Call holding `lock`. Drops restarts older than the window.
+    private func restartsInWindowLocked(now: DispatchTime = .now()) -> Int {
+        let window = UInt64(Self.restartLoopWindow * 1_000_000_000)
+        restartTimes.removeAll { now.uptimeNanoseconds - $0.uptimeNanoseconds >= window }
+        return restartTimes.count
+    }
+
+    /// True while the restart storm lasts: interrupted sentences are dropped instead of replayed.
+    var replaySuppressed: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return restartsInWindowLocked() >= Self.restartLoopLimit
+    }
+
+    /// The engine posted a configuration change (a device appeared, left or renegotiated; macOS also posts it
+    /// when it only moves its default device). `force` makes a test take the restart path on a quiet route.
+    func handleConfigurationChange(force: Bool = false) {
+        lock.lock()
         let outputOnlyView = separateActive
+        let engineUp = engine.isRunning
+        let running = isRunning, wanted = desiredRunning
+        let reference = outputOnlyView ? startOutputSignature : startSignature
+        lock.unlock()
         let signature = outputOnlyView ? AudioRoute.outputSignature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
                                        : AudioRoute.signature(inputUID: inputDeviceUID, outputUID: outputDeviceUID)
-        let reference = outputOnlyView ? startOutputSignature : startSignature
         var fields = AudioRoute.fields()
         fields["signatureChanged"] = .bool(signature != reference)
-        fields["engineRunning"] = .bool(engine.isRunning)
+        fields["engineRunning"] = .bool(engineUp)
+        fields["ioRunning"] = .bool(running)
         fields["separate"] = .bool(outputOnlyView)
-        // The engine only needs rebuilding when it stopped or the devices it uses changed. macOS also posts
-        // this notification when it just moves its default device elsewhere.
-        if engine.isRunning, signature == reference {
+        // The engine only needs rebuilding when it stopped or the devices it uses changed.
+        if !force, engineUp, running, signature == reference {
             log.log(.info, .audio, "engine.configChange.ignored", fields)
             return
         }
+        guard wanted else {
+            log.log(.info, .audio, "engine.configChange.stopped", fields)   // the app stopped audio on purpose
+            return
+        }
         log.log(.info, .audio, "engine.configChange", fields)
-        guard !restartPending else { return }
-        // Safety valve: a device that keeps reconfiguring under voice processing (seen with Bluetooth
-        // headsets) would restart forever, cutting every sentence. Give up on voice processing instead.
+
+        lock.lock()
+        guard !restartPending else { lock.unlock(); return }
+        restartPending = true
+        restartInFlight = true
         let now = DispatchTime.now()
-        restartTimes = restartTimes.filter { now.uptimeNanoseconds - $0.uptimeNanoseconds < 20_000_000_000 } + [now]
-        if restartTimes.count >= 3, voiceProcessingEnabled, echoCancellationActive {
+        restartTimes.append(now)
+        let restarts = restartsInWindowLocked(now: now)
+        let action = Self.restartLoopAction(restartsInWindow: restarts, voiceProcessingEnabled: voiceProcessingEnabled,
+                                            echoCancellationActive: echoCancellationActive)
+        var announce = false
+        if action == .suppressReplay, !restartLoopAnnounced { restartLoopAnnounced = true; announce = true }
+        if restarts < Self.restartLoopLimit { restartLoopAnnounced = false }
+        lock.unlock()
+
+        switch action {
+        case .none:
+            break
+        case .disableVoiceProcessing:
             voiceProcessingEnabled = false
             voiceProcessingSkipReason = "restart loop"
-            log.log(.warning, .audio, "engine.restartLoop", ["restartsIn20s": .int(restartTimes.count)])
+            log.log(.warning, .audio, "engine.restartLoop", ["restartsIn20s": .int(restarts), "action": "voiceProcessingOff"])
             onVoiceProcessingAutoDisabled?()
+        case .suppressReplay:
+            log.log(.warning, .audio, "engine.restartLoop", ["restartsIn20s": .int(restarts), "action": "replayOff",
+                                                             "announced": .bool(announce)])
+            if announce {
+                onRestartLoop?("The audio device keeps reconnecting (\(restarts) restarts in \(Int(Self.restartLoopWindow)) seconds). "
+                               + "PairVox will not replay interrupted sentences until it settles; check the headset's connection.")
+            }
         }
-        restartPending = true
-        lock.lock(); restartInFlight = true; lock.unlock()
         // A Bluetooth headset takes a second or two to finish switching profiles after its microphone
         // opens or closes. Restarting in the middle of that makes the next start see a half-switched
         // format and fail again, so wait until the route has been quiet for a while.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            let waited = self.waitForRouteToSettle(quiet: 1.0, maxWait: 6.0)
-            DispatchQueue.main.async {
-                self.restartPending = false
-                let began = DispatchTime.now()
-                self.stop()
-                do {
-                    try self.start(captureWanted: self.captureWantedLast)
-                    self.onRestart?()
-                    self.finishRestart(succeeded: true)
-                    self.log.log(.info, .audio, "engine.restarted",
-                                 ["tookMs": .int(Int((DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000)),
-                                  "settleMs": .int(Int(waited * 1000))])
-                } catch {
-                    self.finishRestart(succeeded: false)
-                    NSLog("PairVox: could not restart audio after a device change: \(error)")
-                    self.log.log(.error, .audio, "engine.restart.failed", ["error": .string(error.localizedDescription)])
-                }
-            }
+            self?.runConfigurationChangeRestart()
+        }
+    }
+
+    /// The worker half of `handleConfigurationChange`: settle, then restart under the lifecycle lock, trying
+    /// again after a short wait when the first start fails (the known flaky first `engine.start()`).
+    private func runConfigurationChangeRestart() {
+        let waited = waitForRouteToSettle(quiet: settleQuiet, maxWait: settleMaxWait)
+        lock.lock(); restartPending = false; lock.unlock()
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
+        lock.lock()
+        let stillWanted = desiredRunning
+        lock.unlock()
+        guard stillWanted else {
+            log.log(.info, .audio, "engine.restart.skipped", ["reason": "stopped"])
+            discardHeld(reason: "stopped")
+            noteConfigRestartDone()
+            return
+        }
+        let began = DispatchTime.now()
+        do {
+            let attempts = try restartHoldingLifecycle(captureWanted: captureWantedLast, attempts: 1 + max(0, restartRetries),
+                                                       delay: restartRetryDelay)
+            onRestart?()
+            log.log(.info, .audio, "engine.restarted",
+                    ["tookMs": .int(Int((DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000)),
+                     "settleMs": .int(Int(waited * 1000)), "attempts": .int(attempts)])
+        } catch {
+            NSLog("PairVox: could not restart audio after a device change: \(error)")
+            log.log(.error, .audio, "engine.restart.failed",
+                    ["error": .string(error.localizedDescription), "attempts": .int(1 + max(0, restartRetries))])
+        }
+        noteConfigRestartDone()
+    }
+
+    private func noteConfigRestartDone() { lock.lock(); completedConfigRestarts += 1; lock.unlock() }
+
+    /// Speech held for a restart that is not going to happen: finish it quietly, without the "engine isn't
+    /// running" message, because the app stopped audio itself.
+    private func discardHeld(reason: String) {
+        lock.lock(); restartInFlight = false; lock.unlock()
+        playerQueue.async { [self] in
+            let waiting = inFlight.map(\.completion) + held.map(\.completion)
+            inFlight.removeAll()
+            held.removeAll()
+            guard !waiting.isEmpty else { return }
+            log.log(.info, .audio, "playback.dropped", ["reason": .string(reason), "buffers": .int(waiting.count)])
+            for completion in waiting { completion() }
         }
     }
 
@@ -601,12 +762,26 @@ public final class AudioIO: @unchecked Sendable {
                 completion()
                 return
             }
+            // The player node raises on a format it was not connected with, so a buffer the converter could not
+            // bring to the player's rate is dropped and logged rather than scheduled as it is.
+            let toPlay: AVAudioPCMBuffer
+            if buffer.format.sampleRate == playerFormat.sampleRate {
+                toPlay = buffer
+            } else if let converted = (playbackConverterOverride.map { $0(buffer, playerFormat) } ?? Self.convert(buffer, to: playerFormat)) {
+                toPlay = converted
+            } else {
+                statsLock.lock(); droppedBuffers += 1; statsLock.unlock()
+                log.log(.error, .audio, "playback.dropped",
+                        ["reason": "conversionFailed", "fromRate": .int(Int(buffer.format.sampleRate)),
+                         "toRate": .int(Int(playerFormat.sampleRate)), "frames": .int(Int(buffer.frameLength))])
+                completion()
+                return
+            }
             noteScheduled(seconds: Double(buffer.frameLength) / buffer.format.sampleRate)
             nextToken += 1
             let token = nextToken, generation = engineGeneration
             // The original is kept: a restart on another device replays it, converted for that device's rate.
             inFlight.append(InFlight(id: token, buffer: buffer, completion: completion))
-            let toPlay = buffer.format.sampleRate == playerFormat.sampleRate ? buffer : (Self.convert(buffer, to: playerFormat) ?? buffer)
             player.scheduleBuffer(toPlay, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
                 self?.playerQueue.async { self?.bufferFinished(token: token, generation: generation) }
             }
@@ -672,20 +847,52 @@ public final class AudioIO: @unchecked Sendable {
     /// Stops and starts the engine again (a setting changed, or microphone permission arrived). Speech
     /// scheduled meanwhile is kept and plays once the engine is back.
     public func restart(captureWanted: Bool? = nil) throws {
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
+        _ = try restartHoldingLifecycle(captureWanted: captureWanted, attempts: 1, delay: 0)
+    }
+
+    /// Stop and start again, up to `attempts` times. Held speech stays held across the retries and is only
+    /// dropped when the last one fails. The lifecycle lock is released while waiting between attempts, so a
+    /// `stop()` from the app is not kept waiting; it is honoured before the next attempt. Returns the attempts used.
+    @discardableResult
+    private func restartHoldingLifecycle(captureWanted: Bool?, attempts: Int, delay: TimeInterval) throws -> Int {
         let wanted = captureWanted ?? captureWantedLast
         lock.lock(); restartInFlight = true; lock.unlock()
-        stop()
-        do {
-            try start(captureWanted: wanted)
-            finishRestart(succeeded: true)
-        } catch {
-            finishRestart(succeeded: false)
-            throw error
+        var attempt = 0
+        while true {
+            attempt += 1
+            stopHoldingLifecycle()
+            do {
+                try startHoldingLifecycle(captureWanted: wanted)
+                finishRestart(succeeded: true)
+                return attempt
+            } catch {
+                guard attempt < attempts else {
+                    finishRestart(succeeded: false)
+                    throw error
+                }
+                log.log(.warning, .audio, "engine.restart.retry",
+                        ["attempt": .int(attempt), "of": .int(attempts), "error": .string(error.localizedDescription)])
+                lifecycle.unlock()
+                Thread.sleep(forTimeInterval: delay)
+                lifecycle.lock()
+                lock.lock()
+                let stillWanted = desiredRunning
+                lock.unlock()
+                guard stillWanted else {
+                    discardHeld(reason: "stopped")
+                    throw error
+                }
+            }
         }
     }
 
     private func finishRestart(succeeded: Bool) {
-        lock.lock(); restartInFlight = false; lock.unlock()
+        lock.lock()
+        restartInFlight = false
+        let storm = restartsInWindowLocked() >= Self.restartLoopLimit
+        lock.unlock()
         playerQueue.async { [self] in
             playbackPaused = false   // a restart replays everything from the start; a stale pause must not hold it
             // Interrupted buffers go first (they were queued before anything held), each replayed from its start.
@@ -693,14 +900,24 @@ public final class AudioIO: @unchecked Sendable {
             inFlight.removeAll()
             held.removeAll()
             guard !waiting.isEmpty else { return }
-            if succeeded {
+            if succeeded, !storm {
                 log.log(.info, .audio, "playback.resumed", ["buffers": .int(waiting.count)])
                 for item in waiting { schedule(item.buffer, completion: item.completion) }
+            } else if succeeded {
+                // The device is restarting faster than a sentence plays: replaying would start it over again.
+                statsLock.lock(); droppedBuffers += waiting.count; statsLock.unlock()
+                log.log(.warning, .audio, "playback.dropped", ["reason": "restartLoop", "buffers": .int(waiting.count)])
+                for item in waiting { item.completion() }
             } else {
                 for item in waiting { onPlaybackDropped?(); item.completion() }
             }
         }
     }
+
+    // Internal views for tests.
+    var engineIsRunning: Bool { lock.lock(); defer { lock.unlock() }; return engine.isRunning }
+    var restartBusy: Bool { lock.lock(); defer { lock.unlock() }; return restartPending || restartInFlight }
+    var droppedBufferCount: Int { statsLock.lock(); defer { statsLock.unlock() }; return droppedBuffers }
 
     /// Mutes the microphone at the voice-processing level (push-to-talk idle state).
     public func setInputMuted(_ muted: Bool) {
@@ -751,7 +968,8 @@ public final class AudioIO: @unchecked Sendable {
             let playing = self.playerPlaying.withLock { $0 }
             self.meter.process(buffer, playing: playing)
             self.feedback.noteOutput(buffer)
-            if playing, self.recordPlayback, let dir = self.log.directory {
+            // Only the cached folder here: `log.directory` would hop to the diagnostics queue from the tap thread.
+            if playing, self.recordPlayback, let dir = self.logDirectory.withLock({ $0 }) {
                 self.recorder.write(buffer, directory: dir, runID: self.log.runID)
             }
         }

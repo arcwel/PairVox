@@ -60,6 +60,45 @@ final class DiagnosticLogTests: XCTestCase {
         XCTAssertEqual(f?["text"] as? String, "hello there")
     }
 
+    /// Task 4.6: a corrupt sentence is identified in the log without quoting reply text, unless the user opted in.
+    func testCorruptSentenceIsOnlyALengthAndAHashByDefault() {
+        let log = DiagnosticLog()
+        log.configure(.init(directory: tempDir()))
+        let sentence = "The reconnect loop no longer loses a nudge that arrives while an attempt is in flight."
+        log.log(.error, .tts, "synth.corrupt", ["id": 7, "peak": 1e33].merging(log.contentFingerprint(sentence)) { $1 })
+        let f = lines(log).first?["f"] as? [String: Any] ?? [:]
+        XCTAssertNil(f["text"], "reply text must not be in the log: \(f)")
+        XCTAssertEqual(f["chars"] as? Int, sentence.count)
+        XCTAssertEqual(f["sha256"] as? String, String(TextDigest.sha256Hex(sentence).prefix(16)))
+        XCTAssertEqual((f["sha256"] as? String)?.count, 16)
+        XCTAssertEqual(f["id"] as? Int, 7, "the other fields are kept")
+        XCTAssertFalse(lines(log).description.contains("reconnect"), "no word of the sentence anywhere on the line")
+    }
+
+    func testCorruptSentenceIsTheTextWhenOptedIn() {
+        let log = DiagnosticLog()
+        log.configure(.init(directory: tempDir(), includeContent: true))
+        let sentence = "Okay, the tests pass."
+        log.log(.error, .tts, "synth.corrupt", log.contentFingerprint(sentence))
+        let f = lines(log).first?["f"] as? [String: Any] ?? [:]
+        XCTAssertEqual(f["text"] as? String, sentence)
+        XCTAssertNil(f["sha256"])
+        XCTAssertNil(f["chars"])
+        // Long enough for a whole corrupt sentence to be reproduced, which the 400-character default would cut.
+        let long = String(repeating: "word ", count: 200)
+        XCTAssertEqual(log.contentFingerprint(long)["text"], .string(long))
+    }
+
+    func testSHA256MatchesTheStandardVectors() {
+        XCTAssertEqual(TextDigest.sha256Hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        XCTAssertEqual(TextDigest.sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        // Two blocks: the 56-byte message whose padding spills into a second block.
+        XCTAssertEqual(TextDigest.sha256Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+                       "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+        // Multi-byte characters are hashed as UTF-8.
+        XCTAssertEqual(TextDigest.sha256Hex("héllo"), "3c48591d8d098a4538f5e013dfcf406e948eac4d3277b10bf614e295d6068179")
+    }
+
     func testSecretsAndPersonalDetailsAreScrubbedEvenWhenContentIsOn() {
         let log = DiagnosticLog()
         let redactor = LogRedactor(homeDirectory: "/Users/jane", userName: "janedoe")

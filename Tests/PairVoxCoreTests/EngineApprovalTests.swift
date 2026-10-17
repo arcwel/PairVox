@@ -196,6 +196,136 @@ final class EngineApprovalTests: XCTestCase {
         XCTAssertTrue(backend.responses.isEmpty)
     }
 
+    // MARK: Task 1.3: the summary setting reaches a running session
+
+    let longCommand = "cd /Users/dev/app && swift build && swift test --filter LinkTests && git status --short && ls -la .build | head -40"
+
+    func testTurningTheSummarySettingOffReachesTheRunningSession() async {
+        await engine.submit("Build it")
+        backend.emit(bash("s1", longCommand))
+        await settle()
+        XCTAssertTrue(output.allTexts.contains { $0.hasPrefix("Claude wants to run cd") && $0.contains("more steps shown on screen. Allow?") }, "\(output.allTexts)")
+        await engine.submit("yes")
+        XCTAssertEqual(backend.responses.map(\.0), ["s1"], "on by default: the summary line is what a yes answers")
+
+        await engine.setApproveByVoiceFromSummary(false)
+        backend.emit(bash("s2", longCommand))
+        await settle()
+        await engine.submit("yes")
+        XCTAssertEqual(backend.responses.map(\.0), ["s1"], "turned off mid-session: the next long command needs a click")
+        XCTAssertTrue(output.allTexts.last?.contains("needs a click") ?? false, "\(output.allTexts.last ?? "")")
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "s2")
+        XCTAssertFalse(snap.pendingPermission?.assessment.voiceApprovable ?? true)
+        XCTAssertTrue(snap.pendingPermission?.assessment.spokenPrompt.hasSuffix("Please confirm on screen.") ?? false)
+        await engine.approvePending(requestID: "s2")
+        XCTAssertEqual(backend.responses.map(\.0), ["s1", "s2"], "a click still approves it")
+
+        await engine.setApproveByVoiceFromSummary(true)
+        backend.emit(bash("s3", longCommand))
+        await settle()
+        await engine.submit("yes")
+        XCTAssertEqual(backend.responses.map(\.0), ["s1", "s2", "s3"], "turned back on: the summary answers again")
+        snap = await engine.snapshot
+        XCTAssertNil(snap.pendingPermission)
+    }
+
+    func testTurningTheSummarySettingOffReratesTheRequestAlreadyOnScreen() async {
+        await engine.submit("Build it")
+        backend.emit(bash("s1", longCommand))
+        backend.emit(bash("s2", longCommand))
+        await settle()
+        var snap = await engine.snapshot
+        XCTAssertTrue(snap.pendingPermission?.assessment.voiceApprovable ?? false)
+        await engine.setApproveByVoiceFromSummary(false)
+        snap = await engine.snapshot
+        XCTAssertFalse(snap.pendingPermission?.assessment.voiceApprovable ?? true, "the request on screen follows the new rule")
+        XCTAssertFalse(snap.queuedPermissions.first?.assessment.voiceApprovable ?? true, "so does the one waiting behind it")
+        await engine.submit("yes")
+        XCTAssertTrue(backend.responses.isEmpty, "a yes spoken after the change does not approve from the summary")
+        XCTAssertFalse(output.allTexts.filter { $0.hasPrefix("Claude wants to run") }.count > 1, "the prompt is not spoken again")
+    }
+
+    func testASettingThatDidNotChangeLeavesTheRequestAlone() async {
+        await engine.submit("Build it")
+        backend.emit(bash("s1", longCommand))
+        await settle()
+        let before = await engine.snapshot.pendingPermission
+        await engine.setApproveByVoiceFromSummary(true)
+        let after = await engine.snapshot.pendingPermission
+        XCTAssertEqual(before, after)
+    }
+
+    // MARK: Task 1.5: a spoken yes stops counting after the age limit
+
+    final class FakeClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var t: Date
+        init(_ start: Date = Date(timeIntervalSince1970: 2_000_000)) { t = start }
+        var now: Date { lock.lock(); defer { lock.unlock() }; return t }
+        func advance(_ seconds: TimeInterval) { lock.lock(); t.addTimeInterval(seconds); lock.unlock() }
+    }
+
+    func testASpokenYesIsRefusedForARequestLeftWaitingButAClickStillWorks() async {
+        let clock = FakeClock()
+        await engine.setClock { clock.now }
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.receivedAt, clock.now, "the request is stamped with the engine's clock")
+
+        clock.advance(Announcer.staleAfter - 1)
+        await engine.submit("yes")
+        XCTAssertEqual(backend.responses.map(\.0), ["A"], "just inside the limit, a yes still answers")
+
+        backend.emit(edit("B", "b.swift"))
+        await settle()
+        clock.advance(Announcer.staleAfter + 1)
+        await engine.submit("yes")
+        await engine.submit("sure")
+        XCTAssertEqual(backend.responses.map(\.0), ["A"], "a prompt that waited an hour takes no stray yes from the room")
+        XCTAssertTrue(output.allTexts.last?.contains("waiting a while") ?? false, "\(output.allTexts.last ?? "")")
+        XCTAssertTrue(output.allTexts.last?.contains("confirm it on screen") ?? false)
+        var after = await engine.snapshot
+        XCTAssertEqual(after.pendingPermission?.request.requestID, "B", "the request still waits")
+        await engine.approvePending(requestID: "B")
+        XCTAssertEqual(backend.responses.map(\.0), ["A", "B"], "a click is not subject to the age limit")
+        after = await engine.snapshot
+        XCTAssertNil(after.pendingPermission)
+    }
+
+    func testTheAgeLimitAppliesToTheHighRiskPhraseAndToAllowAllToo() async {
+        let clock = FakeClock()
+        await engine.setClock { clock.now }
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.submit("Clean up")
+        backend.emit(bash("h1", "rm -rf build"))
+        await settle()
+        clock.advance(Announcer.staleAfter + 1)
+        await engine.submit("confirm high risk")
+        XCTAssertTrue(backend.responses.isEmpty, "the phrase is a spoken approval too")
+        XCTAssertTrue(output.allTexts.last?.contains("waiting a while") ?? false)
+        await engine.denyPending()
+
+        backend.emit(edit("A", "a.swift"))
+        backend.emit(edit("B", "b.swift"))
+        await settle()
+        clock.advance(Announcer.staleAfter + 1)
+        await engine.submit("allow all")
+        XCTAssertEqual(backend.responses.count, 1, "nothing stale is armed for allow all")
+        XCTAssertTrue(output.allTexts.last?.contains("None of these can be allowed by voice") ?? false, "\(output.allTexts.last ?? "")")
+    }
+
+    func testTheSameAgeLimitAsTheAnnouncerAndTheLink() {
+        XCTAssertEqual(Announcer.staleAfter, 300)
+        let p = PendingPermission(request: PermissionRequest(requestID: "r", toolName: "Read", input: [:]),
+                                  assessment: PermissionAssessment(risk: .low, voiceApprovable: true, spokenPrompt: "", summary: "", reasons: []),
+                                  receivedAt: Date(timeIntervalSince1970: 0))
+        XCTAssertFalse(p.isStale(now: Date(timeIntervalSince1970: Announcer.staleAfter)))
+        XCTAssertTrue(p.isStale(now: Date(timeIntervalSince1970: Announcer.staleAfter + 0.5)))
+    }
+
     func testNewSessionKeepsTheModeTheUserSwitchedTo() async {
         let first = FakeBackend(), second = FakeBackend()
         let sessions = [first, second]
