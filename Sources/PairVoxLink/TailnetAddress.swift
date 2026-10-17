@@ -22,7 +22,16 @@ public enum TailnetAddress {
 
     static func isTailnetV4(_ b: [UInt8]) -> Bool { b.count == 4 && b[0] == 100 && (64...127).contains(b[1]) }
 
-    /// This Mac's Tailscale IPv4 address, if Tailscale is up.
+    /// Tailscale on macOS (the app and the open-source daemon) uses a `utun` interface.
+    static func isTunnelInterface(_ name: String) -> Bool { name.hasPrefix("utun") }
+
+    /// The local address the phone listener binds to: the Tailscale address when Tailscale has an interface here,
+    /// otherwise loopback (a userspace Tailscale reaches the Mac through `tailscale serve`, which forwards to it).
+    public static func listenAddress() -> String { current() ?? "127.0.0.1" }
+
+    /// This Mac's Tailscale IPv4 address, if Tailscale is up: a 100.64.0.0/10 address on a `utun` interface, which
+    /// is where Tailscale (and only a VPN) puts it. A carrier-grade NAT uplink (a phone hotspot, some LTE modems)
+    /// hands out the same range on a Wi-Fi or Ethernet interface; that address is not the tailnet and is skipped.
     public static func current() -> String? {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return nil }
@@ -30,7 +39,8 @@ public enum TailnetAddress {
         var node: UnsafeMutablePointer<ifaddrs>? = first
         while let n = node {
             defer { node = n.pointee.ifa_next }
-            guard let addr = n.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            guard let addr = n.pointee.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET),
+                  isTunnelInterface(String(cString: n.pointee.ifa_name)) else { continue }
             let value = addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
             let bytes = [UInt8(value >> 24), UInt8((value >> 16) & 0xFF), UInt8((value >> 8) & 0xFF), UInt8(value & 0xFF)]
             if isTailnetV4(bytes) { return bytes.map(String.init).joined(separator: ".") }

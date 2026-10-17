@@ -91,6 +91,8 @@ public enum ShellEnvironment {
         if FileManager.default.isExecutableFile(atPath: shell) {
             let marker = "__PAIRVOX_ENV__"
             let script = "echo \(marker); env"
+            // `-i` on purpose: zsh reads ~/.zshrc only for an interactive shell, and that is where many people set
+            // PATH (nvm, ~/.local/bin). Without it the CLI is not found for them.
             if let r = try? await ProcessRunner.run(URL(fileURLWithPath: shell), arguments: ["-l", "-i", "-c", script],
                                                     environment: env, timeout: timeout),
                let range = r.stdout.range(of: marker + "\n") {
@@ -127,6 +129,9 @@ public enum ProcessRunner {
 
     public enum RunError: Error { case timedOut }
 
+    /// How long a process that has exited may keep its output pipes open before its output is returned.
+    static let drainAfterExit: TimeInterval = 1
+
     public static func run(_ executable: URL, arguments: [String], environment: [String: String]? = nil,
                            currentDirectory: URL? = nil, timeout: TimeInterval) async throws -> Output {
         let process = Process()
@@ -140,26 +145,29 @@ public enum ProcessRunner {
         process.standardInput = FileHandle.nullDevice
 
         let collector = OutputCollector()
+        let drained = StreamsDrained(count: 2)
         out.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { h.readabilityHandler = nil } else { collector.appendOut(d) }
+            if d.isEmpty { h.readabilityHandler = nil; drained.end(0) } else { collector.appendOut(d) }
         }
         err.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { h.readabilityHandler = nil } else { collector.appendErr(d) }
+            if d.isEmpty { h.readabilityHandler = nil; drained.end(1) } else { collector.appendErr(d) }
         }
 
         return try await withCheckedThrowingContinuation { cont in
             let once = OnceFlag()
             process.terminationHandler = { p in
-                // Drain anything left in the pipes.
-                out.fileHandleForReading.readabilityHandler = nil
-                err.fileHandleForReading.readabilityHandler = nil
-                collector.appendOut(out.fileHandleForReading.readDataToEndOfFile())
-                collector.appendErr(err.fileHandleForReading.readDataToEndOfFile())
-                if once.set() {
-                    cont.resume(returning: Output(status: p.terminationStatus, stdout: collector.outString,
-                                                  stderr: collector.errString))
+                // Wait a little for the pipes to reach end-of-file, never for ever: a shell rc file that starts a
+                // background process (an agent, a tmux or prompt hook) leaves it holding the pipe after the shell
+                // exits. Reading to end-of-file here used to block until that process ended, and the timeout below
+                // never fired because the shell was no longer running, so the app waited at launch with no log line.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    drained.wait(timeout: Self.drainAfterExit)
+                    if once.set() {
+                        cont.resume(returning: Output(status: p.terminationStatus, stdout: collector.outString,
+                                                      stderr: collector.errString))
+                    }
                 }
             }
             do {
@@ -169,10 +177,9 @@ public enum ProcessRunner {
                 return
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if process.isRunning {
-                    process.terminate()
-                    if once.set() { cont.resume(throwing: RunError.timedOut) }
-                }
+                // Ends the wait whatever state the process is in.
+                if process.isRunning { process.terminate() }
+                if once.set() { cont.resume(throwing: RunError.timedOut) }
             }
         }
     }

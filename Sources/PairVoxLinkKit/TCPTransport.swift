@@ -98,10 +98,20 @@ public final class TCPListener: @unchecked Sendable {
     private let queue = DispatchQueue(label: "pairvox.link.listener")
     public private(set) var port: UInt16 = 0
 
-    /// `allow` sees the peer's address before anything is read; a refused peer is dropped at once.
-    public init(port: UInt16 = 0, allow: @escaping @Sendable (NWEndpoint.Host) -> Bool = { _ in true },
+    /// `allow` sees the peer's address before anything is read; a refused peer is dropped at once. With `bindTo`
+    /// the listener accepts connections only on that local address (the Mac's Tailscale address, or 127.0.0.1 for a
+    /// userspace Tailscale forward), so the port is not open on Wi-Fi, Ethernet or a hotspot at all; without it, on
+    /// every interface, and `allow` is the only gate.
+    public init(port: UInt16 = 0, bindTo: String? = nil, allow: @escaping @Sendable (NWEndpoint.Host) -> Bool = { _ in true },
                 onConnection: @escaping @Sendable (TCPTransport) -> Void) throws {
-        listener = try NWListener(using: .tcp, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
+        let wanted: NWEndpoint.Port = port == 0 ? .any : NWEndpoint.Port(rawValue: port)!
+        if let bindTo {
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(bindTo), port: wanted)
+            listener = try NWListener(using: parameters)
+        } else {
+            listener = try NWListener(using: .tcp, on: wanted)
+        }
         listener.newConnectionHandler = { connection in
             guard case .hostPort(let host, _) = connection.endpoint, allow(host) else { connection.cancel(); return }
             onConnection(TCPTransport(connection: connection))
