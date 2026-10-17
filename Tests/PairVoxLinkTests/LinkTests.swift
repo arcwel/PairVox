@@ -885,13 +885,16 @@ final class CrossProjectPhoneTests: XCTestCase {
     func testNeedsTheScreenRequestsHaveTheirOwnSwitchOnThePhoneToo() async throws {
         let h = LinkTests()
         var snap = h.snapshot(); snap.request = high(screen: true); snap.voiceHighRisk = true
-        var (_, engine, client) = try await connected(h, snap)
+        // The host is kept until the end: discarded with `_`, it could be freed before the phone's approval reached
+        // it, and the engine then saw nothing at all (failed on CI and once locally; waiting longer did not help).
+        var (host, engine, client) = try await connected(h, snap)
         try await client.send(.approve(requestID: "H", method: .voice, auth: .passcode))
         await settle(); XCTAssertTrue(engine.calls.isEmpty)
         snap.voiceNeedsScreen = true
-        (_, engine, client) = try await connected(h, snap)
+        (host, engine, client) = try await connected(h, snap)
         try await client.send(.approve(requestID: "H", method: .voice, auth: .passcode))
         await settle(until: ["approve:H"], engine); XCTAssertEqual(engine.calls, ["approve:H"])
+        withExtendedLifetime(host) {}
     }
 
     func testARequestInAnotherProjectIsAnsweredInThatProjectUnderTheSameRules() async throws {
@@ -901,7 +904,7 @@ final class CrossProjectPhoneTests: XCTestCase {
         snap.others = [LinkRequest(requestID: "W1", summary: "Edit pricing.html", spokenPrompt: "x", risk: "medium", reasons: [], voiceApprovable: true,
                                    projectID: "web", projectName: "website"),
                        high(id: "W2", project: "web", name: "website")]
-        let (_, engine, client) = try await connected(h, snap)
+        let (host, engine, client) = try await connected(h, snap)   // kept to the end, see the test above
         // Without the project the request does not exist.
         try await client.send(.approve(requestID: "W1", method: .voice, auth: .none))
         await settle(); XCTAssertTrue(engine.calls.isEmpty)
@@ -915,6 +918,7 @@ final class CrossProjectPhoneTests: XCTestCase {
         await settle(until: ["approve:W1@web"], engine); XCTAssertEqual(engine.calls, ["approve:W1@web"])
         try await client.send(.deny(requestID: "W2", projectID: "web"))
         await settle(); XCTAssertEqual(engine.calls.last, "deny:W2@web")
+        withExtendedLifetime(host) {}
     }
 
     func testOtherProjectRequestsAreBoundedToo() {
