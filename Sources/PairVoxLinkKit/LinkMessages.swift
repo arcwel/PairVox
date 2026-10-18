@@ -140,6 +140,11 @@ extension LinkSnapshot {
 public enum HostMessage: Codable, Sendable, Equatable {
     case snapshot(LinkSnapshot)
     case speak(String)
+    /// The Mac's own voice for one sentence: an encoded audio file (`format`, e.g. "m4a-aac"), with its text so a
+    /// phone that cannot play it can say the text instead.
+    case speakAudio(format: String, data: Data, text: String)
+    /// The Mac stopped speaking (the person talked over it, or the turn was interrupted): stop and drop the queue.
+    case stopSpeaking
     case notice(String)
     case refused(String)
 }

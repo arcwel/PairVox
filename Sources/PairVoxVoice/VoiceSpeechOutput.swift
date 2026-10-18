@@ -44,6 +44,11 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
 
     /// True while audio is playing (the VAD uses this to resist echo).
     public var onPlaybackActiveChange: ((Bool) -> Void)?
+    /// Each sentence as it starts playing, with the exact audio played (after trimming and leveling). A paired phone
+    /// plays the same audio, so it speaks with this voice instead of its own text-to-speech.
+    public var onPlay: ((Utterance, AVAudioPCMBuffer) -> Void)?
+    /// Everything queued or playing was stopped (barge-in, interrupt, a new turn): a phone stops too.
+    public var onStopped: (() -> Void)?
 
     public init(audio: AudioIO, synthesizer: any SpeechSynthesizing) {
         self.audio = audio
@@ -94,6 +99,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         lock.unlock()
         // Only touch the shared player if this output was actually playing.
         if hadAudio { audio.stopPlayback() }
+        if !ids.isEmpty { onStopped?() }
         onPlaybackActiveChange?(false)
         continuation.yield(.idle)
         return ids
@@ -282,6 +288,7 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         onPlaybackActiveChange?(true)
         log.log(.debug, .tts, "play.start", ["id": .int(utterance.id), "kind": "\(utterance.kind)"])
         continuation.yield(.started(utterance.id))
+        onPlay?(utterance, buffer)
         audio.schedule(buffer) { [weak self] in
             guard let self else { return }
             self.lock.lock()

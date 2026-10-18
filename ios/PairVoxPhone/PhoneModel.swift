@@ -34,7 +34,7 @@ final class PhoneModel: ObservableObject {
         }
     }
     /// True when only the basic, robotic-sounding iOS voice is installed for this language.
-    var needsBetterVoice: Bool { !speaker.hasNaturalVoice }
+    var needsBetterVoice: Bool { !speaker.hasNaturalVoice && !speaker.heardMacVoice }
     private var appActive = true
     private var micAllowed: Bool?
     /// The technical reason behind a `.failed` state (the framework's error and the connection's last state), for
@@ -370,6 +370,10 @@ final class PhoneModel: ObservableObject {
                 speaker.say(r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen.")
             }
         case .speak(let text): speaker.say(text)
+        case .speakAudio(let format, let data, let text):
+            // The Mac's own voice. A format this phone cannot play is said as text.
+            if format == "m4a-aac" { speaker.play(data) } else { speaker.say(text) }
+        case .stopSpeaking: speaker.stop()
         case .notice(let text): notice = text
         case .refused(let text): notice = text; speaker.say(text)
         }
