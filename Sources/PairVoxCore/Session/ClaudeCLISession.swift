@@ -119,9 +119,12 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
             self?.handleStderr(data)
         }
         p.terminationHandler = { [weak self] proc in
+            // A strong reference for the hop: Swift 6.0 (the Linux CI toolchain) refuses a captured weak `self` var in
+            // a concurrently running closure. The session is still referenced by its owner while its process runs.
+            guard let session = self else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 drained.wait(timeout: Self.outputDrainTimeout)
-                self?.handleTermination(proc)
+                session.handleTermination(proc)
             }
         }
 
@@ -254,7 +257,8 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
         lock.unlock()
         // Queued, not waited for: the reader must keep reading stdout even when stdin is full.
         if let handle, !replies.isEmpty {
-            writeQueue.async { for reply in replies { try? handle.write(contentsOf: reply) } }
+            let toSend = replies   // a constant: Swift 6.0 refuses capturing the var in a concurrent closure
+            writeQueue.async { for reply in toSend { try? handle.write(contentsOf: reply) } }
         }
         for e in events { continuation.yield(e) }
     }
