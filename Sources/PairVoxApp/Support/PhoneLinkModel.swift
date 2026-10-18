@@ -3,6 +3,7 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
 import Foundation
+import Network
 import PairVoxCore
 import PairVoxLink
 import PairVoxLinkKit
@@ -121,11 +122,25 @@ final class PhoneLinkModel: ObservableObject {
                     try await l.start()
                     guard self.listener === l else { l.stop(); return }   // switched off or changed while starting
                     self.port = l.port; self.status = "On, waiting for a phone"
-                } catch { if self.listener === l { self.status = "Could not listen on port \(wanted): \(error.localizedDescription)" } }
+                } catch {
+                    guard self.listener === l else { return }
+                    self.status = Self.listenFailure(port: wanted, error: error, tailnetInterface: TailnetAddress.current() != nil)
+                    self.log.log(.error, .app, "phoneLink.listenFailed", ["error": .string(error.localizedDescription)])
+                }
             }
         } catch {
             status = "Could not listen on port \(wanted): \(error.localizedDescription)"
         }
+    }
+
+    /// What Settings says when the listener cannot start. "Address already in use" with Tailscale's own interface up is
+    /// almost always a `tailscale serve` forward left from userspace mode (2026-10-18), so it names the fix.
+    nonisolated static func listenFailure(port: Int, error: Error, tailnetInterface: Bool) -> String {
+        if tailnetInterface, case NWError.posix(.EADDRINUSE) = error {
+            return "Port \(port) is taken. If Tailscale used to run in userspace mode, its old forward for this port now blocks "
+                + "PairVox: run `tailscale serve --tcp \(port) off` in Terminal, then turn the phone link off and on."
+        }
+        return "Could not listen on port \(port): \(error.localizedDescription)"
     }
 
     /// The Mac's Tailscale address from the `tailscale` command, for Tailscale running in userspace mode (no interface).

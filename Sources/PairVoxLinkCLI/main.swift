@@ -126,6 +126,10 @@ func runDoctor() -> Int32 {
         port = r.port
         if !r.ok {
             add("phone link", "fail", printable(r.error ?? "PairVox refused the status request."))
+        } else if r.enabled == true, (r.port ?? 0) == 0 {
+            // Switched on but not listening: the listener failed to start (2026-10-18 it said OK here while the phone
+            // showed the Mac as offline).
+            add("phone link", "fail", "switched on but not listening: \(printable(r.status ?? "no reason given"))")
         } else if r.enabled == true {
             add("phone link", "ok", "listening on \(r.host ?? "?"):\(r.port ?? 0), \(r.connected ?? 0) connected")
         } else {
@@ -152,6 +156,14 @@ func runDoctor() -> Int32 {
                 online.isEmpty ? "no other device is online; is Tailscale connected on the phone?" : online.map(printable).sorted().joined(separator: ", "))
         } else {
             add("tailscale", "fail", "the tailscale command did not answer; is Tailscale running?")
+        }
+        if TailnetAddress.current() != nil, let port,
+           let serve = tailscaleJSON(tailscale, ["serve", "status", "--json"]),
+           let forward = ((serve["TCP"] as? [String: [String: Any]])?[String(port)])?["TCPForward"] as? String {
+            // Tailscale has its own network interface (the system daemon), so the phone reaches the Mac directly. A
+            // forward left from userspace mode makes tailscaled hold the port itself, and PairVox cannot listen on it
+            // (2026-10-18: the phone showed the Mac as offline).
+            add("stale forward", "fail", "TCP \(port) still forwards to \(printable(forward)), which blocks PairVox now that Tailscale has a network interface; run: tailscale serve --tcp \(port) off, then turn the phone link off and on")
         }
         if TailnetAddress.current() == nil, let port {
             let serve = tailscaleJSON(tailscale, ["serve", "status", "--json"])
