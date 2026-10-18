@@ -187,3 +187,10 @@ Checked and sound: argument construction for the child (all argv elements, `--re
 ## 6. Sources
 
 Reviews: approval gate, audio pipeline, app layer, phone link, session and tooling (five read-only agents, 2026-10-16), each finding re-read at the cited line. Local-model script review (`scripts/`). Test log: 387 tests, 137 s. Live log: `~/Library/Logs/PairVox/pairvox.log`, runs 8ec07e8a to 16e4c87a. Prior audits: `docs/security/2026-10-13-*`, `2026-10-14-audit-run-5-new-features.md`, `docs/audits/2026-10-16-phone-link-and-tools-audit.md`.
+
+## Linux note (2026-10-18)
+
+The session output drain (4.4) and the bounded runner drain (4.3) are verified on macOS only. On the Linux CI job,
+Foundation did not report pipe end-of-file through `readabilityHandler` or the exit promptly, so the two tests that
+check them are skipped there. The Mac app is unaffected; `pairvox-cli` on Linux may still drop a turn's last line.
+
