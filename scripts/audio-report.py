@@ -35,6 +35,7 @@ def main():
     for r in rows: ev[r["ev"]].append(r.get("f", {}))
     t = ev["transcribed"]; empty = [x for x in t if x.get("text") == "<0 chars>"]
     turns = ev["turn.completed"]; first = [x["firstAudioMs"] for x in turns if x.get("outcome") == "success" and x.get("firstAudioMs", -1) > 0]
+    firstSound = [x["firstSoundMs"] for x in turns if x.get("outcome") == "success" and x.get("firstSoundMs", -1) > 0]
     stats = ev["stats"]
     out = {
         "run": run,
@@ -48,6 +49,7 @@ def main():
         "decodeMsMedian": pct([x["decodeMs"] for x in t], 0.5), "decodeMsP90": pct([x["decodeMs"] for x in t], 0.9),
         "turns": len(turns), "interrupted": sum(1 for x in turns if x.get("outcome") == "interrupted"),
         "firstAudioMsMedian": pct(first, 0.5), "firstAudioMsP90": pct(first, 0.9),
+        "firstSoundMsMedian": pct(firstSound, 0.5), "firstSoundMsP90": pct(firstSound, 0.9),
         "commands": dict(collections.Counter(x.get("command") for x in ev["user.submit"])),
         "synthCorrupt": len(ev["synth.corrupt"]), "synthRecovered": [x.get("how") for x in ev["synth.recovered"]],
         "outputGlitches": len(ev["output.glitch"]), "clicksTotal": sum(x.get("outClicks", 0) for x in stats),
@@ -64,7 +66,7 @@ def main():
         print(f"HOWL captured: {fb['frequencyHz']} Hz, agent speaking: {fb['agentSpeaking']}, files: {fb['files']}")
     if not out["feedbackCaptured"]: print("howls captured: none")
     print(f"speech: {out['utterances']} utterances, {out['emptyTranscripts']} empty; decode median {out['decodeMsMedian']} ms, p90 {out['decodeMsP90']} ms")
-    print(f"turns: {out['turns']} ({out['interrupted']} interrupted); first audio median {out['firstAudioMsMedian']} ms, p90 {out['firstAudioMsP90']} ms")
+    print(f"turns: {out['turns']} ({out['interrupted']} interrupted); first sound (acknowledgement or answer) median {out['firstSoundMsMedian']} ms, p90 {out['firstSoundMsP90']} ms; first answer audio median {out['firstAudioMsMedian']} ms, p90 {out['firstAudioMsP90']} ms")
     print(f"commands heard: {out['commands']}")
     print(f"audio: corrupt synth {out['synthCorrupt']} (recovered by {out['synthRecovered'] or 'nothing'}), glitches {out['outputGlitches']}, clicks {out['clicksTotal']}, gaps {out['playbackGaps']} (max {out['gapMsMax']} ms), dropped capture buffers {out['captureDroppedBuffers']}")
     print(f"approvals: {out['approvals'] or 'none'}")

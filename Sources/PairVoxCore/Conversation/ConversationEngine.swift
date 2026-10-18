@@ -1067,7 +1067,7 @@ public actor ConversationEngine {
         log.log(.info, .engine, "turn.completed",
                 ["outcome": "\(result.outcome)", "durationMs": .int(result.durationMs), "numTurns": .int(result.numTurns),
                  "firstTokenMs": ms(latency.firstToken), "firstUtteranceMs": ms(latency.firstUtterance),
-                 "firstAudioMs": ms(latency.firstAudio), "utterances": .int(utterancesThisTurn)])
+                 "firstAudioMs": ms(latency.firstAudio), "firstSoundMs": ms(latency.firstSound), "utterances": .int(utterancesThisTurn)])
         var final = planner.finishTurn(result)
         if readMoreWhenDone {
             readMoreWhenDone = false
@@ -1122,6 +1122,7 @@ public actor ConversationEngine {
             startedIDs.insert(id)
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
+            if latency.firstSound == nil, let start = sendTimes.first { latency.firstSound = Date().timeIntervalSince(start) }
             if measuredIDs.contains(id), latency.firstAudio == nil, let start = sendTimes.first {
                 latency.firstAudio = Date().timeIntervalSince(start)
             }

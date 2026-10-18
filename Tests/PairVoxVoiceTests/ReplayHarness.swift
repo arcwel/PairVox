@@ -92,6 +92,11 @@ struct Scenario {
     var agentClip: [Float] = []
     /// How far below the speaker's own level the microphone hears it (a leak of -24 means 24 dB quieter).
     var leakDB: Float = -30
+    /// Pace the frames in real time (30 ms each), and let a transcription take this long, to measure delays.
+    var realTime = false
+    var decodeSeconds = 0.0
+    /// Seconds of silence after which transcription starts early (0 = off).
+    var earlyTranscriptionSeconds = 0.0
     /// A slow rise in the noise floor, as headset gain control can cause: dB added by the end of the scenario.
     var ambientRiseDB: Float = 0
 }
@@ -103,12 +108,15 @@ final class ReplayBackend: SessionBackend, @unchecked Sendable {
     let continuation: AsyncStream<SessionEvent>.Continuation
     private let lock = NSLock()
     private var _sent: [String] = []
+    private var _sentAt: [Double] = []
+    var clock: () -> Double = { 0 }
     var sent: [String] { lock.lock(); defer { lock.unlock() }; return _sent }
+    var sentAt: [Double] { lock.lock(); defer { lock.unlock() }; return _sentAt }
     init() { var c: AsyncStream<SessionEvent>.Continuation!; events = AsyncStream { c = $0 }; continuation = c }
     var isRunning: Bool { true }
     var sessionID: String? { "replay" }
     func start() throws {}
-    func send(_ text: String) throws { lock.lock(); _sent.append(text); lock.unlock() }
+    func send(_ text: String) throws { lock.lock(); _sent.append(text); _sentAt.append(clock()); lock.unlock() }
     func interrupt() throws {}
     func respond(to request: PermissionRequest, decision: PermissionDecision) throws {}
     func setPermissionMode(_ mode: PermissionMode) throws {}
@@ -159,16 +167,23 @@ final class GroundTruthTranscriber: UtteranceTranscriber, @unchecked Sendable {
     var users: [UserSpeech] = []
     var clock: () -> Double = { 0 }
     var endSilence = 0.65
+    var decodeSeconds = 0.0
 
     func transcribe(_ samples: [Float], vocabulary: [String]) async throws -> String {
         let duration = Double(samples.count) / Fixtures.rate
-        let end = clock() - endSilence
-        let start = end - duration
+        let now = clock()
+        if decodeSeconds > 0 { try await Task.sleep(nanoseconds: UInt64(decodeSeconds * 1_000_000_000)) }   // cancellable, like a real decode
+        // The audio ends either after the full end-of-turn silence or (an early transcription) a short silence before.
         var best: (overlap: Double, text: String) = (0, "")
-        for u in users {
-            let o = max(0, min(end, u.end) - max(start, u.start)) / max(duration, 0.001)
-            if o > best.overlap { best = (o, u.text) }
+        for lag in [endSilence, 0.3] {
+            let end = now - lag
+            let start = end - duration
+            for u in users {
+                let o = max(0, min(end, u.end) - max(start, u.start)) / max(duration, 0.001)
+                if o > best.overlap { best = (o, u.text) }
+            }
         }
+        let end = now - endSilence
         let heard = best.overlap >= 0.4 ? best.text : ""
         lock.lock(); _calls.append(Call(duration: duration, endsAround: end, overlap: best.overlap, heard: heard)); lock.unlock()
         return heard
@@ -183,6 +198,7 @@ struct ReplayReport {
     var falseTriggers: Int { utterances.filter { $0.heard.isEmpty }.count }
     var pauses: Int, resumes: Int, stops: Int
     var sentToClaude: [String]
+    var sentAt: [Double] = []
     var summary: String {
         "\(scenario): \(utterances.count) utterance(s), \(falseTriggers) false; speaker paused \(pauses)x, resumed \(resumes)x, stopped \(stops)x; sent \(sentToClaude)"
     }
@@ -214,7 +230,9 @@ enum Replay {
         let audio = AudioIO()
         let transcriber = GroundTruthTranscriber()
         transcriber.users = s.users
+        transcriber.decodeSeconds = s.decodeSeconds
         let controller = VoiceInputController(audio: audio, transcriber: transcriber, engine: engine, endSilence: 0.65)
+        controller.setEarlyTranscription(seconds: s.earlyTranscriptionSeconds)
         output.onPlaybackActive = { controller.setPlaybackActive($0) }
         // The harness plays the agent's clip, so it can say how loud that is, as the real audio layer measures it.
         let level = SimulatedLevel()
@@ -225,6 +243,7 @@ enum Replay {
         var agentStarted = false
         var time = 0.0
         transcriber.clock = { time }
+        backend.clock = { time }
 
         let total = Int(s.seconds * Fixtures.rate)
         var index = 0
@@ -261,13 +280,14 @@ enum Replay {
             }
             audio.onFrame?(chunk)
             index += frame
-            if index % (frame * 4) == 0 { try? await Task.sleep(nanoseconds: 1_500_000) }
+            if s.realTime { try? await Task.sleep(nanoseconds: 30_000_000) }
+            else if index % (frame * 4) == 0 { try? await Task.sleep(nanoseconds: 1_500_000) }
         }
         // Let the last utterance be transcribed and the engine settle.
         for _ in 0..<12 { audio.onFrame?([Float](repeating: 0, count: frame)); try? await Task.sleep(nanoseconds: 20_000_000) }
         try? await Task.sleep(nanoseconds: 400_000_000)
         let report = ReplayReport(scenario: s.name, utterances: transcriber.calls, pauses: output.pauses, resumes: output.resumes,
-                                  stops: output.stops, sentToClaude: backend.sent)
+                                  stops: output.stops, sentToClaude: backend.sent, sentAt: backend.sentAt)
         await engine.shutdown()
         return report
     }

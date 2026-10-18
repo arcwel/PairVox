@@ -120,6 +120,9 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var bargeInEnabled = true
     public var handsFree = true
     public var endOfTurnSilence: Double = 0.65
+    /// Start transcribing after a short silence (0.3 s) instead of waiting for the whole end-of-turn silence, and discard
+    /// the result if you keep talking. Saves up to about a third of a second per turn. Experimental.
+    public var earlyTranscription = true
     public var pronunciation: [String: String] = [:]
     /// Voice processing (echo cancellation and noise suppression). Turn off to compare audio quality,
     /// or if a headset sounds distorted; barge-in on speakers then needs headphones or push to talk.
@@ -231,6 +234,7 @@ public struct AppSettings: Sendable, Codable, Equatable {
         bargeInEnabled = (try? c.decode(Bool.self, forKey: .bargeInEnabled)) ?? d.bargeInEnabled
         handsFree = (try? c.decode(Bool.self, forKey: .handsFree)) ?? d.handsFree
         endOfTurnSilence = (try? c.decode(Double.self, forKey: .endOfTurnSilence)) ?? d.endOfTurnSilence
+        earlyTranscription = (try? c.decode(Bool.self, forKey: .earlyTranscription)) ?? d.earlyTranscription
         pronunciation = (try? c.decode([String: String].self, forKey: .pronunciation)) ?? [:]
         echoCancellation = (try? c.decode(Bool.self, forKey: .echoCancellation)) ?? d.echoCancellation
         outputDeviceUID = try? c.decode(String.self, forKey: .outputDeviceUID)
