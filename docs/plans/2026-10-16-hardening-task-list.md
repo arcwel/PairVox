@@ -1,5 +1,7 @@
 # PairVox hardening review and task list (2026-10-16)
 
+> **Frozen 2026-10-17.** This list is backlog now. The definition of done for v0.1 is the five checks in `2026-10-17-v0.1-checks.md`; an item here is worked on only when it is the cause of a failing check.
+
 Reviewed: branch `phase1-hardening` at 9718394 plus the uncommitted banner fix and UITrace in `.worktrees/audio`, the 20 commits since `main`, and the live log of today's runs. Method: five independent read-only code reviews (approval gate, audio, app layer, phone link, session and tooling), each finding re-read at the cited line before it was kept; a full test run; the iOS compile; the release dry run; a first-pass script review by the local model.
 
 ## 1. Where the app stands
@@ -56,7 +58,7 @@ The repo has no single DoD. This one is assembled from `CLAUDE.md`, `docs/HANDOF
 
 Status, 2026-10-16 evening: 0.1 committed (4e77fe3, 03cbeeb, not pushed). 1.1 to 1.5, 2.1 to 2.5, 2.8, 2.9, 4.1, 4.2 and 4.6 implemented in this worktree by three follow-up sessions, uncommitted; the combined tree passes 438 tests with 0 failures and the 5 usual skips. The `pairvox-cli --env-audit` command in section 5 came from the same work.
 
-Status, 2026-10-17: 0.3 done ([arcwel/PairVox#1](https://github.com/arcwel/PairVox/pull/1)); getting its CI green surfaced four Swift 6.0 and Linux differences, fixed in d3260e3 to 334ce0c (CLI in Swift 5 mode, soak test memory on Linux, a captured var, the consent folder's macOS path protected on every platform). Also fixed: the protected-folder check no longer depends on the folder existing on disk (a real gap, found by CI), 5.1 to 5.4, 5.5 (not yet checked on screen), 5.6 in part (input level still shares the model), 3.4, 3.5, 3.6, 3.8 and 6.3. 447 tests pass locally. The newest real launch registered its shortcuts at 4.7 s against 0.9 s the day before; worth a look before the 5 s limit trips. Task 3.1, decided by the owner on 2026-10-17: QR only. The six-digit code is removed everywhere, and a copyable pairing link covers phones without a camera. Everything else below is open.
+Status, 2026-10-17: 0.3 done ([arcwel/PairVox#1](https://github.com/arcwel/PairVox/pull/1)); getting its CI green surfaced four Swift 6.0 and Linux differences, fixed in d3260e3 to 334ce0c (CLI in Swift 5 mode, soak test memory on Linux, a captured var, the consent folder's macOS path protected on every platform). Also fixed: the protected-folder check no longer depends on the folder existing on disk (a real gap, found by CI), 5.1 to 5.4, 5.5 (not yet checked on screen), 5.6 in part (input level still shares the model), 3.4, 3.5, 3.6, 3.8 and 6.3. 447 tests pass locally. The newest real launch registered its shortcuts at 4.7 s against 0.9 s the day before; worth a look before the 5 s limit trips. Task 3.1, decided by the owner on 2026-10-17: QR only. The six-digit code is removed everywhere, and a copyable pairing link covers phones without a camera. Round 2 (branch hardening-round-2, 2026-10-17): 4.3, 4.4, 4.5, 3.2 and 6.1 done, each with a test that fails on the old code (4.3, 4.4, 4.5) or a control case (3.2). 454 tests pass. Task 4.3 keeps the shell's `-i`: zsh reads ~/.zshrc only when interactive, and that is where many people set PATH. Everything else below is open.
 
 Severity is the reviewers' rating confirmed at the cited line. "Scenario" is the input that produces the wrong result. Each task names its acceptance test.
 
@@ -185,3 +187,10 @@ Checked and sound: argument construction for the child (all argv elements, `--re
 ## 6. Sources
 
 Reviews: approval gate, audio pipeline, app layer, phone link, session and tooling (five read-only agents, 2026-10-16), each finding re-read at the cited line. Local-model script review (`scripts/`). Test log: 387 tests, 137 s. Live log: `~/Library/Logs/PairVox/pairvox.log`, runs 8ec07e8a to 16e4c87a. Prior audits: `docs/security/2026-10-13-*`, `2026-10-14-audit-run-5-new-features.md`, `docs/audits/2026-10-16-phone-link-and-tools-audit.md`.
+
+## Linux note (2026-10-18)
+
+The session output drain (4.4) and the bounded runner drain (4.3) are verified on macOS only. On the Linux CI job,
+Foundation did not report pipe end-of-file through `readabilityHandler` or the exit promptly, so the two tests that
+check them are skipped there. The Mac app is unaffected; `pairvox-cli` on Linux may still drop a turn's last line.
+

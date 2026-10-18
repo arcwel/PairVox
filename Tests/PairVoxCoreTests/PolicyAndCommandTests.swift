@@ -340,3 +340,23 @@ final class VoiceActivityEchoTests: XCTestCase {
         XCTAssertTrue(events.contains(.speechStarted), "with the speaker silent the same sound is speech")
     }
 }
+
+/// One parser for spoken answers on every device (2026-10-18: "Allow." with the recognizer's full stop did not
+/// approve on the phone, which kept its own exact-match list).
+final class SpokenAnswerTests: XCTestCase {
+    func testPunctuationAndPolitePhrasesStillAnswer() {
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Allow."), .approve)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Yes!"), .approve)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Go ahead."), .approve)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Okay, please."), .approve)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Always allow."), .approveAlways)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("No."), .deny)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Don't."), .deny)
+    }
+
+    func testAMumbleIsUnclearAndASentenceIsNotAnAnswer() {
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Yasp."), .unclear)
+        XCTAssertEqual(VoiceCommand.spokenAnswer(""), .unclear)
+        XCTAssertEqual(VoiceCommand.spokenAnswer("Edit the other file instead please"), .notAnAnswer)
+    }
+}

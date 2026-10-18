@@ -171,6 +171,24 @@ public enum VoiceCommand: Sendable, Equatable {
         return words.count <= 5
     }
 
+    /// How a spoken reply answers a waiting request. One parser for every device: the phone sends what it heard and
+    /// the Mac decides with these same words (2026-10-18: the phone kept its own exact-match list, and "Allow." with
+    /// the recognizer's full stop did not count).
+    public enum SpokenAnswer: Sendable, Equatable { case approve, approveAlways, deny, unclear, notAnAnswer }
+
+    public static func spokenAnswer(_ transcript: String) -> SpokenAnswer {
+        let words = normalize(transcript)
+        guard !words.isEmpty else { return .unclear }
+        let core = strip(words.joined(separator: " "), prefixes: ["hey pairvox ", "pairvox ", "please ", "um ", "uh "],
+                         suffixes: [" please", " thanks", " thank you"])
+        switch permissionAnswer(core) {
+        case .approve?: return .approve
+        case .approveAlways?: return .approveAlways
+        case .deny?: return .deny
+        default: return words.count <= 2 ? .unclear : .notAnAnswer
+        }
+    }
+
     /// Short yes/no answers to a permission prompt. Longer replies go to Claude as feedback.
     static func permissionAnswer(_ core: String) -> VoiceCommand? {
         let words = core.split(separator: " ").map(String.init)

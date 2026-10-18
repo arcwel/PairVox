@@ -14,7 +14,9 @@ struct RootView: View {
         }
         .tint(.orange)
         .overlay { if scenePhase != .active { Curtain() } }
-        .onChange(of: scenePhase) { _, phase in if phase == .active { model.becameActive() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { model.becameActive() } else if phase == .background { model.wentToBackground() }
+        }
     }
 }
 
@@ -149,6 +151,7 @@ struct FailureText: View {
 struct SessionView: View {
     @EnvironmentObject var model: PhoneModel
     @State private var showConnection = false
+    @State private var showKeyboard = false
 
     var body: some View {
         NavigationStack {
@@ -157,15 +160,20 @@ struct SessionView: View {
                 transcript
                 if let request = model.snapshot?.request { RequestCard(request: request) }
                 if let others = model.snapshot?.others, !others.isEmpty { OtherProjectsCard(others: others) }
-                heardLine
-                controls
+                VoicePanel(showKeyboard: $showKeyboard)
+                if showKeyboard { controls }
             }
             .navigationTitle(model.snapshot?.project ?? "PairVox")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // The title is the project switcher when the Mac has more than one project open.
+                if let projects = model.snapshot?.projects, projects.count > 1 {
+                    ToolbarItem(placement: .principal) { ProjectSwitcher(projects: projects) }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button("Interrupt Claude", systemImage: "stop.fill") { model.interrupt() }
+                        Toggle(isOn: $model.pushToTalk) { Label("Push to talk", systemImage: "hand.tap") }
                         Button("Connection…", systemImage: "network") { showConnection = true }
                         Button("Forget this Mac", systemImage: "trash", role: .destructive) { model.forget() }
                     } label: { Image(systemName: "ellipsis.circle") }
@@ -178,7 +186,7 @@ struct SessionView: View {
 
     private var status: some View {
         HStack {
-            Circle().fill(color).frame(width: 8, height: 8)
+            LiveIndicator(phase: model.state == .connected ? model.snapshot?.phase : nil, color: color)
             Text(label).font(.system(.caption, design: .monospaced)).textCase(.uppercase)
             Spacer()
             if let n = model.notice { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
@@ -227,31 +235,195 @@ struct SessionView: View {
         }
     }
 
-    /// What is being heard right now, or what was just sent (kept for a few seconds so it can be read).
-    @ViewBuilder private var heardLine: some View {
-        if model.listening {
-            HStack(spacing: 8) {
-                LevelMeter(level: model.inputLevel)
-                Text(model.heard.isEmpty ? "Listening…" : model.heard).font(.callout).foregroundStyle(model.heard.isEmpty ? .secondary : .primary)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
-        } else if let said = model.lastHeard {
-            (Text("You said: ").foregroundStyle(.secondary) + Text(said)).font(.callout)
-                .padding(.horizontal, 12).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
-                .transition(.opacity)
-        }
-    }
-
     private var controls: some View {
         HStack(spacing: 8) {
             TextField("Type to Claude", text: $model.typed).textFieldStyle(PhoneFieldStyle()).submitLabel(.send).onSubmit { model.submitTyped() }
-            Button { model.toggleListening() } label: {
-                Image(systemName: model.listening ? "stop.circle.fill" : "mic.circle.fill").font(.system(size: 38))
-                    .symbolEffect(.pulse, isActive: model.listening)
-            }
-            .accessibilityLabel(model.listening ? "Stop listening" : "Start listening")
         }
-        .padding(12)
+        .padding(.horizontal, 12).padding(.bottom, 10)
+    }
+}
+
+/// The voice conversation, front and centre: a large orb that shows what is happening (listening and how loud,
+/// the phone or the Mac talking, Claude thinking, muted), what was heard, and the mute and keyboard buttons. Owner,
+/// 2026-10-18: "with voice first, make the voice and conversation the focus, not the keyboard", and an obvious
+/// animation that the microphone is listening.
+struct VoicePanel: View {
+    @EnvironmentObject var model: PhoneModel
+    @Binding var showKeyboard: Bool
+
+    private var caption: String {
+        if model.state != .connected { return "Not connected" }
+        if model.muted { return "Muted. Tap to listen" }
+        if model.phoneSpeaking { return "Speaking. Tap to interrupt" }
+        if model.listening { return model.heard.isEmpty ? (model.pushToTalk ? "Listening while you hold" : "Listening") : model.heard }
+        if model.pushToTalk { return "Hold to talk" }
+        switch model.snapshot?.phase {
+        case "thinking": return "Claude is thinking"
+        case "working": return "Claude is working"
+        case "speaking": return "Speaking on the Mac"
+        case "awaitingPermission": return "Waiting for your answer"
+        default: return "Starting the microphone"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let said = model.lastHeard, !model.listening {
+                (Text("You said: ").foregroundStyle(.secondary) + Text(said)).font(.callout).lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(alignment: .center, spacing: 28) {
+                Button { model.toggleMute() } label: {
+                    Image(systemName: model.muted ? "mic.slash.fill" : "mic.fill").font(.title2)
+                        .frame(width: 52, height: 52)
+                        .background(model.muted ? Color.red.opacity(0.18) : Color.secondary.opacity(0.12), in: Circle())
+                }
+                .accessibilityLabel(model.muted ? "Unmute microphone" : "Mute microphone")
+
+                VoiceOrb()
+                    .frame(width: 128, height: 128)
+                    .contentShape(Circle())
+                    .onTapGesture { model.orbTapped() }
+                    .gesture(model.pushToTalk ? DragGesture(minimumDistance: 0)
+                        .onChanged { _ in if !model.listening { model.pushToTalkBegan() } }
+                        .onEnded { _ in model.pushToTalkEnded() } : nil)
+                    .accessibilityLabel(caption)
+                    .accessibilityAddTraits(.isButton)
+
+                Button { showKeyboard.toggle() } label: {
+                    Image(systemName: showKeyboard ? "keyboard.chevron.compact.down" : "keyboard").font(.title2)
+                        .frame(width: 52, height: 52).background(Color.secondary.opacity(0.12), in: Circle())
+                }
+                .accessibilityLabel(showKeyboard ? "Hide keyboard" : "Type instead")
+            }
+            Text(caption).font(.callout.weight(.medium)).lineLimit(2).multilineTextAlignment(.center)
+                .foregroundStyle(model.listening && !model.heard.isEmpty ? .primary : .secondary)
+            if model.needsBetterVoice {
+                Text("For a natural voice, download an Enhanced or Premium voice in Settings, Accessibility, Spoken Content, Voices.")
+                    .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 14)
+    }
+}
+
+/// The orb: a ring that grows with the microphone level while listening, ripples while something is spoken, breathes
+/// while Claude thinks or works, and stands still and grey when muted or offline.
+struct VoiceOrb: View {
+    @EnvironmentObject var model: PhoneModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private enum Mode { case muted, listening, speaking, thinking, idle }
+    private var mode: Mode {
+        if model.state != .connected || model.muted { return .muted }
+        if model.phoneSpeaking || model.snapshot?.phase == "speaking" { return .speaking }
+        if model.listening { return .listening }
+        if ["thinking", "working", "transcribing", "starting"].contains(model.snapshot?.phase ?? "") { return .thinking }
+        return .idle
+    }
+    private var tint: Color { mode == .muted ? .gray : .orange }
+    private var icon: String {
+        switch mode {
+        case .muted: return model.state == .connected ? "mic.slash.fill" : "wifi.slash"
+        case .listening: return "mic.fill"
+        case .speaking: return "waveform"
+        case .thinking: return "ellipsis"
+        case .idle: return "mic"
+        }
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion || mode == .muted || mode == .idle)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            ZStack {
+                if mode == .speaking {
+                    ForEach(0..<3, id: \.self) { i in
+                        let phase = (t * 0.8 + Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                        Circle().stroke(tint.opacity(0.5 * (1 - phase)), lineWidth: 3).scaleEffect(0.7 + 0.4 * phase)
+                    }
+                }
+                Circle().fill(tint.opacity(0.16)).scaleEffect(outerScale(t))
+                Circle().fill(tint).scaleEffect(0.62)
+                Image(systemName: icon).font(.system(size: 34, weight: .semibold)).foregroundStyle(.white)
+            }
+        }
+    }
+
+    private func outerScale(_ t: Double) -> CGFloat {
+        switch mode {
+        case .listening: return 0.72 + 0.28 * CGFloat(min(1, model.inputLevel * 1.6)) + 0.03 * CGFloat(sin(t * 3))
+        case .thinking: return 0.8 + 0.08 * CGFloat(sin(t * 2.5))
+        case .speaking: return 0.86
+        default: return 0.8
+        }
+    }
+}
+
+/// The Mac's open projects, as a menu on the title. The Mac switches; the phone follows its next snapshot.
+struct ProjectSwitcher: View {
+    @EnvironmentObject var model: PhoneModel
+    let projects: [LinkProject]
+
+    var body: some View {
+        Menu {
+            ForEach(projects, id: \.id) { p in
+                Button { model.switchProject(p.id) } label: {
+                    if p.isActive { Label(p.name, systemImage: "checkmark") }
+                    else if p.needsAttention { Label("\(p.name) · needs you", systemImage: "hand.raised.fill") }
+                    else if p.missed > 0 { Label("\(p.name) · \(p.missed) new", systemImage: "bubble.left") }
+                    else { Text(p.name) }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(model.snapshot?.project ?? "PairVox").font(.headline).lineLimit(1)
+                if projects.contains(where: { !$0.isActive && ($0.needsAttention || $0.missed > 0) }) {
+                    Rectangle().fill(.orange).frame(width: 6, height: 6)
+                        .accessibilityLabel("Another project needs you")
+                }
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.primary)
+        }
+        .accessibilityLabel("Project: \(model.snapshot?.project ?? "none"). Switch project")
+    }
+}
+
+/// Shows that the conversation on the Mac is live: five bars that move while the Mac listens or speaks, pulse while
+/// Claude thinks or works, and stand still otherwise.
+struct LiveIndicator: View {
+    let phase: String?
+    let color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private enum Motion { case wave, pulse, still }
+    private var motion: Motion {
+        switch phase {
+        case "listening", "speaking", "transcribing": return .wave
+        case "thinking", "working", "starting": return .pulse
+        default: return .still
+        }
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion || motion == .still)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(0..<5, id: \.self) { i in
+                    Rectangle().fill(color).frame(width: 3, height: height(bar: i, time: t))
+                }
+            }
+            .frame(width: 23, height: 16)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func height(bar i: Int, time t: Double) -> CGFloat {
+        switch motion {
+        case .still: return 4
+        case .pulse: return 4 + 6 * CGFloat(0.5 + 0.5 * sin(t * 4))
+        case .wave: return 4 + 12 * CGFloat(0.5 + 0.5 * sin(t * 9 + Double(i) * 0.9))
+        }
     }
 }
 

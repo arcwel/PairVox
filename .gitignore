@@ -11,3 +11,5 @@ xcuserdata/
 Package.resolved.bak
 PairVox.xcodeproj/
 ios/PairVoxPhone.xcodeproj/
+/dist-*/
+/.worktrees/

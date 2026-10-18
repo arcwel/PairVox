@@ -62,6 +62,10 @@ public actor ConversationEngine {
     private var queueOrder: [Int] = []
     /// Utterances that count toward "first audio" (everything except fillers).
     private var measuredIDs: Set<Int> = []
+    /// When the newest message went to Claude, kept until its answer is first heard. `sendTimes` is cleared when
+    /// Claude finishes the turn, and an answer often starts playing after that, so `firstAudio` alone missed it.
+    /// Read by `turn.firstSound`, the log line the v0.1 voice check measures from.
+    private var firstSoundPendingSince: Date?
     private var holdSpeech = false
     private var interruptedRemainder: [Utterance] = []
     /// While the user is talking over us and the output can hold its place, speech is paused rather than discarded, so a
@@ -309,6 +313,14 @@ public actor ConversationEngine {
         if snapshot.pendingPermission != nil, advisor != nil, text.hasSuffix("?") {
             appendEntry(.user, text, status: .done)
             askAboutPending(text, spoken: true)
+            return
+        }
+        // One or two words that are neither a yes nor a no are a misheard answer, not an instruction: ask again rather
+        // than refuse. (On 2026-10-17 a spoken answer the recognizer got wrong denied a request twice.)
+        if snapshot.pendingPermission != nil, VoiceCommand.normalize(text).count <= 2 {
+            appendEntry(.user, text, status: .done)
+            log.log(.info, .engine, "permission.unclearAnswer", ["words": .int(VoiceCommand.normalize(text).count)])
+            speak([make("Sorry, was that a yes or a no?", .notice)], record: false, force: true)
             return
         }
         // Speaking over a permission prompt with something else = "no, do this instead".
@@ -1113,6 +1125,10 @@ public actor ConversationEngine {
             if measuredIDs.contains(id), latency.firstAudio == nil, let start = sendTimes.first {
                 latency.firstAudio = Date().timeIntervalSince(start)
             }
+            if measuredIDs.contains(id), let since = firstSoundPendingSince {
+                firstSoundPendingSince = nil
+                log.log(.info, .engine, "turn.firstSound", ["sinceSendMs": .int(Int(Date().timeIntervalSince(since) * 1000))])
+            }
         case .finished(let id), .failed(let id, _):
             startedIDs.remove(id)
             if case .failed(_, let why) = event {
@@ -1147,6 +1163,7 @@ public actor ConversationEngine {
             resetTurnState()
         }
         sendTimes.append(Date())
+        firstSoundPendingSince = sendTimes.last
         snapshot.isClaudeWorking = true
         scheduleAcknowledgement()
         recomputePhase()

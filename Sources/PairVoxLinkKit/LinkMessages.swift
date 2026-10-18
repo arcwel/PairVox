@@ -50,12 +50,28 @@ public struct LinkSnapshot: Codable, Sendable, Equatable {
     public var voiceNeedsScreen: Bool = false
     /// Identifies the project the Mac is showing, so the same request keeps one identity when the Mac switches projects.
     public var activeProjectID: String?
+    /// Every project open on the Mac, for the phone's project switcher. Optional so either side can be older.
+    public var projects: [LinkProject]?
     public init(phase: String, project: String, transcriptTail: [LinkEntry], request: LinkRequest?, queuedRequests: Int,
                 others: [LinkRequest] = [], voiceHighRisk: Bool = false, voiceNeedsScreen: Bool = false, activeProjectID: String? = nil) {
         self.activeProjectID = activeProjectID
         self.phase = phase; self.project = project; self.transcriptTail = transcriptTail
         self.request = request; self.queuedRequests = queuedRequests
         self.others = others; self.voiceHighRisk = voiceHighRisk; self.voiceNeedsScreen = voiceNeedsScreen
+    }
+}
+
+/// One project open on the Mac, as the phone's project switcher shows it.
+public struct LinkProject: Codable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+    public var isActive: Bool
+    /// A request or a folder offer is waiting there.
+    public var needsAttention: Bool
+    /// Replies the person has not heard yet.
+    public var missed: Int
+    public init(id: String, name: String, isActive: Bool, needsAttention: Bool, missed: Int) {
+        self.id = id; self.name = name; self.isActive = isActive; self.needsAttention = needsAttention; self.missed = missed
     }
 }
 
@@ -98,6 +114,8 @@ extension LinkSnapshot {
         out.request = request.map(boundRequest)
         // Only the first few other-project requests are sent; the rest wait on the Mac.
         out.others = Array(others.prefix(10)).map(boundRequest)
+        out.projects = projects.map { Array($0.prefix(20)).map { p in
+            var q = p; q.name = Self.cut(p.name, fieldBytes).text; q.id = Self.cut(p.id, 128).text; return q } }
         // Whatever is still too big loses its oldest transcript entries first.
         while out.transcriptTail.count > 1, (try? JSONEncoder().encode(out).count) ?? Int.max > Self.maxEncodedBytes {
             out.transcriptTail.removeFirst()
@@ -132,4 +150,9 @@ public enum ClientMessage: Codable, Sendable, Equatable {
     case deny(requestID: String, projectID: String? = nil)
     case interrupt
     case ping
+    /// Make this project the active one on the Mac (the same as switching in the Mac's project list).
+    case switchProject(projectID: String)
+    /// What the phone heard while a request was waiting. The Mac decides whether it is an answer, with the same
+    /// parser and the same voice rules as on the Mac.
+    case spokenAnswer(requestID: String, text: String, projectID: String? = nil)
 }

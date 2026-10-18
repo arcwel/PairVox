@@ -31,6 +31,7 @@ final class FakeEngine: LinkEngine, @unchecked Sendable {
     func approve(requestID: String, projectID: String?) async { add("approve:\(requestID)" + (projectID.map { "@\($0)" } ?? "")) }
     func deny(requestID: String, projectID: String?) async { add("deny:\(requestID)" + (projectID.map { "@\($0)" } ?? "")) }
     func interrupt() async { add("interrupt") }
+    func switchProject(_ projectID: String) async -> Bool { add("switch:\(projectID)"); return true }
 }
 
 final class Clock: @unchecked Sendable {
@@ -343,6 +344,70 @@ final class TCPLoopbackTests: XCTestCase {
         try await client.send(.approve(requestID: "R1", method: .voice, auth: .none))
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1"])
+    }
+
+    /// This Mac's first IPv4 address that is not loopback (a Wi-Fi or Ethernet address), if it has one.
+    static func lanAddress() -> String? {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return nil }
+        defer { freeifaddrs(list) }
+        var node: UnsafeMutablePointer<ifaddrs>? = first
+        while let n = node {
+            defer { node = n.pointee.ifa_next }
+            guard let a = n.pointee.ifa_addr, a.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            var addr = a.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+            inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN))
+            let text = String(cString: buf)
+            if !text.hasPrefix("127.") { return text }
+        }
+        return nil
+    }
+
+    /// Whether a TCP connection to host:port is accepted within two seconds.
+    static func accepts(_ host: String, _ port: UInt16) async -> Bool {
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        let result = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let once = OneShot()
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: if once.take() { cont.resume(returning: true) }
+                case .failed, .waiting, .cancelled: if once.take() { cont.resume(returning: false) }
+                default: break
+                }
+            }
+            connection.start(queue: .global())
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if once.take() { cont.resume(returning: false) } }
+        }
+        connection.cancel()
+        return result
+    }
+
+    /// Review task 3.2: a listener bound to one address is not open on the others. Before, it listened on every
+    /// interface and the peer address check was the only gate; a carrier NAT or a forward could get past that.
+    func testABoundListenerIsClosedOnOtherInterfaces() async throws {
+        guard let lan = Self.lanAddress() else { throw XCTSkip("no non-loopback IPv4 address on this machine") }
+        let bound = try TCPListener(port: 0, bindTo: "127.0.0.1", onConnection: { _ in })
+        try await bound.start()
+        defer { bound.stop() }
+        let reachedLoopback = await Self.accepts("127.0.0.1", bound.port)
+        let reachedLAN = await Self.accepts(lan, bound.port)
+        XCTAssertTrue(reachedLoopback, "open on the address it is bound to")
+        XCTAssertFalse(reachedLAN, "closed on \(lan)")
+
+        // Control: an unbound listener is open on the LAN address, so the check above means something here.
+        let open = try TCPListener(port: 0, onConnection: { _ in })
+        try await open.start()
+        defer { open.stop() }
+        let reachedOpenLAN = await Self.accepts(lan, open.port)
+        XCTAssertTrue(reachedOpenLAN, "an unbound listener is reachable on \(lan)")
+    }
+
+    /// Only a Tailscale tunnel interface counts as the tailnet: the same 100.64/10 range on Wi-Fi is a carrier NAT.
+    func testOnlyATunnelInterfaceCarriesTheTailnetAddress() {
+        XCTAssertTrue(TailnetAddress.isTunnelInterface("utun4"))
+        XCTAssertFalse(TailnetAddress.isTunnelInterface("en0"))
+        XCTAssertFalse(TailnetAddress.isTunnelInterface("bridge100"))
     }
 }
 
@@ -856,6 +921,85 @@ final class LateReturnTransport: LinkTransport, @unchecked Sendable {
     }
     func receive() async throws -> Data { try await inner.receive() }
     func close() async { await inner.close() }
+}
+
+/// Owner requirement, 2026-10-17: switch projects from the phone.
+final class PhoneProjectSwitchTests: XCTestCase {
+    func testThePhoneCanSwitchToAProjectItWasShownAndNothingElse() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var snap = h.snapshot(); snap.activeProjectID = "A"
+        snap.projects = [LinkProject(id: "A", name: "api", isActive: true, needsAttention: false, missed: 0),
+                         LinkProject(id: "B", name: "website", isActive: false, needsAttention: true, missed: 2)]
+        await host.publish(snap)
+        let got = try await h.nextSnapshot(client)
+        XCTAssertEqual(got.projects?.map(\.name), ["api", "website"], "the phone is told which projects are open")
+        try await client.send(.switchProject(projectID: "B"))
+        let deadline = Date().addingTimeInterval(2)
+        while engine.calls.isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(engine.calls, ["switch:B"])
+        // An id the phone was never shown is refused, and the app is not asked.
+        try await client.send(.switchProject(projectID: "not-open"))
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(engine.calls, ["switch:B"])
+        withExtendedLifetime(host) {}
+    }
+}
+
+/// The phone's spoken answers are decided by the Mac with the Mac's parser and voice rules.
+final class PhoneSpokenAnswerTests: XCTestCase {
+    func connected(_ request: LinkRequest) async throws -> (LinkHost, FakeEngine, LinkClient) {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var snap = h.snapshot(); snap.request = request
+        await host.publish(snap)
+        _ = try await h.nextSnapshot(client)
+        return (host, engine, client)
+    }
+
+    func waitForCall(_ engine: FakeEngine) async {
+        let deadline = Date().addingTimeInterval(2)
+        while engine.calls.isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+    }
+
+    func testAllowWithAFullStopApprovesARequestTheMacAllowsByVoice() async throws {
+        let (host, engine, client) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+                                                                       risk: "medium", reasons: [], voiceApprovable: true))
+        try await client.send(.spokenAnswer(requestID: "R", text: "Allow."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"])
+        withExtendedLifetime(host) {}
+    }
+
+    func testASpokenAllowCannotApproveWhatTheMacKeepsForTheScreen() async throws {
+        let (host, engine, client) = try await connected(LinkRequest(requestID: "H", summary: "Run: git push", spokenPrompt: "x",
+                                                                       risk: "high", reasons: [], voiceApprovable: false))
+        try await client.send(.spokenAnswer(requestID: "H", text: "Allow."))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty)
+        withExtendedLifetime(host) {}
+    }
+
+    func testNoDeniesAndAMumbleIsAskedAgain() async throws {
+        let (host, engine, client) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+                                                                       risk: "medium", reasons: [], voiceApprovable: true))
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yasp."))
+        var askedAgain = false
+        let deadline = Date().addingTimeInterval(2)
+        while !askedAgain, Date() < deadline {
+            if case .speak(let t) = try await client.receive() { askedAgain = t.contains("yes or a no") }
+        }
+        XCTAssertTrue(askedAgain)
+        XCTAssertTrue(engine.calls.isEmpty, "a mumble answers nothing")
+        try await client.send(.spokenAnswer(requestID: "R", text: "No."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["deny:R"])
+        withExtendedLifetime(host) {}
+    }
 }
 
 final class ShownBeforeSentTests: XCTestCase {

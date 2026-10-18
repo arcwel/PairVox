@@ -17,6 +17,10 @@ final class ActiveEngineBox: @unchecked Sendable {
     func setActive(_ e: ConversationEngine?) { lock.lock(); active = e; lock.unlock() }
     func register(_ id: String, _ e: ConversationEngine) { lock.lock(); byProject[id] = e; lock.unlock() }
     func unregister(_ id: String) { lock.lock(); byProject[id] = nil; lock.unlock() }
+    /// Switches the Mac to a project, as its own project list does; set by the app.
+    private var switcher: (@Sendable (String) async -> Bool)?
+    func setSwitcher(_ handler: (@Sendable (String) async -> Bool)?) { lock.lock(); switcher = handler; lock.unlock() }
+    var switchHandler: (@Sendable (String) async -> Bool)? { lock.lock(); defer { lock.unlock() }; return switcher }
     func engine(for projectID: String?) -> ConversationEngine? {
         lock.lock(); defer { lock.unlock() }
         if let projectID { return byProject[projectID] }
@@ -31,6 +35,7 @@ struct ActiveEngineLink: LinkEngine {
     func approve(requestID: String, projectID: String?) async { await box.engine(for: projectID)?.approvePending(always: false, requestID: requestID) }
     func deny(requestID: String, projectID: String?) async { await box.engine(for: projectID)?.denyPending(requestID: requestID) }
     func interrupt() async { await box.engine(for: nil)?.interruptClaude() }
+    func switchProject(_ projectID: String) async -> Bool { await box.switchHandler?(projectID) ?? false }
 }
 
 /// The Mac side of "phone link": the switch, the listener, the pairing screen and the list of paired phones.
@@ -103,7 +108,11 @@ final class PhoneLinkModel: ObservableObject {
             await host.setConnectionObserver { [weak self] count in Task { @MainActor in self?.connectionsChanged(count) } }
         }
         do {
-            let l = try TCPListener(port: UInt16(wanted), allow: { TailnetAddress.isAllowedPeer($0) }) { transport in
+            // Bound to the Tailscale address (or loopback for a userspace forward), not every interface: the port is
+            // then closed on Wi-Fi, Ethernet and hotspots, and the address check below is a second gate, not the only one.
+            let bind = TailnetAddress.listenAddress()
+            log.log(.info, .app, "phoneLink.bind", ["address": .string(bind)])
+            let l = try TCPListener(port: UInt16(wanted), bindTo: bind, allow: { TailnetAddress.isAllowedPeer($0) }) { transport in
                 Task { await host.serve(transport) }
             }
             listener = l
@@ -167,10 +176,12 @@ final class PhoneLinkModel: ObservableObject {
 
     // MARK: Engine -> phone
 
-    func publish(_ snapshot: EngineSnapshot, project: String?, others: [InboxItem] = [], voiceHighRisk: Bool = false, voiceNeedsScreen: Bool = false, activeProjectID: String? = nil) {
+    func publish(_ snapshot: EngineSnapshot, project: String?, others: [InboxItem] = [], voiceHighRisk: Bool = false, voiceNeedsScreen: Bool = false, activeProjectID: String? = nil,
+                 projects: [LinkProject] = []) {
         guard let host else { return }
-        let link = EngineLink.snapshot(from: snapshot, project: project.map { ($0 as NSString).lastPathComponent } ?? "",
+        var link = EngineLink.snapshot(from: snapshot, project: project.map { ($0 as NSString).lastPathComponent } ?? "",
                                        others: others, voiceHighRisk: voiceHighRisk, voiceNeedsScreen: voiceNeedsScreen, activeProjectID: activeProjectID)
+        link.projects = projects
         // One task chain keeps snapshots in the order the engine produced them.
         let previous = publishChain
         publishChain = Task { _ = await previous?.value; await host.publish(link) }
@@ -180,6 +191,18 @@ final class PhoneLinkModel: ObservableObject {
         }
     }
     private var publishChain: Task<Void, Never>?
+
+    /// Says a sentence on every connected phone, in the order sentences arrive (a reply is many sentences). The iPhone
+    /// PRD's P0 item "spoken replies on the phone": the host could send `.speak` but nothing in the app called it until
+    /// 2026-10-17, so the phone read out only request prompts.
+    nonisolated func speakOnPhones(_ text: String) {
+        Task { @MainActor in
+            guard let host = self.host, self.connected > 0 else { return }
+            let previous = self.speakChain
+            self.speakChain = Task { _ = await previous?.value; await host.speak(text) }
+        }
+    }
+    private var speakChain: Task<Void, Never>?
 
     // MARK: Pairing
 

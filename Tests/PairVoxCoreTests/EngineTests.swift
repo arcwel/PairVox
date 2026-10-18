@@ -370,6 +370,33 @@ final class ConversationEngineTests: XCTestCase {
         XCTAssertNil(snap.pendingPermission)
     }
 
+    /// Owner report, 2026-10-17: a spoken answer the recognizer got wrong denied the request twice. One or two words
+    /// that are neither yes nor no now ask again; a real redirect ("no, edit b instead") still refuses with feedback.
+    func testAnUnclearShortAnswerAsksAgainInsteadOfDenying() async {
+        await engine.submit("Fix it")
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "p1", toolName: "Edit",
+                                                            input: ["file_path": "/Users/dev/app/a.swift"])))
+        await settle()
+        await engine.submit("Yasp.")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "a misheard word must not answer the request")
+        XCTAssertEqual(output.queue.last?.text, "Sorry, was that a yes or a no?")
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "p1", "still waiting")
+        await engine.submit("yes")
+        XCTAssertEqual(backend.responses.first?.1, .allow)
+
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "p2", toolName: "Edit",
+                                                            input: ["file_path": "/Users/dev/app/b.swift"])))
+        await settle()
+        await engine.submit("Edit the other file instead")
+        await settle()
+        snap = await engine.snapshot
+        XCTAssertNil(snap.pendingPermission)
+        XCTAssertEqual(backend.responses.last?.0, "p2")
+        if case .deny = backend.responses.last?.1 {} else { XCTFail("a longer redirect still refuses with feedback") }
+    }
+
     func testRepliesAfterSpokenApprovalAreNotSwallowed() async {
         await engine.submit("Fix it")
         backend.emit(.permissionRequested(PermissionRequest(requestID: "p9", toolName: "Edit",

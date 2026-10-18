@@ -26,6 +26,13 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
     private var currentSessionID: String?
     private var stoppedByUser = false
     private var requestCounter = 0
+    /// Every write to the child's stdin goes through here, in order and never under `lock`. A write blocks when the
+    /// child is not reading stdin and its pipe is full; holding `lock` through that also stopped the stdout reader
+    /// (which needs `lock`) while the child waited for its stdout to be read: a three-way stall nothing could break.
+    private let writeQueue = DispatchQueue(label: "app.pairvox.cli.stdin")
+    /// How long a finished process may keep its output open before `.processExited` is reported anyway (a tool's
+    /// child process can inherit the pipe).
+    static let outputDrainTimeout: TimeInterval = 2
     /// Diagnostic hook: every raw stdout line (useful for logging/fixtures).
     public var rawLineObserver: (@Sendable (Data) -> Void)?
 
@@ -89,10 +96,15 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
         translator = EventTranslator()
         stderrTail = Data()
 
+        // The exit is reported only once both output streams have reached end-of-file (or a short time has passed):
+        // the termination handler can run while the last lines, often the turn's `result`, are still unread, and
+        // reporting the exit first made a turn that succeeded look like a crash.
+        let drained = StreamsDrained(count: 2)
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
             if data.isEmpty {
                 h.readabilityHandler = nil
+                drained.end(0)
                 return
             }
             self?.handleStdout(data)
@@ -101,12 +113,19 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
             let data = h.availableData
             if data.isEmpty {
                 h.readabilityHandler = nil
+                drained.end(1)
                 return
             }
             self?.handleStderr(data)
         }
         p.terminationHandler = { [weak self] proc in
-            self?.handleTermination(proc)
+            // A strong reference for the hop: Swift 6.0 (the Linux CI toolchain) refuses a captured weak `self` var in
+            // a concurrently running closure. The session is still referenced by its owner while its process runs.
+            guard let session = self else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                drained.wait(timeout: Self.outputDrainTimeout)
+                session.handleTermination(proc)
+            }
         }
 
         let log = DiagnosticLog.shared
@@ -145,42 +164,51 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
 
     public func send(_ text: String) throws {
         lock.lock()
-        defer { lock.unlock() }
-        if process?.isRunning != true {
-            try startLocked()
-        }
-        try writeLocked(OutboundMessage.userText(text))
+        let handle: FileHandle?
+        do {
+            if process?.isRunning != true { try startLocked() }
+            handle = stdinHandle
+        } catch { lock.unlock(); throw error }
+        lock.unlock()
+        try write(OutboundMessage.userText(text), to: handle)
     }
 
     public func interrupt() throws {
         lock.lock()
-        defer { lock.unlock() }
-        guard process?.isRunning == true else { return }
+        guard process?.isRunning == true else { lock.unlock(); return }
         translator.interruptPending = true
-        try writeLocked(OutboundMessage.interrupt(requestID: nextRequestIDLocked("interrupt")))
+        let message = OutboundMessage.interrupt(requestID: nextRequestIDLocked("interrupt"))
+        let handle = stdinHandle
+        lock.unlock()
+        try write(message, to: handle)
     }
 
     public func respond(to request: PermissionRequest, decision: PermissionDecision) throws {
         lock.lock()
-        defer { lock.unlock() }
         if case .deny(_, true) = decision { translator.interruptPending = true }
-        try writeLocked(OutboundMessage.permissionResponse(for: request, decision: decision))
+        let handle = stdinHandle
+        lock.unlock()
+        try write(OutboundMessage.permissionResponse(for: request, decision: decision), to: handle)
     }
 
     public func setPermissionMode(_ mode: PermissionMode) throws {
         lock.lock()
-        defer { lock.unlock() }
         config.permissionMode = mode
-        guard process?.isRunning == true else { return }
-        try writeLocked(OutboundMessage.setPermissionMode(mode, requestID: nextRequestIDLocked("mode")))
+        guard process?.isRunning == true else { lock.unlock(); return }
+        let message = OutboundMessage.setPermissionMode(mode, requestID: nextRequestIDLocked("mode"))
+        let handle = stdinHandle
+        lock.unlock()
+        try write(message, to: handle)
     }
 
     public func setModel(_ model: String?) throws {
         lock.lock()
-        defer { lock.unlock() }
         config.model = model
-        guard process?.isRunning == true else { return }
-        try writeLocked(OutboundMessage.setModel(model, requestID: nextRequestIDLocked("model")))
+        guard process?.isRunning == true else { lock.unlock(); return }
+        let message = OutboundMessage.setModel(model, requestID: nextRequestIDLocked("model"))
+        let handle = stdinHandle
+        lock.unlock()
+        try write(message, to: handle)
     }
 
     // MARK: Internals
@@ -190,12 +218,15 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
         return "pairvox-\(prefix)-\(requestCounter)"
     }
 
-    private func writeLocked(_ data: Data) throws {
-        guard let h = stdinHandle else { throw SessionError.notRunning }
-        do {
-            try h.write(contentsOf: data)
-        } catch {
-            throw SessionError.writeFailed(error.localizedDescription)
+    /// Writes one message to the child's stdin, in order with every other write, without holding `lock`.
+    private func write(_ data: Data, to handle: FileHandle?) throws {
+        guard let h = handle else { throw SessionError.notRunning }
+        try writeQueue.sync {
+            do {
+                try h.write(contentsOf: data)
+            } catch {
+                throw SessionError.writeFailed(error.localizedDescription)
+            }
         }
     }
 
@@ -222,8 +253,13 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
             }
             events += translator.translate(msg)
         }
-        for reply in replies { try? writeLocked(reply) }
+        let handle = stdinHandle
         lock.unlock()
+        // Queued, not waited for: the reader must keep reading stdout even when stdin is full.
+        if let handle, !replies.isEmpty {
+            let toSend = replies   // a constant: Swift 6.0 refuses capturing the var in a concurrent closure
+            writeQueue.async { for reply in toSend { try? handle.write(contentsOf: reply) } }
+        }
         for e in events { continuation.yield(e) }
     }
 
@@ -256,4 +292,25 @@ public final class ClaudeCLISession: SessionBackend, @unchecked Sendable {
         }
         continuation.yield(.processExited(code: proc.terminationStatus, stderrTail: tailText))
     }
+}
+
+/// Counts output streams reaching end-of-file, each at most once. Also used by `ProcessRunner`.
+final class StreamsDrained: @unchecked Sendable {
+    private let lock = NSLock()
+    private var open: Set<Int>
+    private let group = DispatchGroup()
+
+    init(count: Int) {
+        open = Set(0..<count)
+        for _ in 0..<count { group.enter() }
+    }
+
+    func end(_ stream: Int) {
+        lock.lock()
+        let first = open.remove(stream) != nil
+        lock.unlock()
+        if first { group.leave() }
+    }
+
+    func wait(timeout: TimeInterval) { _ = group.wait(timeout: .now() + timeout) }
 }
