@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The iPhone speaks with the Mac's own voice. Each sentence is sent to the phone as AAC audio when it starts playing on the Mac (about 9.5 KB per second of speech), and the phone plays it in order, so replies sound the same on both devices instead of the iPhone's text-to-speech. When the Mac stops speaking (you talked over it, or the turn was interrupted) the phone stops too. Text-to-speech on the phone remains for its own request prompts and for anything without audio. The Mac and phone apps must be updated together.
 - A turn that finished as Claude Code exited no longer reads as a crash. The exit used to be reported while its last lines, often the turn's result, were still unread. Both output streams are now read to the end first, for up to two seconds.
 - Typing or pasting a long message can no longer freeze a session. A write to Claude Code's input held the session lock, which the output reader needs, so a child that was not reading its input stopped all output and the Stop command. Writes now run in order on their own queue, outside the lock.
 - PairVox no longer hangs at launch when a shell startup file leaves a background process running. Reading the login shell waited for that process to close its output, with no time limit. It now waits at most one second after the shell exits.

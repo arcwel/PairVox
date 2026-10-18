@@ -3,18 +3,24 @@
 import AVFoundation
 import Speech
 
-/// Speaks replies with the best voice installed on the phone. Keeps one audio session that works with earbuds and
-/// with the screen locked. Reports when it starts and when everything queued has been said, so listening can pause
-/// while the phone talks (it would otherwise hear itself) and resume after.
-final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate {
+/// Says things on the phone, one at a time, in the order they arrive: the Mac's own voice as audio clips (the
+/// same sound as on the Mac, owner 2026-10-18: the phone's text-to-speech sounded robotic), and plain text with the
+/// best installed iOS voice for what has no audio (request prompts the phone speaks itself, notices, an older Mac).
+/// Reports when it starts and when the queue is empty, so listening pauses while the phone talks.
+final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
+    private enum Item { case text(String), audio(Data) }
     private let synthesizer = AVSpeechSynthesizer()
+    private var queue: [Item] = []
+    private var player: AVAudioPlayer?
+    private var busy = false
     var onSpeakingChanged: ((Bool) -> Void)?
     private(set) var isSpeaking = false
-    private var queued = 0
 
-    /// The voice used, and whether it is only the basic one (the robotic-sounding default; 2026-10-18 owner report).
+    /// The voice used for text, and whether it is only the basic one.
     let voice: AVSpeechSynthesisVoice?
     var hasNaturalVoice: Bool { (voice?.quality ?? .default) != .default }
+    /// True once the Mac has sent its own voice; then the basic-voice hint no longer matters.
+    private(set) var heardMacVoice = false
 
     override init() {
         voice = PhoneSpeaker.bestVoice()
@@ -34,23 +40,61 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate {
         return near.max { rank($0.quality) < rank($1.quality) } ?? AVSpeechSynthesisVoice(language: language)
     }
 
-    /// The audio session is switched on only when there is something to say, so the app is not kept alive for nothing.
     func say(_ text: String) {
         guard !text.isEmpty else { return }
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
-        try? session.setActive(true)
-        let u = AVSpeechUtterance(string: text)
-        u.voice = voice
-        u.prefersAssistiveTechnologySettings = true
-        queued += 1
-        synthesizer.speak(u)
+        queue.append(.text(text)); next()
+    }
+
+    /// One sentence of the Mac's voice, as an encoded audio file.
+    func play(_ data: Data) {
+        guard !data.isEmpty else { return }
+        heardMacVoice = true
+        queue.append(.audio(data)); next()
     }
 
     func stop() {
+        queue.removeAll()
+        player?.stop(); player = nil
         synthesizer.stopSpeaking(at: .immediate)
-        queued = 0
+        busy = false
         setSpeaking(false)
+    }
+
+    /// The audio session is switched on only when there is something to say, so the app is not kept alive for nothing.
+    private func activateSession() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
+        try? session.setActive(true)
+    }
+
+    private func next() {
+        guard !busy else { return }
+        guard !queue.isEmpty else { setSpeaking(false); return }
+        busy = true
+        activateSession()
+        setSpeaking(true)
+        switch queue.removeFirst() {
+        case .text(let text):
+            let u = AVSpeechUtterance(string: text)
+            u.voice = voice
+            u.prefersAssistiveTechnologySettings = true
+            synthesizer.speak(u)
+        case .audio(let data):
+            do {
+                let p = try AVAudioPlayer(data: data)
+                p.delegate = self
+                player = p
+                if !p.play() { finished() }
+            } catch {
+                finished()   // an unplayable clip is skipped, not allowed to stall the queue
+            }
+        }
+    }
+
+    private func finished() {
+        player = nil
+        busy = false
+        next()
     }
 
     private func setSpeaking(_ on: Bool) {
@@ -59,22 +103,20 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate {
         onSpeakingChanged?(on)
     }
 
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { self.setSpeaking(true) }
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async { if self.player === player { self.finished() } }
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        DispatchQueue.main.async { if self.player === player { self.finished() } }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async {
-            self.queued = max(0, self.queued - 1)
-            if self.queued == 0 { self.setSpeaking(false) }
-        }
+        DispatchQueue.main.async { if self.busy, self.player == nil { self.finished() } }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async {
-            self.queued = max(0, self.queued - 1)
-            if self.queued == 0 { self.setSpeaking(false) }
-        }
+        DispatchQueue.main.async { if self.busy, self.player == nil { self.finished() } }
     }
 }
 

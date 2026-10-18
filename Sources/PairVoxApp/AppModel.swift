@@ -229,13 +229,15 @@ final class AppModel: ObservableObject {
         let voiceOutput = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
         // Silent until the user is in this project: only the active project may use the speakers.
         let gate = GatedSpeechOutput(inner: voiceOutput, active: false)
-        // What this project says aloud is said on a connected phone too. Request prompts are left out: the phone
-        // speaks those itself, from the request it is shown, with its own rules for what may be answered by voice.
+        // What this project says aloud is played on a connected phone too, as the same audio (the Mac's voice, not
+        // the phone's text-to-speech). Only the project in front reaches this output, the gate silences the rest.
+        // Request prompts are left out: the phone speaks those itself, with its own rules for voice answers.
         let phoneLink = phone
-        gate.setMirror { utterance in
+        voiceOutput.onPlay = { utterance, buffer in
             guard utterance.kind != .prompt else { return }
-            phoneLink.speakOnPhones(utterance.text)
+            phoneLink.speakAudioOnPhones(buffer, text: utterance.text)
         }
+        voiceOutput.onStopped = { phoneLink.stopSpeakingOnPhones() }
         let engine = ConversationEngine(configuration: EngineConfiguration(settings: settings, project: projectPath),
                                         authKind: auth.kind, output: gate, advisor: advisor) { resume in
             var cfg = launch

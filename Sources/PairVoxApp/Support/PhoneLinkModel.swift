@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import AppKit
+import AVFoundation
 import CoreImage.CIFilterBuiltins
 import Foundation
 import Network
 import PairVoxCore
 import PairVoxLink
 import PairVoxLinkKit
+import PairVoxVoice
 import SwiftUI
 
 /// The engines the phone can reach: the one on screen, and any open project by its ID (for answering a request
@@ -218,6 +220,30 @@ final class PhoneLinkModel: ObservableObject {
         }
     }
     private var speakChain: Task<Void, Never>?
+
+    /// Plays one sentence of the Mac's voice on connected phones, in the order sentences start on the Mac. Encoding
+    /// runs off the main thread; a sentence that cannot be encoded goes as text.
+    nonisolated func speakAudioOnPhones(_ buffer: AVAudioPCMBuffer, text: String) {
+        Task { @MainActor in
+            guard let host = self.host, self.connected > 0 else { return }
+            let previous = self.speakChain
+            self.speakChain = Task {
+                _ = await previous?.value
+                let data = await Task.detached(priority: .userInitiated) { PhoneAudioEncoder.encode(buffer) }.value
+                if let data { await host.speakAudio(format: PhoneAudioEncoder.format, data: data, text: text) }
+                else { await host.speak(text) }
+            }
+        }
+    }
+
+    /// The Mac stopped speaking: phones stop too. Queued after any sentence already on its way, so it lands last.
+    nonisolated func stopSpeakingOnPhones() {
+        Task { @MainActor in
+            guard let host = self.host, self.connected > 0 else { return }
+            let previous = self.speakChain
+            self.speakChain = Task { _ = await previous?.value; await host.stopSpeaking() }
+        }
+    }
 
     // MARK: Pairing
 

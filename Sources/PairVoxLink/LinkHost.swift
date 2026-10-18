@@ -90,6 +90,25 @@ public actor LinkHost {
     /// The paired devices that have a live connection right now.
     public func connectedDeviceIDs() -> Set<String> { Set(connections.values.map(\.deviceID)) }
 
+    /// Largest audio sent in one message; bigger sentences go as text. Base64 inside JSON grows it by a third, and a
+    /// frame may be at most 1 MiB.
+    public static let maxSpeakAudioBytes = 512 * 1024
+
+    /// Plays a sentence of the Mac's voice on every connected phone; too large or empty audio goes as its text.
+    public func speakAudio(format: String, data: Data, text rawText: String) async {
+        let text = LinkSnapshot.cut(rawText, 8192).text
+        guard !data.isEmpty, data.count <= Self.maxSpeakAudioBytes else { await speak(text); return }
+        for (id, c) in connections {
+            guard await pairing.activeDevice(c.deviceID) != nil else { await dropDevice(c.deviceID); continue }
+            enqueue(.speakAudio(format: format, data: data, text: text), to: c, id: id)
+        }
+    }
+
+    /// Tells every connected phone the Mac stopped speaking.
+    public func stopSpeaking() async {
+        for (id, c) in connections { enqueue(.stopSpeaking, to: c, id: id) }
+    }
+
     public func speak(_ rawText: String) async {
         let text = LinkSnapshot.cut(rawText, 8192).text
         for (id, c) in connections {

@@ -1002,6 +1002,52 @@ final class PhoneSpokenAnswerTests: XCTestCase {
     }
 }
 
+/// The Mac's voice reaches the phone as audio (owner, 2026-10-18: the phone's own voice sounded robotic).
+final class PhoneSpeakAudioTests: XCTestCase {
+    func connected() async throws -> (LinkHost, LinkClient) {
+        let h = LinkTests()
+        let (host, _, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        await host.publish(h.snapshot())
+        _ = try await h.nextSnapshot(client)
+        return (host, client)
+    }
+
+    func nextSpoken(_ client: LinkClient) async throws -> HostMessage {
+        while true {
+            let m = try await client.receive()
+            switch m {
+            case .speak, .speakAudio, .stopSpeaking: return m
+            default: continue
+            }
+        }
+    }
+
+    func testAudioArrivesWholeAndInOrderThenTheStop() async throws {
+        let (host, client) = try await connected()
+        let first = Data((0..<70_000).map { UInt8($0 % 251) })   // about the size of a long sentence
+        let second = Data([1, 2, 3])
+        await host.speakAudio(format: "m4a-aac", data: first, text: "One.")
+        await host.speakAudio(format: "m4a-aac", data: second, text: "Two.")
+        await host.stopSpeaking()
+        let a = try await nextSpoken(client), b = try await nextSpoken(client), c = try await nextSpoken(client)
+        XCTAssertEqual(a, .speakAudio(format: "m4a-aac", data: first, text: "One."))
+        XCTAssertEqual(b, .speakAudio(format: "m4a-aac", data: second, text: "Two."))
+        XCTAssertEqual(c, .stopSpeaking)
+        withExtendedLifetime(host) {}
+    }
+
+    func testAudioTooLargeForAFrameIsSentAsText() async throws {
+        let (host, client) = try await connected()
+        let tooBig = Data(count: LinkHost.maxSpeakAudioBytes + 1)
+        await host.speakAudio(format: "m4a-aac", data: tooBig, text: "A very long sentence.")
+        let m = try await nextSpoken(client)
+        XCTAssertEqual(m, .speak("A very long sentence."))
+        withExtendedLifetime(host) {}
+    }
+}
+
 final class ShownBeforeSentTests: XCTestCase {
     /// The race behind the CI failures of the cross-project phone tests: the host marked a request as shown only
     /// after its send returned, so a phone that answered while the host was still inside that send was refused
