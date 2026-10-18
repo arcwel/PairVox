@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import Foundation
+import PairVoxCore
 import PairVoxLinkKit
 
 /// What the host does to the engine on the phone's behalf. The real implementation wraps `ConversationEngine`;
@@ -13,10 +14,13 @@ public protocol LinkEngine: Sendable {
     /// False when there is nothing to send text to (the Mac has no project open). The phone is told, instead of its
     /// message going nowhere without a word.
     func canSubmit() async -> Bool
+    /// Makes the project with this id the active one. False when there is no such open project.
+    func switchProject(_ projectID: String) async -> Bool
 }
 
 public extension LinkEngine {
     func canSubmit() async -> Bool { true }
+    func switchProject(_ projectID: String) async -> Bool { false }
 }
 
 /// The Mac side of the phone link. It enforces every rule itself: the phone's messages are requests, never
@@ -355,6 +359,43 @@ public actor LinkHost {
             }
             log("link.submit \(text.count) chars")   // the length only; the text itself is the person's
             await engine.submit(text)
+        case .spokenAnswer(let requestID, let text, let projectID):
+            guard text.count <= 4000 else { return }
+            let target = projectID ?? latest?.activeProjectID
+            switch VoiceCommand.spokenAnswer(text) {
+            case .approve, .approveAlways:
+                // "Always allow" from a phone is a plain allow: the session-wide rule needs the Mac.
+                if let reason = approvalRefusal(requestID, projectID, .voice, .none, c) {
+                    log("link.approvalRefused \(reason)")
+                    enqueue(.refused(reason), to: c, id: id)
+                    if let latest { await push(latest, to: c, id: id) }
+                    return
+                }
+                log("link.approved \(requestID) via voice none\(projectID == nil ? "" : " (other project)")")
+                await engine.approve(requestID: requestID, projectID: target)
+            case .deny:
+                guard find(requestID, projectID) != nil else { return }
+                log("link.denied \(requestID) via voice")
+                await engine.deny(requestID: requestID, projectID: target)
+            case .unclear:
+                log("link.spokenAnswer.unclear")
+                enqueue(.speak("Sorry, was that a yes or a no?"), to: c, id: id)
+            case .notAnAnswer:
+                // Something else entirely: the same as saying it to the Mac ("no, do this instead").
+                guard text.count <= 4000, await engine.canSubmit() else { return }
+                log("link.submit \(text.count) chars")
+                await engine.submit(text)
+            }
+        case .switchProject(let projectID):
+            // Only a project the phone was shown: the id is the Mac's own, from its last snapshot.
+            guard latest?.projects?.contains(where: { $0.id == projectID }) == true else {
+                log("link.switch.unknown")
+                enqueue(.notice("That project is no longer open on the Mac."), to: c, id: id)
+                return
+            }
+            let switched = await engine.switchProject(projectID)
+            log("link.switch \(switched ? "done" : "refused")")
+            if !switched { enqueue(.notice("The Mac could not switch to that project."), to: c, id: id) }
         case .deny(let requestID, let projectID):
             guard find(requestID, projectID) != nil else { return }
             await engine.deny(requestID: requestID, projectID: projectID ?? latest?.activeProjectID)

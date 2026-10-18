@@ -4,6 +4,7 @@ import AppKit
 import Foundation
 import PairVoxCore
 import PairVoxLink
+import PairVoxLinkKit
 import PairVoxVoice
 import SwiftUI
 
@@ -103,6 +104,9 @@ final class AppModel: ObservableObject {
         voice.onKokoroStatus = { [weak self] s in Task { @MainActor in self?.kokoroStatus = s } }
         _ = crossProject
         phone.startControl()
+        phone.engineBox.setSwitcher { [weak self] projectID in
+            await MainActor.run { self?.switchFromPhone(projectID) ?? false }
+        }
         phone.apply(enabled: loaded.phoneLinkEnabled, port: loaded.phoneLinkPort)
         Task { await bootstrap() }
         watchMainWindowClosing()
@@ -225,6 +229,13 @@ final class AppModel: ObservableObject {
         let voiceOutput = VoiceSpeechOutput(audio: voice.audio, synthesizer: voice.synthesizer)
         // Silent until the user is in this project: only the active project may use the speakers.
         let gate = GatedSpeechOutput(inner: voiceOutput, active: false)
+        // What this project says aloud is said on a connected phone too. Request prompts are left out: the phone
+        // speaks those itself, from the request it is shown, with its own rules for what may be answered by voice.
+        let phoneLink = phone
+        gate.setMirror { utterance in
+            guard utterance.kind != .prompt else { return }
+            phoneLink.speakOnPhones(utterance.text)
+        }
         let engine = ConversationEngine(configuration: EngineConfiguration(settings: settings, project: projectPath),
                                         authKind: auth.kind, output: gate, advisor: advisor) { resume in
             var cfg = launch
@@ -866,7 +877,17 @@ final class AppModel: ObservableObject {
         phone.publish(snapshot, project: active.url.path,
                       others: crossProject.inbox.others(than: active.id.uuidString),
                       voiceHighRisk: settings.spokenHighRiskConfirmation, voiceNeedsScreen: settings.voiceApprovesNeedsScreen,
-                      activeProjectID: active.id.uuidString)
+                      activeProjectID: active.id.uuidString,
+                      projects: sessions.map { LinkProject(id: $0.id.uuidString, name: $0.name, isActive: $0.isActive,
+                                                           needsAttention: $0.needsAttention, missed: $0.missedCount) })
+    }
+
+    /// The phone's project switcher: the same switch as the Mac's project list. False for a project that is not open.
+    func switchFromPhone(_ projectID: String) -> Bool {
+        guard let id = UUID(uuidString: projectID), liveSessions[id] != nil else { return false }
+        log.log(.info, .app, "phoneLink.switchProject", ["to": .string(liveSessions[id]?.name ?? "?")])
+        if id != activeSessionID { switchTo(id) }
+        return true
     }
 
     private func receive(_ snap: EngineSnapshot, from session: ProjectSession) {

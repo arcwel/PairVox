@@ -22,6 +22,21 @@ final class PhoneModel: ObservableObject {
     @Published var typed = ""
     @Published private(set) var heard = ""
     @Published private(set) var listening = false
+    /// The microphone is off until the person turns it back on. Hands-free listening never runs while muted.
+    @Published private(set) var muted = false
+    /// The phone is saying something (a reply or a request); listening pauses meanwhile so it does not hear itself.
+    @Published private(set) var phoneSpeaking = false
+    /// Hold to talk instead of hands-free listening. Off by default (owner, 2026-10-18).
+    @Published var pushToTalk: Bool = UserDefaults.standard.bool(forKey: "pushToTalk") {
+        didSet {
+            UserDefaults.standard.set(pushToTalk, forKey: "pushToTalk")
+            if pushToTalk { recognizer.cancel(); listening = false } else { resumeHandsFree() }
+        }
+    }
+    /// True when only the basic, robotic-sounding iOS voice is installed for this language.
+    var needsBetterVoice: Bool { !speaker.hasNaturalVoice }
+    private var appActive = true
+    private var micAllowed: Bool?
     /// The technical reason behind a `.failed` state (the framework's error and the connection's last state), for
     /// a "Details" disclosure; the state itself carries the plain sentence.
     @Published private(set) var failureDetail: String?
@@ -66,6 +81,14 @@ final class PhoneModel: ObservableObject {
         recognizer.onPartial = { [weak self] text in Task { @MainActor in self?.heard = text } }
         recognizer.onFinal = { [weak self] text in Task { @MainActor in self?.finishedListening(text) } }
         recognizer.onLevel = { [weak self] level in Task { @MainActor in self?.inputLevel = level } }
+        speaker.onSpeakingChanged = { [weak self] speaking in
+            Task { @MainActor in
+                guard let self else { return }
+                self.phoneSpeaking = speaking
+                if speaking { if self.listening { self.recognizer.cancel(); self.listening = false } }
+                else { self.resumeHandsFree(after: 0.3) }
+            }
+        }
         watchNetwork()
         refreshPaired()
     }
@@ -294,7 +317,15 @@ final class PhoneModel: ObservableObject {
     /// The app came back to the front: a link that died while iOS had the app suspended is replaced now.
     func becameActive() {
         refreshPaired()      // a launch while locked could not read the key; the phone is unlocked now
+        appActive = true
         nudge()
+        resumeHandsFree(after: 0.5)
+    }
+
+    /// Off the screen, iOS stops the microphone anyway; stop listening cleanly.
+    func wentToBackground() {
+        appActive = false
+        recognizer.cancel(); listening = false
     }
 
     private func nudge() {
@@ -327,13 +358,16 @@ final class PhoneModel: ObservableObject {
         case .snapshot(let s):
             let isNew = s.request?.requestID != snapshot?.request?.requestID
             snapshot = s
+            let firstState = !hasFreshSnapshot
             hasFreshSnapshot = true
+            if firstState { resumeHandsFree(after: 0.3) }   // the link is live: start listening
             if let r = s.request, isNew, lastSpokenRequest != r.requestID {
                 lastSpokenRequest = r.requestID
                 // A tap on the wrist as well as the voice, for a phone in a pocket or with the sound off.
                 if r.risk == "high" { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
                 else { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
-                if !listening { speaker.say(r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen.") }
+                // Spoken even while listening: listening pauses while the phone talks, then resumes for the answer.
+                speaker.say(r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen.")
             }
         case .speak(let text): speaker.say(text)
         case .notice(let text): notice = text
@@ -375,6 +409,13 @@ final class PhoneModel: ObservableObject {
     }
     func interrupt() { send(.interrupt) }
 
+    /// Makes another open project the active one on the Mac; the next snapshot shows it.
+    func switchProject(_ id: String) {
+        guard id != snapshot?.activeProjectID else { return }
+        speaker.stop()   // the old project's reply is no longer the one in front
+        send(.switchProject(projectID: id))
+    }
+
     private func send(_ message: ClientMessage) {
         guard let client else { notice = "Not connected."; return }
         Task { do { try await client.send(message) } catch { notice = "Could not send. Reconnecting…" } }
@@ -398,13 +439,50 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Voice
 
-    func toggleListening() {
-        if listening { recognizer.stop(); return }
+    /// The big button. While the phone is talking it stops the voice and listens (barge-in); otherwise it mutes or
+    /// unmutes the microphone. With push-to-talk on, pressing and holding is what talks (see `pushToTalkBegan`).
+    func orbTapped() {
+        if phoneSpeaking { speaker.stop(); resumeHandsFree(); return }
+        if pushToTalk { return }
+        toggleMute()
+    }
+
+    func toggleMute() {
+        muted.toggle()
+        if muted { recognizer.cancel(); listening = false; heard = "" } else { resumeHandsFree() }
+    }
+
+    func pushToTalkBegan() {
+        guard pushToTalk else { return }
         speaker.stop()
+        startListening(endAfterSilence: nil)
+    }
+
+    func pushToTalkEnded() {
+        guard pushToTalk, listening else { return }
+        recognizer.stop()   // the recognizer then reports what was said
+    }
+
+    /// Hands-free: listen whenever nothing stops it (muted, push-to-talk, the phone talking, no live link, off screen).
+    func resumeHandsFree(after delay: TimeInterval = 0) {
         Task {
-            guard await recognizer.requestPermission() else { notice = "Microphone or speech access is off. Turn it on in Settings."; return }
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard !pushToTalk, !muted, appActive, isLive, !listening, !phoneSpeaking, micAllowed != false else { return }
+            startListening(endAfterSilence: 1.2)
+        }
+    }
+
+    private func startListening(endAfterSilence: TimeInterval?) {
+        Task {
+            if micAllowed == nil { micAllowed = await recognizer.requestPermission() }
+            guard micAllowed == true else { notice = "Microphone or speech access is off. Turn it on in Settings."; return }
+            guard !listening else { return }
+            recognizer.endAfterSilence = endAfterSilence
             do { try recognizer.start(); listening = true; heard = "" }
-            catch { notice = "Could not start listening: \(error.localizedDescription)" }
+            catch {
+                notice = "Could not start listening: \(error.localizedDescription)"
+                muted = true   // do not retry in a loop; the person can unmute to try again
+            }
         }
     }
 
@@ -413,6 +491,7 @@ final class PhoneModel: ObservableObject {
         inputLevel = 0
         let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
         heard = ""
+        defer { resumeHandsFree(after: 0.2) }   // keep listening for the next thing said
         guard !spoken.isEmpty else { lastHeard = nil; return }
         // Keep what was understood on screen long enough to read, then let it go.
         lastHeard = spoken
@@ -437,13 +516,12 @@ final class PhoneModel: ObservableObject {
             }
             return
         }
-        // A spoken yes or no answers a request only while the link is live and the Mac has confirmed what is waiting.
-        if isLive, let request = snapshot?.request, words.count <= 3 {
-            if ["yes", "allow", "approve", "okay", "ok", "go ahead"].contains(words.joined(separator: " ")) {
-                send(.approve(requestID: request.requestID, method: .voice, auth: .none)); return
-            }
-            if ["no", "deny", "don't", "stop", "cancel"].contains(words.joined(separator: " ")) { deny(request); return }
+        // While a request is waiting, what was heard goes to the Mac as a possible answer: the Mac decides with the
+        // same parser and voice rules as on the Mac ("Allow." with the recognizer's full stop used to miss here).
+        if isLive, let request = snapshot?.request {
+            send(.spokenAnswer(requestID: request.requestID, text: spoken, projectID: nil)); return
         }
+        _ = words
         send(.submit(spoken))
     }
 }

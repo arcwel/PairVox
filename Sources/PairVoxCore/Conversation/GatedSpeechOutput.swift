@@ -13,6 +13,11 @@ public final class GatedSpeechOutput: SpeechOutput, @unchecked Sendable {
     private var active: Bool
     private var inFlight: Set<Int> = []
     private var forwarder: Task<Void, Never>?
+    private var mirrorHandler: (@Sendable (Utterance) -> Void)?
+
+    /// Called with every utterance this project actually speaks (only while it is the active project), so a paired
+    /// phone can say the same sentences. Set to nil to stop.
+    public func setMirror(_ handler: (@Sendable (Utterance) -> Void)?) { lock.withLock { mirrorHandler = handler } }
 
     public init(inner: any SpeechOutput, active: Bool = false) {
         self.inner = inner
@@ -42,11 +47,12 @@ public final class GatedSpeechOutput: SpeechOutput, @unchecked Sendable {
     }
 
     public func enqueue(_ utterance: Utterance) {
-        let play: Bool = lock.withLock {
+        let (play, mirror): (Bool, (@Sendable (Utterance) -> Void)?) = lock.withLock {
             if active { inFlight.insert(utterance.id) }
-            return active
+            return (active, active ? mirrorHandler : nil)
         }
         if play {
+            mirror?(utterance)
             inner.enqueue(utterance)
         } else {
             // Not this project's turn to speak: done, as far as the engine is concerned.

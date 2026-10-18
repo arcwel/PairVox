@@ -31,6 +31,7 @@ final class FakeEngine: LinkEngine, @unchecked Sendable {
     func approve(requestID: String, projectID: String?) async { add("approve:\(requestID)" + (projectID.map { "@\($0)" } ?? "")) }
     func deny(requestID: String, projectID: String?) async { add("deny:\(requestID)" + (projectID.map { "@\($0)" } ?? "")) }
     func interrupt() async { add("interrupt") }
+    func switchProject(_ projectID: String) async -> Bool { add("switch:\(projectID)"); return true }
 }
 
 final class Clock: @unchecked Sendable {
@@ -920,6 +921,85 @@ final class LateReturnTransport: LinkTransport, @unchecked Sendable {
     }
     func receive() async throws -> Data { try await inner.receive() }
     func close() async { await inner.close() }
+}
+
+/// Owner requirement, 2026-10-17: switch projects from the phone.
+final class PhoneProjectSwitchTests: XCTestCase {
+    func testThePhoneCanSwitchToAProjectItWasShownAndNothingElse() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var snap = h.snapshot(); snap.activeProjectID = "A"
+        snap.projects = [LinkProject(id: "A", name: "api", isActive: true, needsAttention: false, missed: 0),
+                         LinkProject(id: "B", name: "website", isActive: false, needsAttention: true, missed: 2)]
+        await host.publish(snap)
+        let got = try await h.nextSnapshot(client)
+        XCTAssertEqual(got.projects?.map(\.name), ["api", "website"], "the phone is told which projects are open")
+        try await client.send(.switchProject(projectID: "B"))
+        let deadline = Date().addingTimeInterval(2)
+        while engine.calls.isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(engine.calls, ["switch:B"])
+        // An id the phone was never shown is refused, and the app is not asked.
+        try await client.send(.switchProject(projectID: "not-open"))
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(engine.calls, ["switch:B"])
+        withExtendedLifetime(host) {}
+    }
+}
+
+/// The phone's spoken answers are decided by the Mac with the Mac's parser and voice rules.
+final class PhoneSpokenAnswerTests: XCTestCase {
+    func connected(_ request: LinkRequest) async throws -> (LinkHost, FakeEngine, LinkClient) {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var snap = h.snapshot(); snap.request = request
+        await host.publish(snap)
+        _ = try await h.nextSnapshot(client)
+        return (host, engine, client)
+    }
+
+    func waitForCall(_ engine: FakeEngine) async {
+        let deadline = Date().addingTimeInterval(2)
+        while engine.calls.isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
+    }
+
+    func testAllowWithAFullStopApprovesARequestTheMacAllowsByVoice() async throws {
+        let (host, engine, client) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+                                                                       risk: "medium", reasons: [], voiceApprovable: true))
+        try await client.send(.spokenAnswer(requestID: "R", text: "Allow."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"])
+        withExtendedLifetime(host) {}
+    }
+
+    func testASpokenAllowCannotApproveWhatTheMacKeepsForTheScreen() async throws {
+        let (host, engine, client) = try await connected(LinkRequest(requestID: "H", summary: "Run: git push", spokenPrompt: "x",
+                                                                       risk: "high", reasons: [], voiceApprovable: false))
+        try await client.send(.spokenAnswer(requestID: "H", text: "Allow."))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty)
+        withExtendedLifetime(host) {}
+    }
+
+    func testNoDeniesAndAMumbleIsAskedAgain() async throws {
+        let (host, engine, client) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+                                                                       risk: "medium", reasons: [], voiceApprovable: true))
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yasp."))
+        var askedAgain = false
+        let deadline = Date().addingTimeInterval(2)
+        while !askedAgain, Date() < deadline {
+            if case .speak(let t) = try await client.receive() { askedAgain = t.contains("yes or a no") }
+        }
+        XCTAssertTrue(askedAgain)
+        XCTAssertTrue(engine.calls.isEmpty, "a mumble answers nothing")
+        try await client.send(.spokenAnswer(requestID: "R", text: "No."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["deny:R"])
+        withExtendedLifetime(host) {}
+    }
 }
 
 final class ShownBeforeSentTests: XCTestCase {

@@ -3,12 +3,35 @@
 import AVFoundation
 import Speech
 
-/// Speaks replies with the system voice. Keeps one audio session that works with earbuds and with the screen locked.
-final class PhoneSpeaker: NSObject {
+/// Speaks replies with the best voice installed on the phone. Keeps one audio session that works with earbuds and
+/// with the screen locked. Reports when it starts and when everything queued has been said, so listening can pause
+/// while the phone talks (it would otherwise hear itself) and resume after.
+final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate {
     private let synthesizer = AVSpeechSynthesizer()
+    var onSpeakingChanged: ((Bool) -> Void)?
+    private(set) var isSpeaking = false
+    private var queued = 0
+
+    /// The voice used, and whether it is only the basic one (the robotic-sounding default; 2026-10-18 owner report).
+    let voice: AVSpeechSynthesisVoice?
+    var hasNaturalVoice: Bool { (voice?.quality ?? .default) != .default }
 
     override init() {
+        voice = PhoneSpeaker.bestVoice()
         super.init()
+        synthesizer.delegate = self
+    }
+
+    /// Premium, then enhanced, then the default voice for the phone's language (iOS lets people download the better
+    /// ones in Settings, Accessibility, Spoken Content, Voices).
+    static func bestVoice() -> AVSpeechSynthesisVoice? {
+        let language = Locale.current.identifier.replacingOccurrences(of: "_", with: "-")
+        let base = String(language.prefix(2))
+        let all = AVSpeechSynthesisVoice.speechVoices()
+        let exact = all.filter { $0.language == language }
+        let near = exact.isEmpty ? all.filter { $0.language.hasPrefix(base) } : exact
+        func rank(_ q: AVSpeechSynthesisVoiceQuality) -> Int { q == .premium ? 2 : (q == .enhanced ? 1 : 0) }
+        return near.max { rank($0.quality) < rank($1.quality) } ?? AVSpeechSynthesisVoice(language: language)
     }
 
     /// The audio session is switched on only when there is something to say, so the app is not kept alive for nothing.
@@ -18,11 +41,41 @@ final class PhoneSpeaker: NSObject {
         try? session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
         try? session.setActive(true)
         let u = AVSpeechUtterance(string: text)
-        u.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier.replacingOccurrences(of: "_", with: "-"))
+        u.voice = voice
+        u.prefersAssistiveTechnologySettings = true
+        queued += 1
         synthesizer.speak(u)
     }
 
-    func stop() { synthesizer.stopSpeaking(at: .immediate) }
+    func stop() {
+        synthesizer.stopSpeaking(at: .immediate)
+        queued = 0
+        setSpeaking(false)
+    }
+
+    private func setSpeaking(_ on: Bool) {
+        guard on != isSpeaking else { return }
+        isSpeaking = on
+        onSpeakingChanged?(on)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async { self.setSpeaking(true) }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.queued = max(0, self.queued - 1)
+            if self.queued == 0 { self.setSpeaking(false) }
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            self.queued = max(0, self.queued - 1)
+            if self.queued == 0 { self.setSpeaking(false) }
+        }
+    }
 }
 
 /// Turns speech into text on the phone. It insists on on-device recognition, so audio never leaves the phone.
@@ -38,6 +91,9 @@ final class PhoneRecognizer {
     private var task: SFSpeechRecognitionTask?
     private var last = ""
     private var delivered = false
+    /// Hands-free: the utterance ends after this long without new words (push-to-talk ends on release instead).
+    var endAfterSilence: TimeInterval?
+    private var silenceTimer: Timer?
 
     func requestPermission() async -> Bool {
         let speech = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
@@ -69,14 +125,26 @@ final class PhoneRecognizer {
             if let result {
                 self.last = result.bestTranscription.formattedString
                 self.onPartial?(self.last)
-                if result.isFinal { self.finish() }
+                if result.isFinal { self.finish(); return }
+                self.armSilenceTimer()
             }
             if error != nil { self.finish() }
         }
     }
 
+    private func armSilenceTimer() {
+        guard let wait = endAfterSilence, !last.isEmpty else { return }
+        DispatchQueue.main.async {
+            self.silenceTimer?.invalidate()
+            self.silenceTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in self?.stop() }
+        }
+    }
+
+    var isRunning: Bool { engine.isRunning }
+
     /// Ends the capture; the recognizer then reports the final text.
     func stop() {
+        silenceTimer?.invalidate(); silenceTimer = nil
         guard engine.isRunning else { return }
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
@@ -91,6 +159,13 @@ final class PhoneRecognizer {
         let rms = (sum / Float(buffer.frameLength)).squareRoot()
         let db = 20 * log10(max(rms, 1e-6))
         return Double(min(max((db + 50) / 50, 0), 1))
+    }
+
+    /// Stops listening and throws away what was heard (the phone is about to speak, or the person muted).
+    func cancel() {
+        delivered = true
+        stop()
+        task?.cancel(); task = nil; request = nil
     }
 
     private func finish() {
