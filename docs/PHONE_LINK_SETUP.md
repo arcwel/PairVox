@@ -35,6 +35,14 @@ tailscale --socket="$HOME/.config/tailscale/tailscaled.sock" serve --bg --tcp 47
 
 Remove it later with the same command ending `serve --tcp=47821 off`. Connections then reach PairVox from `127.0.0.1`, which PairVox accepts; the access rules above still decide who may connect. With the normal Tailscale macOS app (which has a network interface) this step is not needed.
 
+**If Tailscale later gets a network interface** (the Tailscale app, or `tailscaled` run as a system service), remove that forward. With an interface, Tailscale holds port 47821 on the tailnet address itself, PairVox cannot listen on it, and the phone shows the Mac as offline. Settings → Phone then says the port is taken, and `pairvox-link doctor` reports a stale forward. The fix:
+
+```bash
+tailscale serve --tcp 47821 off
+```
+
+Then turn the phone link off and on, or reopen PairVox. Seen on 2026-10-18.
+
 ## Setup checklist
 
 1. Tailscale is running and signed in on the Mac and on the iPhone (the iPhone shows the VPN indicator in its status bar).
