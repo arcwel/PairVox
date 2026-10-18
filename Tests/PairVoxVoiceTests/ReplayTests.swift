@@ -115,3 +115,46 @@ final class ReplaySensitivityExplore: XCTestCase {
         }
     }
 }
+
+/// The early-transcription experiment, in real time: transcription takes 0.5 s here (a stand-in for Whisper).
+final class EarlyTranscriptionReplayTests: XCTestCase {
+    private func secondsFromEndOfSpeechToSend(early: Double) async throws -> Double {
+        let phrase = try Fixtures.speech("Move the helper into its own file.", rmsDB: -24)
+        let user = UserSpeech(start: 1.0, samples: phrase, text: "Move the helper into its own file.")
+        let r = try await Replay.run(Scenario(name: "early \(early)", seconds: 1.0 + user.end - user.start + 2.0, users: [user],
+                                              realTime: true, decodeSeconds: 0.5, earlyTranscriptionSeconds: early))
+        XCTAssertEqual(r.sentToClaude, ["Move the helper into its own file."], r.summary)
+        return try XCTUnwrap(r.sentAt.first) - user.end
+    }
+
+    func testStartingEarlySavesAboutAThirdOfASecondBeforeClaudeIsToldWhatYouSaid() async throws {
+        let normal = try await secondsFromEndOfSpeechToSend(early: 0)
+        let early = try await secondsFromEndOfSpeechToSend(early: 0.3)
+        print("EARLY STT: end of speech to text sent: \(String(format: "%.2f", normal)) s normally, \(String(format: "%.2f", early)) s with early transcription (\(String(format: "%.2f", normal - early)) s sooner)")
+        XCTAssertGreaterThan(normal - early, 0.2, "early transcription should save at least 0.2 s")
+        // Measured from the audio's last sample, which trails the detector's last voiced frame by a little, so the bound is looser
+        // than the 0.65 s end silence; the strict rule (never before the confirmed end) is the next test.
+        XCTAssertGreaterThanOrEqual(early, 0.4, "it cannot be instant: the end of the turn still has to be confirmed")
+    }
+
+    func testAShortPauseInTheMiddleDoesNotSplitTheSentenceOrSendAHalfOfIt() async throws {
+        let a = try Fixtures.speech("Move the helper", rmsDB: -24)
+        let b = try Fixtures.speech("into its own file.", rmsDB: -24)
+        let whole = a + Fixtures.silence(seconds: 0.45) + b      // a pause between 0.3 s (early start) and 0.65 s (the end)
+        let user = UserSpeech(start: 1.0, samples: whole, text: "Move the helper into its own file.")
+        let r = try await Replay.run(Scenario(name: "pause", seconds: 1.0 + (user.end - user.start) + 2.0, users: [user],
+                                              realTime: true, decodeSeconds: 0.5, earlyTranscriptionSeconds: 0.3))
+        XCTAssertEqual(r.sentToClaude, ["Move the helper into its own file."], "one message, the whole sentence: \(r.summary)")
+    }
+
+    /// The text is only sent once the detector confirms the end, however early the transcription finished.
+    func testNothingIsSentBeforeTheEndIsConfirmedEvenWhenTranscriptionIsInstant() async throws {
+        let phrase = try Fixtures.speech("Move the helper into its own file.", rmsDB: -24)
+        let user = UserSpeech(start: 1.0, samples: phrase, text: "Move the helper into its own file.")
+        let seconds = 1.0 + (user.end - user.start) + 2.0
+        let instantEarly = try await Replay.run(Scenario(name: "instant early", seconds: seconds, users: [user], realTime: true, decodeSeconds: 0.0, earlyTranscriptionSeconds: 0.3))
+        let instantNormal = try await Replay.run(Scenario(name: "instant normal", seconds: seconds, users: [user], realTime: true, decodeSeconds: 0.0, earlyTranscriptionSeconds: 0))
+        let early = try XCTUnwrap(instantEarly.sentAt.first), normal = try XCTUnwrap(instantNormal.sentAt.first)
+        XCTAssertEqual(early, normal, accuracy: 0.12, "with an instant decode both must send when the end is confirmed, not sooner")
+    }
+}

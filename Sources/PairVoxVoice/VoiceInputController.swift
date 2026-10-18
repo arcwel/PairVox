@@ -39,6 +39,12 @@ public final class VoiceInputController: @unchecked Sendable {
     private let preRollSamples = Int(AudioIO.captureSampleRate * 0.35)
     private var vocabulary: [String] = []
     private var levelCounter = 0
+    /// A transcription started at the first sign of the end of an utterance (see `tentativeEnd`). Kept only until the end
+    /// is confirmed, or thrown away if the person carries on.
+    private var speculative: Task<String, Error>?
+    private var speculativeSamples = 0
+    /// Seconds of silence after which a transcription starts early; 0 means off.
+    private var earlyTranscriptionSeconds: TimeInterval = 0
 
     public init(audio: AudioIO, transcriber: any UtteranceTranscriber, engine: ConversationEngine,
                 endSilence: TimeInterval) {
@@ -93,6 +99,16 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.lock(); vad.setEndSilence(seconds); lock.unlock()
     }
 
+    /// Starts transcribing after this many seconds of silence instead of waiting for the full end-of-turn silence, and
+    /// throws the result away if the person keeps talking. 0 turns it off.
+    public func setEarlyTranscription(seconds: TimeInterval) {
+        lock.lock()
+        earlyTranscriptionSeconds = max(0, seconds)
+        vad.setTentativeEnd(earlyTranscriptionSeconds)
+        if earlyTranscriptionSeconds == 0 { speculative?.cancel(); speculative = nil }
+        lock.unlock()
+    }
+
     // MARK: Push to talk
 
     public func pushToTalkBegan() {
@@ -128,6 +144,9 @@ public final class VoiceInputController: @unchecked Sendable {
 
         var startEvent = false
         var finished: [Float]?
+        var earlyStart: [Float]?
+        var resumed = false
+        var carriedOver: Task<String, Error>?
         let wasPlaying = playbackActive
 
         switch mode {
@@ -155,6 +174,14 @@ public final class VoiceInputController: @unchecked Sendable {
                 capturing = false
                 finished = utterance
                 utterance = []
+                carriedOver = speculative
+                speculative = nil
+            case .tentativeEnd?:
+                if capturing { earlyStart = utterance; speculativeSamples = utterance.count }
+            case .speechResumed?:
+                resumed = true
+                speculative?.cancel()
+                speculative = nil
             case nil:
                 break
             }
@@ -162,6 +189,8 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.unlock()
 
         if let level { onLevel?(level) }
+        if let early = earlyStart { startSpeculativeTranscription(early) }
+        if resumed { log.log(.info, .stt, "stt.speculative.discarded", ["reason": "speech resumed"]) }
         if startEvent {
             log.log(.info, .input, "vad.speech.start", ["playbackActive": .bool(wasPlaying), "bargeIn": .bool(wasPlaying)])
             Task { await engine.userStartedSpeaking() }
@@ -169,11 +198,23 @@ public final class VoiceInputController: @unchecked Sendable {
         if let finished {
             log.log(.info, .input, "vad.speech.end",
                     ["seconds": .double(Double(finished.count) / AudioIO.captureSampleRate)])
-            finishUtterance(finished)
+            finishUtterance(finished, speculative: carriedOver)
         }
     }
 
-    private func finishUtterance(_ samples: [Float]) {
+    private func startSpeculativeTranscription(_ samples: [Float]) {
+        guard samples.count > Int(AudioIO.captureSampleRate * 0.3) else { return }
+        lock.lock()
+        let words = vocabulary
+        let transcriber = self.transcriber
+        speculative?.cancel()
+        let task = Task { try await transcriber.transcribe(samples, vocabulary: words) }
+        speculative = task
+        lock.unlock()
+        log.log(.info, .stt, "stt.speculative.started", ["audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate)])
+    }
+
+    private func finishUtterance(_ samples: [Float], speculative: Task<String, Error>? = nil) {
         lock.lock()
         let words = vocabulary
         lock.unlock()
@@ -188,7 +229,15 @@ public final class VoiceInputController: @unchecked Sendable {
             }
             let began = DispatchTime.now()
             do {
-                let text = try await transcriber.transcribe(samples, vocabulary: words)
+                // The early transcription covers the same speech (only the trailing silence is missing), so its result
+                // is the answer, and any of its decoding time has already passed.
+                var text: String
+                if let speculative, let early = try? await speculative.value {
+                    text = early
+                    self.log.log(.info, .stt, "stt.speculative.used", [:])
+                } else {
+                    text = try await transcriber.transcribe(samples, vocabulary: words)
+                }
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000
                 self.log.log(.info, .stt, "transcribed",
                              ["engine": .string(transcriber.displayName), "audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate),

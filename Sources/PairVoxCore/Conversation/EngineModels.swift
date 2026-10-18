@@ -157,6 +157,8 @@ public struct TurnLatency: Sendable, Equatable {
     public var firstUtterance: TimeInterval?
     /// Send → first audio actually playing.
     public var firstAudio: TimeInterval?
+    /// Send → the first sound of any kind, an acknowledgement included: what the person actually waits for.
+    public var firstSound: TimeInterval?
 }
 
 public struct EngineSnapshot: Sendable, Equatable {

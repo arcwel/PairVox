@@ -28,12 +28,20 @@ public struct VoiceActivityDetector: Sendable {
         /// Where the coupling estimate starts: the microphone hears the speaker this far below its level. High, so a
         /// session starts safe and learns the real value from the first moments of echo.
         public var initialCouplingDB: Float = -20
+        /// When above zero (and below `endSilence`), the detector reports `tentativeEnd` after this much silence, so a
+        /// transcription can start before the end of the utterance is certain, and `speechResumed` if the person goes on.
+        /// Zero turns it off, and then no such events are reported.
+        public var tentativeEndSilence: TimeInterval = 0
         public init() {}
     }
 
     public enum Event: Sendable, Equatable {
         case speechStarted
         case speechEnded(duration: TimeInterval)
+        /// Quiet for `tentativeEndSilence`: probably the end, not yet certain. Only when that option is on.
+        case tentativeEnd
+        /// Speech came back after a `tentativeEnd`: the utterance is not over.
+        case speechResumed
     }
 
     public var config: Config
@@ -47,6 +55,7 @@ public struct VoiceActivityDetector: Sendable {
     /// How far below the speaker's level the microphone hears it, as an upper envelope of echo-only frames.
     public private(set) var couplingDB: Float
 
+    private var tentativeReported = false
     private var candidateDuration: TimeInterval = 0
     private var silenceDuration: TimeInterval = 0
     private var speechDuration: TimeInterval = 0
@@ -58,6 +67,7 @@ public struct VoiceActivityDetector: Sendable {
 
     public mutating func reset() {
         isSpeaking = false
+        tentativeReported = false
         candidateDuration = 0
         silenceDuration = 0
         speechDuration = 0
@@ -66,6 +76,11 @@ public struct VoiceActivityDetector: Sendable {
     /// Lets the user hold the conversation open ("keep listening") by stretching the endpoint.
     public mutating func setEndSilence(_ seconds: TimeInterval) {
         config.endSilence = max(0.2, seconds)
+    }
+
+    /// Turns the early report on (seconds of silence) or off (0).
+    public mutating func setTentativeEnd(_ seconds: TimeInterval) {
+        config.tentativeEndSilence = max(0, seconds)
     }
 
     public static func levelDB(_ frame: [Float]) -> Float {
@@ -114,6 +129,7 @@ public struct VoiceActivityDetector: Sendable {
         if stillSpeech, let ceiling = echoCeiling, level <= ceiling - 3 { stillSpeech = false }
         if stillSpeech {
             silenceDuration = 0
+            if tentativeReported { tentativeReported = false; return .speechResumed }
         } else {
             silenceDuration += dt
             adaptFloor(level, rate: 0.01)
@@ -122,6 +138,11 @@ public struct VoiceActivityDetector: Sendable {
             let d = speechDuration - silenceDuration
             reset()
             return .speechEnded(duration: max(0, d))
+        }
+        if config.tentativeEndSilence > 0, config.tentativeEndSilence < config.endSilence, !tentativeReported,
+           silenceDuration >= config.tentativeEndSilence {
+            tentativeReported = true
+            return .tentativeEnd
         }
         return nil
     }

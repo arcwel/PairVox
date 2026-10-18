@@ -360,3 +360,55 @@ final class SpokenAnswerTests: XCTestCase {
         XCTAssertEqual(VoiceCommand.spokenAnswer("Edit the other file instead please"), .notAnAnswer)
     }
 }
+
+final class VoiceActivityEarlyEndTests: XCTestCase {
+    private func frame(_ db: Float) -> [Float] {
+        let amplitude = powf(10, db / 20) * 1.4142
+        return (0..<480).map { amplitude * sinf(Float($0) * 0.4) }
+    }
+    private func feed(_ vad: inout VoiceActivityDetector, _ db: Float, seconds: Double) -> [VoiceActivityDetector.Event] {
+        (0..<Int(seconds / 0.03)).compactMap { _ in vad.process(frame(db)) }
+    }
+
+    func testOffByDefaultTheOldEventsAreUnchanged() {
+        var vad = VoiceActivityDetector()
+        _ = feed(&vad, -80, seconds: 1)
+        var events = feed(&vad, -25, seconds: 1)
+        events += feed(&vad, -80, seconds: 1)
+        XCTAssertEqual(events.count, 2)
+        XCTAssertEqual(events.first, .speechStarted)
+        if case .speechEnded = events[1] {} else { XCTFail("expected the end, got \(events[1])") }
+    }
+
+    func testAnEarlyEndIsReportedBeforeTheRealEnd() {
+        var vad = VoiceActivityDetector()
+        vad.setTentativeEnd(0.3)
+        _ = feed(&vad, -80, seconds: 1)
+        var events = feed(&vad, -25, seconds: 1)
+        events += feed(&vad, -80, seconds: 0.45)          // past 0.3 s of silence, short of 0.65 s
+        XCTAssertEqual(events, [.speechStarted, .tentativeEnd])
+        events += feed(&vad, -80, seconds: 0.4)
+        if case .speechEnded? = events.last {} else { XCTFail("the real end must follow: \(events)") }
+    }
+
+    func testSpeechAfterAnEarlyEndIsReportedAsResumedAndTheUtteranceContinues() {
+        var vad = VoiceActivityDetector()
+        vad.setTentativeEnd(0.3)
+        _ = feed(&vad, -80, seconds: 1)
+        var events = feed(&vad, -25, seconds: 1)
+        events += feed(&vad, -80, seconds: 0.45)
+        events += feed(&vad, -25, seconds: 0.6)
+        XCTAssertEqual(events, [.speechStarted, .tentativeEnd, .speechResumed])
+        events += feed(&vad, -80, seconds: 0.45)
+        XCTAssertEqual(events.suffix(1), [.tentativeEnd], "after resuming, a new early end can be reported")
+    }
+
+    func testAnEarlyEndLaterThanTheRealEndIsIgnored() {
+        var vad = VoiceActivityDetector()
+        vad.setTentativeEnd(0.9)                          // longer than the 0.65 s end silence: never reported
+        _ = feed(&vad, -80, seconds: 1)
+        var events = feed(&vad, -25, seconds: 1)
+        events += feed(&vad, -80, seconds: 1.5)
+        XCTAssertFalse(events.contains(.tentativeEnd))
+    }
+}

@@ -313,6 +313,26 @@ final class ConversationEngineTests: XCTestCase {
         XCTAssertEqual(output.queue.map(\.kind), [.ack, .prose], "what is already out loud is not cut off")
     }
 
+    func testTheAcknowledgementIsTheFirstSoundAndItsTimeIsRecorded() async {
+        // The default acknowledgement comes at 0.8 s, because Claude's first token is rarely sooner than about 1.1 s.
+        XCTAssertEqual(EngineConfiguration().acknowledgementDelay, 0.8)
+        await engine.submit("Refactor the parser")
+        await settle(300)
+        output.playNext(finish: false)                       // the acknowledgement starts
+        await settle()
+        backend.emit(.textDelta("The parser has three stages. "))
+        backend.emit(.textBlockEnded)
+        output.playNext(finish: true)
+        await settle()
+        output.playAll()
+        backend.emit(.turnCompleted(TurnResult(outcome: .success)))
+        await settle()
+        let snap = await engine.snapshot
+        let sound = snap.lastLatency?.firstSound
+        XCTAssertNotNil(sound, "the first sound of the turn, an acknowledgement included, must be measured")
+        if let sound, let audio = snap.lastLatency?.firstAudio { XCTAssertLessThanOrEqual(sound, audio) }
+    }
+
     func testBackchannelWhileWorkingDoesNotInterrupt() async {
         await engine.submit("Refactor the parser")
         backend.emit(.textDelta("Starting with the tokenizer. Then the AST. "))

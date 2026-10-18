@@ -71,6 +71,9 @@ private struct GeneralSettings: View {
                 }
                 Text("Raise this if PairVox cuts you off mid-thought. With laptop speakers and no headphones, voice processing removes most echo; turn barge-in off if it interrupts itself.")
                     .font(.caption).foregroundStyle(.secondary)
+                Toggle("Start transcribing early (experimental)", isOn: $model.settings.earlyTranscription)
+                Text("Begins turning your speech into text after 0.3 seconds of silence, and discards it if you carry on talking. Saves up to a third of a second before PairVox answers.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Windows") {
