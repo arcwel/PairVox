@@ -1,5 +1,7 @@
 # PairVox hardening review and task list (2026-10-16)
 
+> **Frozen 2026-10-17.** This list is backlog now. The definition of done for v0.1 is the five checks in `2026-10-17-v0.1-checks.md`; an item here is worked on only when it is the cause of a failing check.
+
 Reviewed: branch `phase1-hardening` at 9718394 plus the uncommitted banner fix and UITrace in `.worktrees/audio`, the 20 commits since `main`, and the live log of today's runs. Method: five independent read-only code reviews (approval gate, audio, app layer, phone link, session and tooling), each finding re-read at the cited line before it was kept; a full test run; the iOS compile; the release dry run; a first-pass script review by the local model.
 
 ## 1. Where the app stands
