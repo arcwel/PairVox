@@ -50,7 +50,8 @@ if [[ $DRY -eq 0 ]]; then
   trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 fi
 
-newest_run() { scripts/launch-check.sh --json 2>/dev/null | sed -n 's/.*"run":"\([^"]*\)".*/\1/p'; }
+# launch-check exits 1 for a failed launch; only its run id is wanted here, so its status must not stop the script.
+newest_run() { { scripts/launch-check.sh --json 2>/dev/null || true; } | sed -n 's/.*"run":"\([^"]*\)".*/\1/p'; }
 detail_of() { sed -n 's/.*"detail":"\([^"]*\)".*/\1/p' <<<"$1"; }
 
 # Swaps $1 into dist/ and reopens it (scripts/restart-app.sh does the quit, verified copy and open). Sets $restart_detail.
