@@ -52,7 +52,8 @@ fail() { echo "release-assets: $*" >&2; exit 1; }
 # Strix names its runs without a date, so the newest is the most recently written; gate notes and audit runs start
 # with their date, so the newest sorts last by name.
 STRIX_RUN="${STRIX_ARG:-$(ls -td docs/security/strix/strix_runs/*/ 2>/dev/null | head -1 || true)}"; STRIX_RUN="${STRIX_RUN%/}"
-STRIX_GATE="$(ls -d docs/security/strix/*gate*.md 2>/dev/null | sort | tail -1 || true)"
+# The gate note is the one that names this Strix run.
+STRIX_GATE="$(grep -l -F "$(basename "$STRIX_RUN")" docs/security/strix/*.md 2>/dev/null | head -1 || true)"
 AUDIT_RUN="$(ls -d docs/security/*-audit-run-*/ 2>/dev/null | sort | tail -1 || true)"; AUDIT_RUN="${AUDIT_RUN%/}"
 [[ -n "$STRIX_RUN" && -f "$STRIX_RUN/penetration_test_report.md" ]] || fail "no Strix report under docs/security/strix/strix_runs/"
 [[ -n "$AUDIT_RUN" && -f "$AUDIT_RUN/REPORT.md" ]] || fail "no audit report under docs/security/*-audit-run-*/"
