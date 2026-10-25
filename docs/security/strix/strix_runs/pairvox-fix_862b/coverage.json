@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-25 00:00:22 UTC",
+  "run_id": "pairvox-fix_862b",
+  "run_name": "pairvox-fix_862b",
+  "scope": {
+    "targets": [
+      {
+        "type": "local_code",
+        "details": {
+          "target_path": "/Users/anthonyguidry/strix-targets/PairVox-fix",
+          "workspace_subdir": "PairVox-fix"
+        },
+        "original": "/Users/anthonyguidry/strix-targets/PairVox-fix"
+      }
+    ],
+    "scan_mode": "standard",
+    "scope_mode": "auto",
+    "diff_scope": {
+      "active": false,
+      "mode": "auto"
+    },
+    "instruction": "# PairVox v0.1 pentest brief\n\nYou are testing PairVox, the owner's own open-source project, with the owner's authorization. PairVox is a native macOS app that runs the user's `claude` CLI and approves its tool requests by voice. An iPhone app connects to it over Tailscale through a custom TCP protocol, the \"phone link\".\n\n## What you can reach\n\n1. **The source code**, mounted as the target directory (a copy; edits there change nothing real). Swift, SwiftPM. The macOS app cannot run inside your Linux sandbox, so the code itself is a review target.\n2. **A live phone-link host for testing** at `host.docker.internal:47822` (TCP). This is `pairvox-link-testhost`, built from the same source. It runs the real `LinkHost` and `PairingManager` from `Sources/PairVoxLink`, keeps phones in memory only, never talks to Claude, and accepts only loopback peers, so if your connections are refused at once the forward does not present as loopback. You can attack this host. Do not attack any other host or port.\n\n## The protocol (see docs/PROTOCOL.md for the stream-json side and Sources/PairVoxLinkKit for the link)\n\n- Framing: a 4-byte big-endian length, then that many bytes; at most 1 MiB + 64 (`TCPTransport.swift`).\n- Pre-auth: the first frame is JSON `Opening`, either `hello` (a paired phone's handshake, `HandshakeWire.swift`) or `pair` (a pairing request carrying an HMAC proof of a one-time 16-byte secret, `PairingWire.swift`). Limits: 3 pre-auth connections per peer address, 8 in total, 10 s to send the first frame (`LinkHost.swift` `serve`).\n- After the handshake every frame is ChaCha20-Poly1305 with a strict sequence number (`LinkCrypto.swift`).\n\n## Focus\n\n1. Pre-auth parser robustness: malformed, oversized, truncated, deeply nested or type-confused JSON in the first frame; length prefixes at and around the limit; slow or partial frames. Report a crash, a hang past the timeouts, or memory growth.\n2. Pre-auth limits: whether a single source can hold the slots or keep the genuine phone out, and whether the counters are released on every exit path.\n3. Pairing: whether anything other than a valid proof of the secret plus the owner's confirmation can create a paired device (the test host auto-confirms, so focus on the proof, the failure counters and the offer lifecycle).\n4. Handshake: whether a peer without a device key can complete it, learn anything beyond \"unknown device\", or replay a captured exchange.\n5. Code review of the approval gate (`Sources/PairVoxCore/Policy/PermissionPolicy.swift`, `FolderGrants.swift`, `Sources/PairVoxCore/Conversation/ConversationEngine.swift`, `VoiceCommand.swift`) and the child-process launch (`Sources/PairVoxCore/Session`). A separate source audit already reported these leads, so look for anything beyond them: questions containing an approve word count as yes; a spoken yes counts before the prompt plays; wrapped or piped `rm -rf` is rated medium; protected-folder matching is case-sensitive; MCP tools are approved by name only; shell grants miss bare-name symlinks; `printenv` under a shell grant exposes the API key; phone text goes to the active project; the phone host allow-list accepts `fd7a:115c:a1e0:` prefixed names.\n\n## Rules\n\n- No denial-of-service beyond what proves a limit: stop at the first evidence.\n- No outbound connections other than to `host.docker.internal:47822`.\n- Never read or send anything from the real user's home folder; there are no credentials in scope.\n- Report each finding with severity, the exact input, and the observed result."
+  },
+  "summary": {
+    "surfaces_reviewed": 0,
+    "outcomes": {},
+    "findings_filed": 0,
+    "gaps": 1
+  },
+  "machine_observed": {
+    "agents": [
+      {
+        "agent_id": "e1cb2439",
+        "agent_name": "Root Agent",
+        "status": "completed",
+        "skills": [],
+        "task": "\n\nLocal Codebases: - /Users/anthonyguidry/strix-targets/PairVox-fix (available at: /workspace/PairVox-fix; this is the user's real directory, mounted live and writable — .git/.agents/.codex are read-only)\n\nSpecial instructions: # PairVox v0.1 pentest brief\n\nYou are testing PairVox, the owner's own open-source project, with the owner's authorization. PairVox is a native macOS app that runs the user's `claude` CLI and approves its tool requests by voice. An iPhone app connects to it over Tailscale through a custom TCP protocol, the \"phone link\".\n\n## What you can reach\n\n1. **The source code**, mounted as the target directory (a copy; edits there change nothing real). Swift, SwiftPM. The macOS app cannot run inside your Linux sandbox, so the code itself is a review target.\n2. **A live phone-link host for testing** at `host.docker.internal:47822` (TCP). This is `pairvox-link-testhost`, built from the same source. It runs the real `LinkHost` and `PairingManager` from `Sources/PairVoxLink`, keeps phones in memory only, never talks to Claude, and accepts only loopback peers, so if your connections are refused at once the forward does not present as loopback. You can attack this host. Do not attack any other host or port.\n\n## The protocol (see docs/PROTOCOL.md for the stream-json side and Sources/PairVoxLinkKit for the link)\n\n- Framing: a 4-byte big-endian length, then that many bytes; at most 1 MiB + 64 (`TCPTransport.swift`).\n- Pre-auth: the first frame is JSON `Opening`, either `hello` (a paired phone's handshake, `HandshakeWire.swift`) or `pair` (a pairing request carrying an HMAC proof of a one-time 16-byte secret, `PairingWire.swift`). Limits: 3 pre-auth connections per peer address, 8 in total, 10 s to send the first frame (`LinkHost.swift` `serve`).\n- After the handshake every frame is ChaCha20-Poly1305 with a strict sequence number (`LinkCrypto.swift`).\n\n## Focus\n\n1. Pre-auth parser robustness: malformed, oversized, truncated, deeply nested or type-confused JSON in the first frame; length prefixes at and around the limit; slow or partial frames. Report a crash, a hang past the timeouts, or memory growth.\n2. Pre-auth limits: whether a single source can hold the slots or keep the genuine phone out, and whether the counters are released on every exit path.\n3. Pairing: whether anything other than a valid proof of the secret plus the owner's confirmation can create a paired device (the test host auto-confirms, so focus on the proof, the failure counters and the offer lifecycle).\n4. Handshake: whether a peer without a device key can complete it, learn anything beyond \"unknown device\", or replay a captured exchange.\n5. Code review of the approval gate (`Sources/PairVoxCore/Policy/PermissionPolicy.swift`, `FolderGrants.swift`, `Sources/PairVoxCore/Conversation/ConversationEngine.swift`, `VoiceCommand.swift`) and the child-process launch (`Sources/PairVoxCore/Session`). A separate source audit already reported these leads, so look for anything beyond them: questions containing an approve word count as yes; a spoken yes counts before the prompt plays; wrapped or piped `rm -rf` is rated medium; protected-folder matching is case-sensitive; MCP tools are approved by name only; shell grants miss bare-name symlinks; `printenv` under a shell grant exposes the API key; phone text goes to the active project; the phone host allow-list accepts `fd7a:115c:a1e0:` prefixed names.\n\n## Rules\n\n- No denial-of-service beyond what proves a limit: stop at the first evidence.\n- No outbound connections other than to `host.docker.internal:47822`.\n- Never read or send anything from the real user's home folder; there are no credentials in scope.\n- Report each finding with severity, the exact input, and the observed result.",
+        "is_root": true
+      }
+    ],
+    "skills_exercised": [],
+    "findings_filed": 0,
+    "source": "runtime"
+  },
+  "completeness": {
+    "complete": true,
+    "scan_status": "completed",
+    "exit_reason": "finished_by_tool",
+    "caveats": []
+  },
+  "entries": [],
+  "gaps": [
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Root Agent",
+      "detail": "Root Agent ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    }
+  ]
+}

@@ -1,5 +1,12 @@
 # PairVox handoff (for Claude Code)
 
+> **Historical (marked 2026-10-24).** This handoff describes the project as of 2026-10-13, before the app was ever launched. Much of §3 and §6 is out of date: the app has been launched, built and installed many times since, and the phone link ships. For the current state, read these two documents instead:
+>
+> - [plans/2026-10-17-v0.1-checks.md](plans/2026-10-17-v0.1-checks.md): the definition of done for v0.1 and what each check measured.
+> - [plans/2026-10-18-outstanding-tasks.md](plans/2026-10-18-outstanding-tasks.md): the open work and the frozen backlog.
+>
+> The decisions in §2, the auth policy, and the gotchas in §4 still apply.
+
 _Last updated: 2026-10-13. Author of this handoff: the Claude session that built v0.1._
 
 This document is everything the next agent needs to take PairVox from "code complete, engine verified" to "shipping macOS app". Read top to bottom once, then work the task list in §6 in order.

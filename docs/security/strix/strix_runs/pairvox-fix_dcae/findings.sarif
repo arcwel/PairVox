@@ -1,0 +1,318 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Strix",
+          "informationUri": "https://strix.ai",
+          "rules": [
+            {
+              "id": "strix-coverage/voice-activity-speech-injection-permission-policy-bypass",
+              "name": "Voice-activity & speech injection permission policy bypass",
+              "shortDescription": {
+                "text": "Coverage: Voice-activity & speech injection permission policy bypass"
+              },
+              "fullDescription": {
+                "text": "Coverage of Voice-activity & speech injection permission policy bypass across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Voice-activity & speech injection permission policy bypass across the assessed attack surface.",
+                "markdown": "Coverage of Voice-activity & speech injection permission policy bypass across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/environment-variable-injection-credential-leakage",
+              "name": "Environment variable injection & credential leakage",
+              "shortDescription": {
+                "text": "Coverage: Environment variable injection & credential leakage"
+              },
+              "fullDescription": {
+                "text": "Coverage of Environment variable injection & credential leakage across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Environment variable injection & credential leakage across the assessed attack surface.",
+                "markdown": "Coverage of Environment variable injection & credential leakage across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/remote-phone-link-pairing-frame-encryption",
+              "name": "Remote phone link pairing & frame encryption",
+              "shortDescription": {
+                "text": "Coverage: Remote phone link pairing & frame encryption"
+              },
+              "fullDescription": {
+                "text": "Coverage of Remote phone link pairing & frame encryption across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Remote phone link pairing & frame encryption across the assessed attack surface.",
+                "markdown": "Coverage of Remote phone link pairing & frame encryption across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/credential-storage-in-keychain",
+              "name": "Credential storage in Keychain",
+              "shortDescription": {
+                "text": "Coverage: Credential storage in Keychain"
+              },
+              "fullDescription": {
+                "text": "Coverage of Credential storage in Keychain across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Credential storage in Keychain across the assessed attack surface.",
+                "markdown": "Coverage of Credential storage in Keychain across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/sensitive-information-disclosure-in-diagnostic-logs",
+              "name": "Sensitive information disclosure in diagnostic logs",
+              "shortDescription": {
+                "text": "Coverage: Sensitive information disclosure in diagnostic logs"
+              },
+              "fullDescription": {
+                "text": "Coverage of Sensitive information disclosure in diagnostic logs across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Sensitive information disclosure in diagnostic logs across the assessed attack surface.",
+                "markdown": "Coverage of Sensitive information disclosure in diagnostic logs across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/dynamic-urllib-file-scheme-ssrf-injection",
+              "name": "Dynamic urllib file scheme / SSRF injection",
+              "shortDescription": {
+                "text": "Coverage: Dynamic urllib file scheme / SSRF injection"
+              },
+              "fullDescription": {
+                "text": "Coverage of Dynamic urllib file scheme / SSRF injection across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Dynamic urllib file scheme / SSRF injection across the assessed attack surface.",
+                "markdown": "Coverage of Dynamic urllib file scheme / SSRF injection across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            }
+          ],
+          "version": "1.7.0"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "strix-coverage/voice-activity-speech-injection-permission-policy-bypass",
+          "ruleIndex": 0,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Voice-activity & speech injection permission policy bypass — No issue identified: Sources/PairVoxCore/Policy/PermissionPolicy.swift\n\nVerified PermissionPolicy risk-level classification, voice-approvable guards, sensitive file path checks, protected folder safeguards, and screen-only restrictions for undescribable/network commands."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Voice-activity & speech injection permission policy bypass",
+              "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+              "recorded_by": "SAST Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/environment-variable-injection-credential-leakage",
+          "ruleIndex": 1,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Environment variable injection & credential leakage — No issue identified: Sources/PairVoxCore/Session/ChildEnvironment.swift\n\nVerified filtering of ANTHROPIC_*, CLAUDE_CODE_*, CLAUDE_CONFIG_DIR, NODE_OPTIONS, and TLS override environment variables when spawning child CLI processes."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Session/ChildEnvironment.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Environment variable injection & credential leakage",
+              "surface": "Sources/PairVoxCore/Session/ChildEnvironment.swift",
+              "recorded_by": "SAST Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/remote-phone-link-pairing-frame-encryption",
+          "ruleIndex": 2,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Remote phone link pairing & frame encryption — No issue identified: Sources/PairVoxLinkKit/LinkCrypto.swift & Sources/PairVoxLink/Pairing.swift\n\nVerified HKDF-SHA256 key derivation, ChaCha20-Poly1305 AEAD framing with strict sequence number checks against replay, constant-time proof comparisons, and 128-bit random pairing offer secrets."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLinkKit/LinkCrypto.swift & Sources/PairVoxLink/Pairing.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Remote phone link pairing & frame encryption",
+              "surface": "Sources/PairVoxLinkKit/LinkCrypto.swift & Sources/PairVoxLink/Pairing.swift",
+              "recorded_by": "SAST Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/credential-storage-in-keychain",
+          "ruleIndex": 3,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Credential storage in Keychain — No issue identified: Sources/PairVoxApp/Support/KeychainStore.swift\n\nVerified secure storage of Anthropic API keys in macOS Keychain using kSecAttrAccessibleWhenUnlocked and proper Keychain query attributes."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxApp/Support/KeychainStore.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Credential storage in Keychain",
+              "surface": "Sources/PairVoxApp/Support/KeychainStore.swift",
+              "recorded_by": "SAST Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/sensitive-information-disclosure-in-diagnostic-logs",
+          "ruleIndex": 4,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Sensitive information disclosure in diagnostic logs — No issue identified: Sources/PairVoxCore/Diagnostics/LogRedactor.swift\n\nVerified regex-based scrubbing of API keys, GitHub/AWS tokens, Bearer tokens, emails, home directory paths, and usernames before log writing or diagnostic export."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Diagnostics/LogRedactor.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Sensitive information disclosure in diagnostic logs",
+              "surface": "Sources/PairVoxCore/Diagnostics/LogRedactor.swift",
+              "recorded_by": "SAST Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/dynamic-urllib-file-scheme-ssrf-injection",
+          "ruleIndex": 5,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Dynamic urllib file scheme / SSRF injection — Ruled out: scripts/pin-whisper-models.py\n\nThe script is an offline developer build tool. All urllib requests use hardcoded https://huggingface.co/ URL prefixes with regex-validated path and commit segments (SEGMENT, COMMIT, DIGEST patterns), ruling out arbitrary file:// access or SSRF."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "scripts/pin-whisper-models.py"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "ruled_out",
+              "risk_area": "Dynamic urllib file scheme / SSRF injection",
+              "surface": "scripts/pin-whisper-models.py",
+              "recorded_by": "SAST Specialist",
+              "source": "agent_reported"
+            }
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ]
+    }
+  ]
+}

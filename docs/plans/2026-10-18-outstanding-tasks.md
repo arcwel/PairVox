@@ -1,4 +1,6 @@
-# PairVox: outstanding tasks (2026-10-18)
+# PairVox: outstanding tasks (2026-10-18, updated 2026-10-24)
+
+**Update 2026-10-24.** Check 5 now passes on branch `fix/v0.1-security-gate`, which is not merged or installed yet. HANDOFF is marked historical. What is left is the headset session (checks 2, 3, and the spoken "Allow" for check 4), done on a build installed from that branch.
 
 This is the open work as of 2026-10-18, after PRs #1 to #5 were merged. The repository has one branch, `main` (98a3726), with no open PRs, other branches or worktrees. The installed app, `dist/PairVox.app`, is built from that commit. The previous build is kept as `dist/PairVox.previous.app`.
 
@@ -12,7 +14,7 @@ The rule from 2026-10-17 still holds: v0.1 is done when the five checks in [2026
 | 2 | Voice session | **Not measured.** The few turns logged so far had first sound at 4.4 to 6.4 s, over the 3.5 s limit. | Owner: 10 questions with the headset. Then `scripts/v01-check.py`. |
 | 3 | Approvals by voice (Mac) | **Not measured.** | Owner: `docs/MIC_TEST.md` parts 4 and 5. A spoken yes creates a file; a spoken yes does not run `git push`; a request from a second project is answered at a pause. |
 | 4 | Phone | **Mostly pass.** It connects over Tailscale, switches projects, approves with a tap and Face ID, and speaks with the Mac's Kokoro voice. | Owner: say "Allow" on the phone for one real request. This has not been tested yet. |
-| 5 | Security gates | **Blocked.** Docker is not installed, so `strix-qa` cannot run. | Owner: install Docker Desktop. Then run `security-audit` (full mode) and `strix-qa` on a model that did not write the code, and file the reports under `docs/security/`. |
+| 5 | Security gates | **Pass** (2026-10-24). `security-audit` full mode: 8 leads, 7 fixed with regression tests, 1 accepted. `strix-qa` on Gemini: no findings. Reports in `docs/security/2026-10-24-audit-run-6/` and `docs/security/strix/2026-10-24-v0.1-gate.md`. | Merge `fix/v0.1-security-gate` and install that build, so checks 2 to 4 are measured on the fixed approval gate. |
 
 ## 2. Known problems to look at only if a check fails
 
@@ -24,24 +26,27 @@ The rule from 2026-10-17 still holds: v0.1 is done when the five checks in [2026
 ## 3. Owner actions (nobody else can do these)
 
 1. A 20-minute session at the Mac with the headset: checks 2, 3 and the spoken "Allow" from check 4. See "What you do at the Mac" in the checks document.
-2. Install Docker Desktop for check 5.
+2. ~~Install Docker Desktop for check 5.~~ Done: OrbStack runs Docker, and both gates ran on 2026-10-24.
 3. Tell Claude when you are done. Claude runs `scripts/v01-check.py`, fills in the measured table, and fixes only what failed.
 
 ## 4. Docs that are out of date
 
-- `docs/HANDOFF.md` is dated 2026-10-13 and says the app had never been launched. Agents are told to read it first. Mark it historical and point to this file and the checks document (backlog 0.4).
+- ~~`docs/HANDOFF.md`~~ Done 2026-10-24: marked historical, and CLAUDE.md now sends agents to this file and the checks document (backlog 0.4).
 - `docs/plans/2026-10-16-hardening-task-list.md` records its progress in status paragraphs, not per row. Section 5 below lists what those paragraphs leave open.
 
 ## 5. Frozen backlog (after v0.1, or sooner only if it causes a failing check)
 
 From [2026-10-16-hardening-task-list.md](2026-10-16-hardening-task-list.md). These are the rows that the document's status notes do not mark done. They have not been re-checked against the code one by one since then.
 
-- **Approval gate:** 1.6 (shell writes to dotfiles rated high), 1.7 (advisor text on the re-prompt path), 1.8 (MCP tool prompts).
+- **Approval gate:** 1.6 (shell writes to dotfiles rated high), 1.7 (advisor text on the re-prompt path). 1.8 (MCP tool prompts) was done in audit run 6.
+- **From audit run 6 (2026-10-24):**
+  - Five units were deferred and never reviewed: the echo path from PairVox's own prompt back into the microphone, non-Bash tool ratings, the child-output parser's cost, and hotkeys and the AppleScript launcher, plus a second pass on phone pairing.
+  - The hardening notes in its REPORT.md §6 are also open.
 - **Audio:** 2.6 (leveling after sanitize), 2.7 (voice processing chosen from the resolved route), 2.10 (screech root cause), 2.11 (latency, which is check 2), 2.12 (output-only starts, "microphone not authorized"), 2.13 (capture- and restart-path tests).
 - **Phone link:** 3.3 (risky approvals from the phone need a check on the Mac), 3.7 (pairing limits counted for each phone), 3.9 (nonce fingerprint in the Pair dialog), 3.10 (fuzz the frame parser that runs before the handshake).
 - **Session and logging:** 4.7 (owner and mode checks on the auto-located `claude`), 4.8 (`LineBuffer` scan cost, JSON depth cap), 4.9 (stale `.part` downloads, `mktemp` guards).
 - **App layer:** 5.5 (permission card layout: fixed, not yet checked on screen), 5.6 (input level still shares the model), 5.7 (window, setup sheet and restore fixes), 5.8 (stderr capture decision), 5.9 (serialize `setActive`), 5.10 (21 capture warnings in `AppModel.swift`).
-- **Tooling and docs:** 0.4 (HANDOFF), 6.2 (bundle path and CDHash in `app.launch`), 6.4 (pin the CI container by digest), 6.5 (threat model corrections), 6.6 (CHANGELOG and RELEASE checklist).
+- **Tooling and docs:** 6.2 (bundle path and CDHash in `app.launch`), 6.4 (pin the CI container by digest), 6.5 (threat model corrections), 6.6 (CHANGELOG and RELEASE checklist).
 - **Release:** 7.1 (MIC_TEST parts 1 to 5 on speakers and headset), 7.2 (security gates, which is check 5), 7.3 (soak test and release dry run). 7.4 (iPhone device test) has been covered by the 2026-10-18 phone tests.
 
 ## 6. CLI opportunities

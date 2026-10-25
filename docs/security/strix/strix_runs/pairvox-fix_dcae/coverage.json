@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-25 00:04:16 UTC",
+  "run_id": "pairvox-fix_dcae",
+  "run_name": "pairvox-fix_dcae",
+  "scope": {
+    "targets": [
+      {
+        "type": "local_code",
+        "details": {
+          "target_path": "/Users/anthonyguidry/strix-targets/PairVox-fix",
+          "workspace_subdir": "PairVox-fix"
+        },
+        "original": "/Users/anthonyguidry/strix-targets/PairVox-fix"
+      }
+    ],
+    "scan_mode": "standard",
+    "scope_mode": "auto",
+    "diff_scope": {
+      "active": false,
+      "mode": "auto"
+    },
+    "instruction": ""
+  },
+  "summary": {
+    "surfaces_reviewed": 6,
+    "outcomes": {
+      "no_issue_found": 5,
+      "ruled_out": 1
+    },
+    "findings_filed": 0,
+    "gaps": 8
+  },
+  "machine_observed": {
+    "agents": [
+      {
+        "agent_id": "2d6f2aeb",
+        "agent_name": "Permission Policy Audit Agent",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "rce"
+        ],
+        "task": "Perform application security code audit and policy verification on PermissionPolicy.swift, ConversationEngine.swift, and command rating logic in /workspace/PairVox-fix. Validate command parsing invariants, quote handling, redirection checks, voice approval risk rating rules, request expiration, and cross-project request boundaries. Verify if any parsing logic misclassifies high-risk commands as low-risk. Call get_threat_model on /workspace/PairVox-fix first. Record coverage and create vulnerability reports with inline code fixes for any confirmed defects.",
+        "is_root": false
+      },
+      {
+        "agent_id": "62b6b1a8",
+        "agent_name": "Permission Policy Specialist",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "rce",
+          "argument_injection"
+        ],
+        "task": "Perform deep code review and analysis of PermissionPolicy.swift, ConversationEngine.swift, and related command rating logic in /workspace/PairVox-fix. Check for quote stripping bypasses, redirection detection evasion, shell command parser tricks, voice approval bypasses for high-risk actions, timeout/expiration logic, and cross-project request validation flaws. Call get_threat_model on /workspace/PairVox-fix first. Validate any discovered vulnerability, record coverage, and if a vulnerability is confirmed, create a vulnerability report with inline code fix (`code_locations` with `fix_before`/`fix_after` and `fix_pr_body`).",
+        "is_root": false
+      },
+      {
+        "agent_id": "529d0261",
+        "agent_name": "Phone Link Audit Agent",
+        "status": "completed",
+        "skills": [
+          "semantic_confusion",
+          "business_logic"
+        ],
+        "task": "Perform application security code audit and bug detection on the PhoneLink implementation in /workspace/PairVox-fix (look at Sources/PairVoxCore, Sources/PairVoxApp, etc.). Inspect pairing flow, QR/link secret handling, transport encryption, socket file creation permissions, Tailscale/loopback binding, and replay prevention. Identify code defects, verify security invariants, record coverage, and if any bugs are found, create vulnerability reports with inline code locations and verification. Call get_threat_model on /workspace/PairVox-fix first.",
+        "is_root": false
+      },
+      {
+        "agent_id": "c319ea16",
+        "agent_name": "Phone Link Specialist",
+        "status": "completed",
+        "skills": [
+          "semantic_confusion",
+          "business_logic"
+        ],
+        "task": "Perform deep security review of PhoneLink server code, IPC channels, pairing handshake, encryption, frame handling, socket permissions, and Tailscale/loopback binding in /workspace/PairVox-fix. Check for pairing secret brute-forcing, replay attacks, unauthenticated control frame injection, socket file permission flaws (e.g. 0600 vs world-writable), and key store file vs keychain fallback issues. Call get_threat_model on /workspace/PairVox-fix first. Validate any discovered vulnerability, record coverage, and file vulnerability reports with inline code fixes.",
+        "is_root": false
+      },
+      {
+        "agent_id": "7f5b4387",
+        "agent_name": "Root Agent",
+        "status": "completed",
+        "skills": [],
+        "task": "\n\nLocal Codebases: - /Users/anthonyguidry/strix-targets/PairVox-fix (available at: /workspace/PairVox-fix; this is the user's real directory, mounted live and writable — .git/.agents/.codex are read-only)",
+        "is_root": true
+      },
+      {
+        "agent_id": "57ef04f9",
+        "agent_name": "SAST Specialist",
+        "status": "completed",
+        "skills": [
+          "source_aware_sast"
+        ],
+        "task": "Run static analysis tools (Semgrep, Gitleaks, TruffleHog, Trivy FS, ast-grep) on target /workspace/PairVox-fix. Save outputs under /workspace/.source-aware/. Review static findings across the repository, identify high-risk areas, record coverage for reviewed code components, and write notes/reports for confirmed issues. Call get_threat_model on /workspace/PairVox-fix first.",
+        "is_root": false
+      },
+      {
+        "agent_id": "88715efd",
+        "agent_name": "Subprocess & Keychain Specialist",
+        "status": "completed",
+        "skills": [
+          "argument_injection",
+          "rce"
+        ],
+        "task": "Perform deep code review and security analysis of ChildEnvironment.swift, KeychainStore.swift, settings loading logic (.claude/settings*.json), and subprocess invocation in /workspace/PairVox-fix. Verify if environment variable sanitization can be bypassed (e.g., NODE_OPTIONS, DYLD_*, ANTHROPIC_*, proxy variables), if API keys or session credentials can leak or be overridden, and if child process execution is vulnerable to argument injection or privilege escalation. Call get_threat_model on /workspace/PairVox-fix first. Validate any discovered vulnerability, record coverage, and file vulnerability reports with inline code fixes.",
+        "is_root": false
+      }
+    ],
+    "skills_exercised": [
+      "argument_injection",
+      "business_logic",
+      "rce",
+      "semantic_confusion",
+      "source_aware_sast"
+    ],
+    "findings_filed": 0,
+    "source": "runtime"
+  },
+  "completeness": {
+    "complete": true,
+    "scan_status": "completed",
+    "exit_reason": "finished_by_tool",
+    "caveats": []
+  },
+  "entries": [
+    {
+      "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "risk_area": "Voice-activity & speech injection permission policy bypass",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Verified PermissionPolicy risk-level classification, voice-approvable guards, sensitive file path checks, protected folder safeguards, and screen-only restrictions for undescribable/network commands.",
+      "recorded_by": "SAST Specialist",
+      "recorded_at": "2026-10-25 00:03:11 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Session/ChildEnvironment.swift",
+      "risk_area": "Environment variable injection & credential leakage",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Verified filtering of ANTHROPIC_*, CLAUDE_CODE_*, CLAUDE_CONFIG_DIR, NODE_OPTIONS, and TLS override environment variables when spawning child CLI processes.",
+      "recorded_by": "SAST Specialist",
+      "recorded_at": "2026-10-25 00:03:13 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLinkKit/LinkCrypto.swift & Sources/PairVoxLink/Pairing.swift",
+      "risk_area": "Remote phone link pairing & frame encryption",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Verified HKDF-SHA256 key derivation, ChaCha20-Poly1305 AEAD framing with strict sequence number checks against replay, constant-time proof comparisons, and 128-bit random pairing offer secrets.",
+      "recorded_by": "SAST Specialist",
+      "recorded_at": "2026-10-25 00:03:15 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxApp/Support/KeychainStore.swift",
+      "risk_area": "Credential storage in Keychain",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Verified secure storage of Anthropic API keys in macOS Keychain using kSecAttrAccessibleWhenUnlocked and proper Keychain query attributes.",
+      "recorded_by": "SAST Specialist",
+      "recorded_at": "2026-10-25 00:03:16 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Diagnostics/LogRedactor.swift",
+      "risk_area": "Sensitive information disclosure in diagnostic logs",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Verified regex-based scrubbing of API keys, GitHub/AWS tokens, Bearer tokens, emails, home directory paths, and usernames before log writing or diagnostic export.",
+      "recorded_by": "SAST Specialist",
+      "recorded_at": "2026-10-25 00:03:18 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "scripts/pin-whisper-models.py",
+      "risk_area": "Dynamic urllib file scheme / SSRF injection",
+      "outcome": "ruled_out",
+      "outcome_label": "Ruled out",
+      "evidence": "The script is an offline developer build tool. All urllib requests use hardcoded https://huggingface.co/ URL prefixes with regex-validated path and commit segments (SEGMENT, COMMIT, DIGEST patterns), ruling out arbitrary file:// access or SSRF.",
+      "recorded_by": "SAST Specialist",
+      "recorded_at": "2026-10-25 00:03:20 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    }
+  ],
+  "gaps": [
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "argument injection",
+      "detail": "Agent(s) Permission Policy Specialist, Subprocess & Keychain Specialist were assigned the 'argument_injection' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "business logic",
+      "detail": "Agent(s) Permission Policy Audit Agent, Permission Policy Specialist, Phone Link Audit Agent, Phone Link Specialist were assigned the 'business_logic' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "semantic confusion",
+      "detail": "Agent(s) Phone Link Audit Agent, Phone Link Specialist were assigned the 'semantic_confusion' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Permission Policy Audit Agent",
+      "detail": "Permission Policy Audit Agent ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Permission Policy Specialist",
+      "detail": "Permission Policy Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Phone Link Audit Agent",
+      "detail": "Phone Link Audit Agent ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Phone Link Specialist",
+      "detail": "Phone Link Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Subprocess & Keychain Specialist",
+      "detail": "Subprocess & Keychain Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    }
+  ]
+}

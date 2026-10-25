@@ -1,0 +1,34 @@
+{
+  "run_id": "pairvox-run-1",
+  "repo": "arcwel/PairVox",
+  "target": "/Users/anthonyguidry/HD Projects/PairVox",
+  "source_ref": {
+    "commit": "fbcd1ed569d095ced47f1b872e4d4b078c47ce19",
+    "dirty": false
+  },
+  "profile": "quick",
+  "scope_paths": [
+    "Sources",
+    "Package.swift",
+    "project.yml",
+    "scripts",
+    ".github",
+    "ios",
+    "packaging"
+  ],
+  "budget": 24,
+  "execution_policy": "sandboxed-source-and-local-only",
+  "target_execution": "none: macOS cannot enforce a memory or process limit on target code and no local Linux Swift image exists, so every check is source-only",
+  "companion_files": [],
+  "prior_runs": [
+    "docs/security/2026-10-13-audit-run-2.md",
+    "docs/security/2026-10-13-audit-run-3-phone-link.md",
+    "docs/security/2026-10-13-audit-run-4-cross-project.md",
+    "docs/security/2026-10-14-audit-run-5-new-features.md (prose only, no compatible coverage-ledger.json or findings.json)"
+  ],
+  "shared_file_owner": "parent",
+  "reviewer_model": "claude-sonnet-5-5 (hunters, critic, verifiers); code authored by Opus-family sessions",
+  "run_status": "complete",
+  "agents_spent": 22,
+  "completion_note": "Quick profile: one hunter wave, one final critic, one verifier per candidate (Phase 3 and 5 merged). Every candidate has an independent final disposition. Partial coverage: 5 units deferred by the final critic."
+}

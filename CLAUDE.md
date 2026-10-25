@@ -2,7 +2,7 @@
 
 PairVox is a native macOS voice front-end for Claude Code: you talk, it streams Claude's reply back as speech, you can interrupt (barge-in), and you can approve tool permissions by voice.
 
-**Read `docs/HANDOFF.md` before doing anything.** It has the current status, what's verified and what isn't, the prioritized task list, and the gotchas.
+**Read `docs/plans/2026-10-18-outstanding-tasks.md` and `docs/plans/2026-10-17-v0.1-checks.md` before doing anything.** They have the current status, the v0.1 definition of done and the open work. `docs/HANDOFF.md` is historical (2026-10-13), but its decisions, auth policy and gotchas (§2, §4) still apply.
 
 ## Commands
 

@@ -1,0 +1,2 @@
+# Strix agent state and transcripts stay local; reports are kept.
+strix_runs/*/.state/
