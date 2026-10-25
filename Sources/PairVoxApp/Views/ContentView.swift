@@ -52,9 +52,16 @@ struct ContentView: View {
         }
         .animation(.easeOut(duration: 0.2), value: model.snapshot.pendingPermission?.request.requestID)
         .toolbar {
+            if model.micAsleep {
+                ToolbarItem(placement: .navigation) { MicAsleepBadge() }
+            }
             ToolbarItemGroup(placement: .primaryAction) { MainToolbarItems() }
             ToolbarItem(placement: .primaryAction) { HealthIndicator() }
         }
+        // The whole top bar turns orange while the microphone sleeps, so it is plain from across the room that
+        // PairVox is not listening.
+        .toolbarBackground(model.micAsleep ? Style.asleep.opacity(0.32) : Color.clear, for: .windowToolbar)
+        .toolbarBackgroundVisibility(model.micAsleep ? .visible : .automatic, for: .windowToolbar)
         .navigationTitle(model.project?.lastPathComponent ?? "PairVox")
         .navigationSubtitle(model.snapshot.session.map { "\($0.model) · \(model.statusLine)" } ?? model.statusLine)
         .sheet(isPresented: $model.showSetup) {
@@ -65,6 +72,28 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+}
+
+/// Shown beside the title while the microphone sleeps: what happened, and the one click that undoes it.
+private struct MicAsleepBadge: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Button { model.wakeMicrophone() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "moon.zzz.fill")
+                Text("Microphone asleep").fontWeight(.semibold)
+                Text("· Wake").foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Style.asleep.opacity(0.25), in: RoundedRectangle(cornerRadius: Style.innerRadius))
+            .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Style.asleep, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("No conversation for \(model.settings.micSleepMinutes) minutes, so the microphone was muted. Click, or press \(Shortcuts.of(.toggleMute).display), to turn it back on.")
+        .accessibilityLabel("Microphone asleep. Wake microphone")
     }
 }
 

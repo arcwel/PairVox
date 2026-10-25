@@ -58,7 +58,7 @@ struct MenuBarView: View {
             }
         }
         Divider()
-        Button(model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
+        Button(model.micAsleep ? "Wake Microphone" : (model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone")) { model.toggleMute() }
         Button("Stop Speaking") { model.stopSpeaking() }.disabled(!model.snapshot.isSpeaking)
         Button("Interrupt Claude") { model.interrupt() }.disabled(!model.snapshot.isClaudeWorking)
         Divider()

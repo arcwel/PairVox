@@ -59,6 +59,13 @@ private struct GeneralSettings: View {
                 }
                 Toggle("Let me interrupt by talking (barge-in)", isOn: $model.settings.bargeInEnabled)
                 Toggle("Use the microphone", isOn: $model.settings.microphoneEnabled)
+                Picker("Put the microphone to sleep", selection: $model.settings.micSleepMinutes) {
+                    ForEach(MicHibernation.minuteChoices, id: \.self) { m in
+                        Text(m == 0 ? "Never" : "After \(m) minutes without conversation").tag(m)
+                    }
+                }
+                Text("Hands-free only. When nobody has talked to Claude and Claude has not been working or speaking for this long, the microphone mutes itself and the top bar turns orange. Click Wake, or press the mute shortcut, to turn it back on.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("Turn off to play only. A Bluetooth headset then stays in its high-quality music mode instead of the narrower call mode that an open microphone forces. You can still type to Claude.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Separate microphone and speaker audio (experimental)", isOn: $model.settings.separateAudioEngines)

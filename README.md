@@ -20,6 +20,7 @@ PairVox puts a live voice loop in front of the [Claude Code](https://code.claude
   - *Summary*: only the opening summary is read. Say "details" for the rest.
 - **Brainstorm or execute.** *Brainstorm* runs Claude Code in plan mode, so it discusses and plans but changes nothing. *Execute* lets it work.
 - **Approve by voice, safely.** "Yes", "no", "always allow", or "no, edit the other file instead". Destructive actions (deleting files, pushing, `sudo`, edits outside the project) need a click by default. If you choose, you can allow them by voice too, with a deliberate phrase (Settings → General → Permissions); that switch is off until you turn it on.
+- **Stops listening to an empty room.** After 3 minutes without conversation the hands-free microphone goes to sleep: it mutes, and the top bar turns orange until you click Wake.
 - **Natural, local voices.** Speech recognition uses [WhisperKit](https://github.com/argmaxinc/WhisperKit), with Apple Speech as the fallback. The voice is [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), falling back to the macOS system voice. Speech never leaves your Mac.
 
 ## See it work
@@ -30,7 +31,7 @@ PairVox puts a live voice loop in front of the [Claude Code](https://code.claude
 <td width="38%" valign="top"><img src="docs/media/iphone-demo.gif" alt="PairVox on the iPhone: pairing with a pasted link, a request to edit parser.swift, Allow with Face ID, and the reply"></td>
 </tr>
 <tr>
-<td valign="top"><b>Mac.</b> Ask for a change, hear the reply as it streams, and answer the request card by voice or with a click.</td>
+<td valign="top"><b>Mac.</b> Ask for a change and answer each request card with a click or by voice. Say "no" with what to do instead, and Claude takes the other route.</td>
 <td valign="top"><b>iPhone.</b> Pair once, follow the Mac's session, and approve with Face ID. The Mac decides what a yes may approve.</td>
 </tr>
 </table>
@@ -40,6 +41,10 @@ PairVox puts a live voice loop in front of the [Claude Code](https://code.claude
 <img src="docs/media/iphone-request.png" width="32%" alt="iPhone showing a medium-risk request to edit parser.swift with Deny and Allow">
 <img src="docs/media/iphone-reply.png" width="32%" alt="iPhone showing the reply after the edit was allowed">
 </p>
+
+<p><img src="docs/media/mac-asleep.png" width="62%" alt="PairVox with an orange top bar and a Microphone asleep, Wake button beside the title"></p>
+
+After three quiet minutes the hands-free microphone goes to sleep, and the top bar stays orange until you click Wake.
 
 The iPhone recordings use `pairvox-link-testhost`, the stand-in Mac host in this repository, so the conversation on the phone is scripted.
 

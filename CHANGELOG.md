@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The hands-free microphone goes to sleep after 3 minutes without conversation. Asleep, it is muted, the top bar turns orange and shows "Microphone asleep · Wake", and the microphone icon becomes a moon. Click Wake, press the mute shortcut (⌃⌥M anywhere) or hold push-to-talk to turn it back on. Claude thinking, working or speaking in any project counts as conversation, and so does anything you send. Sound that never became a message does not, and it never sleeps while you are talking. Settings, General, Listening sets the time (3, 5, 10 or 30 minutes) or turns it off.
+- `scripts/release-assets.sh VERSION` builds every file a release carries into one folder: the Mac DMG, the unsigned iPhone `.ipa`, the newest Strix report, a zip of the security reports and `SHA256SUMS`. It accepts `--out`, `--signed` (signed and notarized through `scripts/release.sh`), `--dry-run` and `--json`, never touches `dist/`, never uploads, and prints the `gh release create` line to run.
+- `pairvox-link-testhost` answers an approval or denial with a reply, so a phone run shows the whole loop.
+
 ## 0.1.0-beta.1 (2026-10-25)
 
 First public pre-release: the Mac app (ad-hoc signed DMG, not notarized) and the iPhone app (unsigned .ipa). Release notes: docs/release-notes/v0.1.0-beta.1.md.
