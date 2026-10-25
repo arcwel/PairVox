@@ -17,9 +17,11 @@ import PairVoxLink
 import PairVoxLinkKit
 
 final class ScriptedEngine: LinkEngine, @unchecked Sendable {
+    // Called with true for an approval and false for a denial, so the script can move on to its next snapshot.
+    var onDecision: (@Sendable (Bool) async -> Void)?
     func submit(_ text: String) async { print("phone said: \(text)") }
-    func approve(requestID: String, projectID: String?) async { print("phone APPROVED \(requestID)") }
-    func deny(requestID: String, projectID: String?) async { print("phone DENIED \(requestID)") }
+    func approve(requestID: String, projectID: String?) async { print("phone APPROVED \(requestID)"); await onDecision?(true) }
+    func deny(requestID: String, projectID: String?) async { print("phone DENIED \(requestID)"); await onDecision?(false) }
     func interrupt() async { print("phone interrupted") }
 }
 
@@ -56,7 +58,16 @@ if let i = CommandLine.arguments.firstIndex(of: "--port"), i + 1 < CommandLine.a
 
 setvbuf(stdout, nil, _IOLBF, 0)
 let pairing = PairingManager(storeURL: nil)
-let host = LinkHost(pairing: pairing, engine: ScriptedEngine())
+let engine = ScriptedEngine()
+let host = LinkHost(pairing: pairing, engine: engine)
+let opening = [LinkEntry(id: 1, role: "user", text: "Fix the failing test"),
+               LinkEntry(id: 2, role: "assistant", text: "I found the cause in parser.swift.")]
+engine.onDecision = { approved in
+    let reply = approved ? "Done. The off-by-one in parser.swift is fixed, and all 42 tests pass."
+                         : "Okay, I left parser.swift alone. Want me to explain the fix instead?"
+    await host.publish(LinkSnapshot(phase: "idle", project: "scripted-project",
+                                    transcriptTail: opening + [LinkEntry(id: 3, role: "assistant", text: reply)], request: nil, queuedRequests: 0))
+}
 await host.setPairingApproval { name in print("test host accepted pairing from \"\(name)\""); return true }
 await host.setLog { print("link: \($0)") }
 let published = Published()
@@ -66,8 +77,7 @@ await host.setConnectionObserver { count in
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await host.publish(LinkSnapshot(phase: "awaitingPermission", project: "scripted-project",
-                                            transcriptTail: [LinkEntry(id: 1, role: "user", text: "Fix the failing test"),
-                                                             LinkEntry(id: 2, role: "assistant", text: "I found the cause in parser.swift.")],
+                                            transcriptTail: opening,
                                             request: LinkRequest(requestID: "TEST-1", summary: "Edit parser.swift", spokenPrompt: "Claude wants to edit parser dot swift. Allow?",
                                                                  risk: "medium", reasons: ["changes a file"], voiceApprovable: true),
                                             queuedRequests: 0))

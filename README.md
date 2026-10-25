@@ -22,6 +22,44 @@ PairVox puts a live voice loop in front of the [Claude Code](https://code.claude
 - **Approve by voice, safely.** "Yes", "no", "always allow", or "no, edit the other file instead". Destructive actions (deleting files, pushing, `sudo`, edits outside the project) need a click by default. If you choose, you can allow them by voice too, with a deliberate phrase (Settings → General → Permissions); that switch is off until you turn it on.
 - **Natural, local voices.** Speech recognition uses [WhisperKit](https://github.com/argmaxinc/WhisperKit), with Apple Speech as the fallback. The voice is [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), falling back to the macOS system voice. Speech never leaves your Mac.
 
+## See it work
+
+<table>
+<tr>
+<td width="62%" valign="top"><img src="docs/media/mac-demo.gif" alt="PairVox on the Mac: a request to fix a failing test, Claude's reply streaming in, and an edit approval card"></td>
+<td width="38%" valign="top"><img src="docs/media/iphone-demo.gif" alt="PairVox on the iPhone: pairing with a pasted link, a request to edit parser.swift, Allow with Face ID, and the reply"></td>
+</tr>
+<tr>
+<td valign="top"><b>Mac.</b> Ask for a change, hear the reply as it streams, and answer the request card by voice or with a click.</td>
+<td valign="top"><b>iPhone.</b> Pair once, follow the Mac's session, and approve with Face ID. The Mac decides what a yes may approve.</td>
+</tr>
+</table>
+
+<p>
+<img src="docs/media/iphone-pair.png" width="32%" alt="iPhone pairing screen">
+<img src="docs/media/iphone-request.png" width="32%" alt="iPhone showing a medium-risk request to edit parser.swift with Deny and Allow">
+<img src="docs/media/iphone-reply.png" width="32%" alt="iPhone showing the reply after the edit was allowed">
+</p>
+
+The iPhone recordings use `pairvox-link-testhost`, the stand-in Mac host in this repository, so the conversation on the phone is scripted.
+
+## Download
+
+Get the Mac app and the iPhone app from [Releases](https://github.com/arcwel/PairVox/releases). Each release lists SHA-256 checksums and carries its security reports.
+
+**Mac (`PairVox-<version>.dmg`).** Drag PairVox to Applications. This build is not notarized yet (that needs a paid Apple Developer account), so macOS blocks the first launch:
+
+1. Open PairVox once and close the warning.
+2. Open System Settings, Privacy & Security, scroll to "PairVox was blocked", and click **Open Anyway**.
+3. Open PairVox again and confirm.
+
+**iPhone (`PairVoxPhone-<version>-unsigned.ipa`).** There is no App Store or TestFlight build yet, for the same reason. Two ways in:
+
+- Sideload the `.ipa` with [AltStore](https://altstore.io) or [Sideloadly](https://sideloadly.io). They sign it with your own Apple ID. With a free Apple ID the app opens for 7 days, then needs reinstalling.
+- Build it from source with Xcode and your own Apple ID: see [ios/README.md](ios/README.md). The same 7-day limit applies to a free Apple ID.
+
+The phone also needs [Tailscale](https://tailscale.com) on both devices: see [docs/PHONE_LINK_SETUP.md](docs/PHONE_LINK_SETUP.md).
+
 > PairVox is an independent open-source project. It works with Claude Code but is not affiliated with or endorsed by Anthropic. “Claude” and “Claude Code” are trademarks of Anthropic.
 
 ## How it signs in (and why it's built this way)
@@ -44,7 +82,7 @@ Anthropic's [legal and compliance page](https://code.claude.com/docs/en/legal-an
 ## Build and run
 
 ```bash
-git clone https://github.com/OWNER/pairvox.git && cd pairvox
+git clone https://github.com/arcwel/PairVox.git && cd PairVox
 make test        # engine unit tests (uses --build-system native on macOS; also runs on Linux)
 make app         # builds dist/PairVox.app (ad-hoc signed)
 open dist/PairVox.app

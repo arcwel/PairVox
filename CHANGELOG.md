@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.0-beta.1 (2026-10-25)
+
+First public pre-release: the Mac app (ad-hoc signed DMG, not notarized) and the iPhone app (unsigned .ipa). Release notes: docs/release-notes/v0.1.0-beta.1.md.
+
 - Easier to use.
   - When a spoken answer does not count, the request card says so and why: you started before the question played, it sounded like PairVox's own voice, the request waited too long, or it needs "confirm high risk" or a click. When you spoke before the question, PairVox says "I heard that before I asked" and asks again.
   - A health indicator at the end of the toolbar reads Ready (green), Limited (orange) or Not working (red), with a different shape for each. Click it for every part: microphone, audio, Claude Code, speech recognition, voice, echo cancellation and the phone link (counted only when it is on). Each part that needs attention says what is wrong and has one fix button: Allow…, Open Privacy Settings, Restart Audio, Sign In in Terminal, Try Again, Download, Turn On, Pair a Phone… The same list is in Settings, Health.
@@ -91,9 +95,9 @@
 - Phone link setup guide `docs/PHONE_LINK_SETUP.md`: Tailscale access rule for TCP 47821, userspace Tailscale forward, troubleshooting.
 - Specs: `docs/prd/pairvox-iphone-prd.md` and `docs/prd/cross-project-approvals-prd.md`.
 
-## 0.1.0 (unreleased)
+## Before 0.1.0-beta.1
 
-First public version.
+The first feature set.
 
 - macOS app: hands-free or hold-to-talk voice conversation with Claude Code.
 - Barge-in (interrupt by talking) on speakers or headphones, using voice-processing echo cancellation.
