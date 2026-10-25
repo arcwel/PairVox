@@ -262,6 +262,20 @@ final class LinkTests: XCTestCase {
         XCTAssertEqual(engine.calls.last, "approve:R4")
     }
 
+    // The phone's "Interrupt Claude" is a command, not a setting: each tap reaches the Mac's engine once.
+    func testInterruptFromThePhoneReachesTheEngine() async throws {
+        let (host, engine, pairing, _) = await makeHost()
+        let (id, psk) = try await pairPhone(host, pairing)
+        let client = try await connect(host, id, psk)
+        await host.publish(snapshot())
+        _ = try await nextSnapshot(client)
+        try await client.send(.interrupt)
+        try await client.send(.interrupt)
+        let deadline = Date().addingTimeInterval(2)
+        while engine.calls.filter({ $0 == "interrupt" }).count < 2, Date() < deadline { try await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(engine.calls.filter { $0 == "interrupt" }.count, 2)
+    }
+
     func testRequestNotShownOnThisConnectionCannotBeApproved() async throws {
         let (host, engine, pairing, _) = await makeHost()
         let (id, psk) = try await pairPhone(host, pairing)
