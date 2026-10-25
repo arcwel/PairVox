@@ -1,0 +1,22 @@
+{
+  "run_id": "pairvox-run-7",
+  "repo": "arcwel/PairVox",
+  "target": "/Users/anthonyguidry/security-audit-skill/PairVox/run-2/src",
+  "source_ref": {
+    "commit": "ac00462",
+    "dirty": false
+  },
+  "profile": "quick",
+  "scope_paths": [
+    "the five units deferred by run 6"
+  ],
+  "budget": 12,
+  "execution_policy": "sandboxed-source-and-local-only",
+  "target_execution": "none, as in run 6",
+  "prior_runs": [
+    "/Users/anthonyguidry/security-audit-skill/PairVox/run-1/coverage-ledger.json"
+  ],
+  "shared_file_owner": "parent",
+  "run_status": "complete",
+  "agents_spent": 12
+}

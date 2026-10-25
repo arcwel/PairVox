@@ -1,0 +1,804 @@
+[
+  {
+    "coverage_id": "Sources%2FPairVoxApp%2FAppModel.swift%23openTerminalForLogin::Sources%2FPairVoxApp%2FPairVox.entitlements%23automation.apple-events::profile%2Fquick%2Fall-in-scope-subsystems::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Local%20IPC%20and%20exported-component%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxApp/AppModel.swift#openTerminalForLogin",
+      "boundary": "Sources/PairVoxApp/PairVox.entitlements#automation.apple-events",
+      "attack_class": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Local IPC and exported-component attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "macOS app-integration entry points: global hotkeys, the Terminal-login AppleScript launcher, notifications, and the Apple Events entitlement",
+    "boundary": "Hotkeys cannot be abused from another app; the AppleScript built from claudePath is not an injection vector; the Apple Events entitlement is used only for Terminal",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Local IPC",
+    "starting_paths": [
+      "Sources/PairVoxApp/Support/HotKeyCenter.swift",
+      "Sources/PairVoxApp/Support/Shortcuts.swift",
+      "Sources/PairVoxApp/Support/Notifier.swift",
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/PairVox.entitlements",
+      "Sources/PairVoxApp/Info.plist"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Core discipline",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Local IPC and exported-component attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Universal moves",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Privileged-helper and local-file attack classes",
+        "reason": "no privileged helper; local files have their own unit"
+      }
+    ],
+    "prior_status": "prior_deferred",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-appint",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/Info.plist",
+      "Sources/PairVoxApp/PairVox.entitlements",
+      "Sources/PairVoxApp/Support/HotKeyCenter.swift",
+      "Sources/PairVoxApp/Support/Notifier.swift",
+      "Sources/PairVoxApp/Support/Shortcuts.swift",
+      "Sources/PairVoxCore/Config/Settings.swift",
+      "Sources/PairVoxCore/Session/ClaudeLocator.swift",
+      "project.yml"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-appint",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/Support/HotKeyCenter.swift",
+          "Sources/PairVoxApp/Support/Shortcuts.swift",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "A global hotkey cannot be used by another app to approve a permission request or reach any capability beyond the four listed actions",
+        "method": "source",
+        "result": "Four Carbon RegisterEventHotKey bindings (ctrl+opt + Space/T/V/G/B for hold-to-talk, S, M, I) feed HotKeyCenter to AppModel.globalHotKey (AppModel.swift:493-501), which only calls pushToTalk, stopSpeaking, toggleMute or interrupt. None of these approve, deny or answer a permission request; the allow/deny shortcuts (cmd+Return etc.) are SwiftUI menu key equivalents that fire only when PairVox is frontmost. The event handler reads only the numeric hotkey id, ignores unknown ids, and hops to the main queue. Carbon hotkeys are system-wide and can be triggered by synthetic events only from a process already holding the OS post-event/Accessibility permission, which is a stronger capability than these actions give. Worst effect is a stop, mute or interrupt (availability nuisance) or opening the mic like the physical key; mic audio still passes the voice-approval policy.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-appint",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/Support/Notifier.swift",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "A notification cannot be used to answer or approve a request, and it exposes nothing beyond what the owner sees on screen",
+        "method": "source",
+        "result": "Notifier posts plain UNMutableNotificationContent with no actions, no categories and no UNUserNotificationCenterDelegate anywhere in Sources, so tapping or replying approves nothing. Content is title plus the policy assessment summary or the first 140 chars of the last assistant reply (AppModel.swift:923-933). Both can appear on the lock screen depending on the owner's notification settings; this is disclosure to someone physically at the Mac, not a boundary crossing.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-appint",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/AppModel.swift",
+          "Sources/PairVoxCore/Session/ClaudeLocator.swift",
+          "Sources/PairVoxCore/Config/Settings.swift"
+        ],
+        "invariant": "The AppleScript built in openTerminalForLogin from claudePath is not an injection vector for a lower-trust principal",
+        "method": "source",
+        "result": "openTerminalForLogin (AppModel.swift:815-822) escapes only double quotes, not backslashes, and the string is then run by the Terminal shell unquoted. A path containing a backslash-quote sequence or shell metacharacters would therefore break out of the AppleScript literal or the shell word. The only inputs are setup.claudePath, set by refreshSetup (AppModel.swift:164-165) from ClaudeLocator.locate: either the Settings override, which must pass overrideProblem (absolute, regular file, owned by user or root, not group/other writable, parent not world-writable), and which Settings.load nulls when settings.json is not owner-private; or a file named claude inside a directory taken from the login-shell PATH or fixed install dirs. No phone-link, model, repository or network-controlled value reaches this string: openTerminalForLogin is called only from SetupView and SettingsView buttons. To control the string a peer would need to create a directory with a hostile name that is in the owner's PATH or typed in Settings, i.e. same-UID authority, and the same binary is already executed with the user's environment by ClaudeLocator.version (AppModel.swift:170) and as the Claude child with the API key. The sink adds no capability, so no boundary is crossed.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-appint",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/PairVox.entitlements",
+          "Sources/PairVoxApp/Info.plist",
+          "project.yml",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "The Apple Events entitlement is used only for Terminal and the app exposes no local IPC or URL entry point of its own",
+        "method": "source",
+        "result": "The entitlement file holds only audio-input and automation.apple-events (no disable-library-validation, no JIT, no unsigned-memory); project.yml enables the hardened runtime. The only Apple Events sender in Sources is the NSAppleScript call to Terminal at AppModel.swift:819 (scripts/restart-app.sh uses osascript from a dev script, out of this unit). The Info.plist has no CFBundleURLTypes, services, document types or NSAppleScriptEnabled, there is no onOpenURL or Apple Event handler, XPC, Mach port or distributed notification in the app, so the app has no exported component for another process to call. The runtime TCC Automation prompt for Terminal is a user-consent gate, whose state cannot be observed from source. The entitlement is app-wide, so a future script sending to another target would not be blocked by it, but none exists.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": [],
+    "parent_hardening": [
+      "AppModel.openTerminalForLogin (AppModel.swift:816) escapes only double quotes. Escape backslashes first, and pass the path through AppleScript 'quoted form of' (or shell-quote it) so a claude path with spaces, a backslash or shell metacharacters runs correctly and cannot break out. Today this is a robustness bug (paths with spaces fail) and not a boundary issue, since the path is same-UID controlled.",
+      "Add a unit test for the command builder (extract it into PairVoxCore): paths with a space, a double quote, a backslash-quote pair, a dollar sign and a newline must produce a script whose do-script argument is exactly one shell-quoted word.",
+      "Notifier bodies carry the permission assessment summary and a reply excerpt. Consider setting content.interruptionLevel/lock-screen privacy (hide previews when locked) or a generic body such as 'Claude needs your OK', so command text is not shown on a locked screen.",
+      "The Apple Events entitlement is app-wide. Keep Terminal as the sole target and keep the NSAppleEventsUsageDescription wording; if the Terminal login helper is ever replaced by NSWorkspace.openApplication plus a pasteboard hint, the entitlement can be dropped."
+    ],
+    "parent_uncovered": []
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxApp%2FSupport%2FUpdater.swift%23Updater::Sources%2FPairVoxApp%2FInfo.plist%23SUFeedURL::profile%2Fquick%2Fall-in-scope-subsystems::SUPPLY-CHAIN-AND-RELEASE.md%23Release%20and%20update%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxApp/Support/Updater.swift#Updater",
+      "boundary": "Sources/PairVoxApp/Info.plist#SUFeedURL",
+      "attack_class": "SUPPLY-CHAIN-AND-RELEASE.md#Release and update attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Sparkle updater scaffold",
+    "boundary": "With empty feed keys the updater never starts or reaches the network",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Supply chain",
+    "starting_paths": [
+      "Sources/PairVoxApp/Support/Updater.swift",
+      "Sources/PairVoxApp/Info.plist"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "SUPPLY-CHAIN-AND-RELEASE.md#Core discipline",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Release and update attack classes",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Universal moves",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: Low priority; updater file not read."
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23handleSession::Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23transcript%20growth::profile%2Fquick%2Fall-in-scope-subsystems::RESOURCE-EXHAUSTION-AND-AVAILABILITY.md%23Resource%20accumulation%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#handleSession",
+      "boundary": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#transcript growth",
+      "attack_class": "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Resource accumulation attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Engine actor handling of long assistant replies",
+    "boundary": "Interrupt, deny and approve stay responsive while a long reply is processed",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Resource exhaustion",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Resource accumulation attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: The parser candidate's impact depends on this path; not reviewed."
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FProtocol%23can_use_tool%20non-Bash%20tools::Sources%2FPairVoxCore%2FPolicy%2FPermissionPolicy.swift%23readTargets%20and%20isSensitivePath::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Protocol#can_use_tool non-Bash tools",
+      "boundary": "Sources/PairVoxCore/Policy/PermissionPolicy.swift#readTargets and isSensitivePath",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "PermissionPolicy.assess for every non-Bash tool: Read-class auto-approval, Write/Edit/NotebookEdit path classification, WebFetch and WebSearch",
+    "boundary": "Which reads and writes are rated low and auto-approved, which are high, and which a folder edit grant covers",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Tool and action attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "ATTACK-CLASSES.md#Injection",
+        "reason": "Bash classification is owned by the can_use_tool unit"
+      }
+    ],
+    "prior_status": "prior_deferred",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-nonbash",
+    "reviewed_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+      "Sources/PairVoxCore/Protocol/OutboundMessage.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-nonbash",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+          "Sources/PairVoxCore/Policy/FolderGrants.swift"
+        ],
+        "invariant": "A Write/Edit/MultiEdit/NotebookEdit target that the child would actually write outside the project (or into a sensitive location) is rated high and never covered by a folder edit grant; path classification uses the same target the tool uses",
+        "method": "source",
+        "result": "Existing symlinks are resolved (FolderScope.resolved) so a link to an existing outside file or folder is high. Two gaps: (1) a dangling symlink leaf is not resolved because fileExists(atPath:) follows links and returns false, so the leaf is treated as a new file inside the project, medium and grant-covered; sensitive needles and protected-folder checks are also applied to the unresolved name. (2) the target is chosen as file_path ?? notebook_path for every tool, so for NotebookEdit a present file_path shadows the real notebook_path. blockedPath is only used when both are absent. Read-class: readTargets covers file_path, path and absolute or dotted Glob patterns; Grep glob and pathless Grep/Glob are not examined (already listed in run 6 hardening). projectRoot is always set in app and CLI.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-nonbash",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+          "Sources/PairVoxCore/Protocol/OutboundMessage.swift"
+        ],
+        "invariant": "The decision applied to a can_use_tool request (auto, folder-grant, voice, click) is derived from the same normalized input that is echoed back as updatedInput, and nothing is approved on a changed object",
+        "method": "source",
+        "result": "permissionRequested assesses the request once, auto-allows when coveredByFolderGrant or (autoApproveLowRisk and autoApprovable), and the allow response echoes request.input unchanged, so approval is bound to the exact arguments PairVox assessed. The weakness is the classification of those arguments, not the binding. allowAlways applies Claude Code's own suggestions scoped to session; see hardening.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-nonbash",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+          "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+          "Sources/PairVoxCore/Conversation/EngineModels.swift"
+        ],
+        "invariant": "WebFetch and WebSearch: what a spoken yes covers matches what the child will contact; auto-approval only for plain read-only tools",
+        "method": "source",
+        "result": "WebFetch speaks only URL(string:)?.host while the child fetches the full URL; Foundation (RFC 3986) and a WHATWG parser can disagree on the host for a backslash before an at-sign (candidate 3). WebFetch voice-approvable while Bash network is screen-only is already in run 6 hardening. WebSearch is in readOnlyTools and is auto-approved when the opt-in setting is on (label says 'search'), which is an outbound channel after auto-approved reads (hardening). ExitPlanMode is excluded from auto-approval.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "policy/dangling-symlink-leaf-classified-inside-project-and-grant-covered",
+      "policy/notebookedit-file_path-shadows-notebook_path-in-classification",
+      "policy/webfetch-spoken-host-from-foundation-parser-differs-from-fetch-host"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "PermissionPolicy.assess never compares input paths with the blocked_path Claude Code sends (and decision_reason_type 'workingDir'). Resolving blocked_path with FolderScope and raising risk to high when it is outside the project would back up every classification gap above.",
+      "isSensitivePath applies its needles to the unresolved path only. A symlink inside the project to a file inside the project such as .env or .git/config is not matched by name when Read or written through the link; apply the needles to FolderScope.resolved(path) as well.",
+      "The sensitive needle list lacks .profile, .zlogin, .gitconfig, .config/git, .config/fish, .pypirc, *.tfstate, terraform.tfvars, service-account key files and kubeconfig. This matters mostly when the owner opens the home folder as a project, because writes there are then 'inside the project' and medium.",
+      "WebSearch is in readOnlyTools, so with the opt-in 'Auto-approve read-only tools (Read, Grep, Glob, search)' setting, a query string (model-written, after auto-approved reads of project files) leaves the Mac with no prompt. Consider keeping WebSearch out of auto-approval or showing the query.",
+      "Voice 'always allow' (VoiceCommand.permissionAnswer) on a medium file edit applies Claude Code's own suggestions for the session (OutboundMessage.swift:41-47), such as addDirectories or a mode change. Edits in that scope may then stop reaching PairVox at all, so its per-path high ratings (.env, .git/config) no longer apply. Consider dropping suggestions that widen scope for file-write tools, or allowing always only by click.",
+      "display_name is used for the card summary and spoken text of default-case tools. For MCP tools it comes from the server; use the tool_name for the label.",
+      "readTargets handles Glob patterns but not the Grep glob argument, and a pathless Grep/Glob has no target at all (already in the run 6 hardening list); a project-relative glob such as '**/.env*' reads sensitive files at low risk.",
+      "PermissionPolicy.assess treats projectRoot == nil as 'no outside-project check' (line 89), so a read of any non-sensitive file would be low and auto-approvable. App and CLI always set projectRoot today; make nil fail closed.",
+      "editGrant matches any grant folder, not only the project, but the risk gate (outside-project is high) keeps a grant for another folder from covering an edit; keep that coupling covered by a test.",
+      ".git/hooks is not a sensitive path (already in run 6 hardening) and ranks the same as .git/config in effect; add it together with .git/info and .git/modules."
+    ],
+    "parent_uncovered": [
+      {
+        "surface": "OutboundMessage.permissionResponse allowAlways: Claude Code permission_suggestions echoed with destination forced to session",
+        "boundary": "What a single 'always allow' answer authorizes in the child for file-write and other non-Bash tools (addRules, addDirectories, setMode)",
+        "subsystem": "PairVoxCore/Protocol and Conversation",
+        "attack_class": "Business logic (approval scope widening)",
+        "starting_paths": [
+          "Sources/PairVoxCore/Protocol/OutboundMessage.swift",
+          "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+          "Sources/PairVoxApp/Views/PermissionCardView.swift"
+        ],
+        "reason": "The suggestions come from the child and their effect depends on Claude Code's rule engine (a mode change would bypass the can_use_tool path for later edits). It needs its own coverage unit with a fixture of real suggestion shapes per tool, which was not part of the assigned unit."
+      }
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FProtocol%2FOutboundMessage.swift%23allowAlways::Sources%2FPairVoxCore%2FProtocol%2FInboundMessage.swift%23permission_suggestions::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Protocol/OutboundMessage.swift#allowAlways",
+      "boundary": "Sources/PairVoxCore/Protocol/InboundMessage.swift#permission_suggestions",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Always-allow permission suggestions echoed to the child",
+    "boundary": "One always-allow answer must not widen what runs without PairVox seeing it",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Protocol/OutboundMessage.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Tool and action attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: setMode and addDirectories suggestions were passed through; outside the five units. Narrowed to allow rules in the same build, not reviewed."
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FSession%2FClaudeCLISession.swift%23handleStdout::Sources%2FPairVoxCore%2FProtocol%2FLineBuffer.swift%23maxLineBytes::profile%2Fquick%2Fall-in-scope-subsystems::RESOURCE-EXHAUSTION-AND-AVAILABILITY.md%23Computational%20amplification%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Session/ClaudeCLISession.swift#handleStdout",
+      "boundary": "Sources/PairVoxCore/Protocol/LineBuffer.swift#maxLineBytes",
+      "attack_class": "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Computational amplification attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Child stdout and model-output parsing: LineBuffer, JSONValue, InboundMessage, EventTranslator and the speech parsers",
+    "boundary": "A runaway or deeply nested stream from the claude child must not hang, exhaust memory or stall the approval pipeline",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Resource exhaustion",
+    "starting_paths": [
+      "Sources/PairVoxCore/Protocol/LineBuffer.swift",
+      "Sources/PairVoxCore/Protocol/JSONValue.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+      "Sources/PairVoxCore/Session/EventTranslator.swift",
+      "Sources/PairVoxCore/Session/ClaudeCLISession.swift",
+      "Sources/PairVoxCore/Speech"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Resource accumulation attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Computational amplification attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Quota and scheduling attack classes",
+        "reason": "no metered quota on the local pipe"
+      }
+    ],
+    "prior_status": "prior_deferred",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-parser",
+    "reviewed_paths": [
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+      "Sources/PairVoxCore/Protocol/JSONValue.swift",
+      "Sources/PairVoxCore/Protocol/LineBuffer.swift",
+      "Sources/PairVoxCore/Session/ClaudeCLISession.swift",
+      "Sources/PairVoxCore/Session/EventTranslator.swift",
+      "Sources/PairVoxCore/Speech/CodeReader.swift",
+      "Sources/PairVoxCore/Speech/MarkdownSpeechParser.swift",
+      "Sources/PairVoxCore/Speech/Pronunciation.swift",
+      "Sources/PairVoxCore/Speech/SentenceChunker.swift",
+      "Sources/PairVoxCore/Speech/SpeechPlanner.swift",
+      "Sources/PairVoxCore/Speech/ToolNarrator.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-parser",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Protocol/LineBuffer.swift",
+          "Sources/PairVoxCore/Session/ClaudeCLISession.swift"
+        ],
+        "invariant": "A runaway or over-long record from the child pipe is bounded in memory and in CPU, and cannot stall the reader or the actor that answers permission prompts",
+        "method": "source",
+        "result": "Memory is bounded: pending is cleared once it passes maxLineBytes (64 MiB default, LineBuffer.swift:12,26-29), so retention is at most about 64 MiB plus one chunk plus transient copies. CPU is superlinear in two ways: append() copies the whole remainder after every newline (line 24) and rescans pending from byte 0 on every chunk (line 20) for a long line, so a line of length L read in C-byte chunks costs about L^2/C. Both need an abnormal child: unmodified claude escapes newlines inside JSON strings, so tool or repo content cannot create extra lines, and the reader sees chunks of at most a pipe buffer (about 64 KB), so many-short-lines cost per chunk is at most about 1 GB of memcpy only for a child that emits tens of thousands of 1-3 byte lines, which claude does not. Large lines come from tool results that claude itself caps (Read, Bash and MCP output limits), so realistic lines are far below the scale where L^2/C matters. Parsing and translation run while holding the session lock (ClaudeCLISession.swift:234-257), so isRunning, sessionID and configuration (called from the engine) wait for it. After an over-long line is dropped, its tail is parsed as a standalone line; the tail begins inside a JSON string where quotes are escaped, so it cannot form a valid object (no injection). A dropped can_use_tool line leaves the CLI waiting (fail-closed hang, no approval). Recorded as hardening, not a candidate: no attacker-controlled input reaches these costs under unmodified claude.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-parser",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Protocol/JSONValue.swift",
+          "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+          "Sources/PairVoxCore/Session/EventTranslator.swift"
+        ],
+        "invariant": "Nested or very large JSON from the child cannot cause exponential decode, unbounded recursion or unbounded retained state",
+        "method": "source",
+        "result": "JSONValue decodes through JSONDecoder with a try? fallback chain (JSONValue.swift:91-101). Each failing attempt is a top-token type mismatch, so decoding is linear per value; there is no partial-decode-then-fail path that would give exponential cost. There is no explicit depth limit in this repo; recursion depth is capped by Foundation's JSONDecoder scanner (documented limit 512), a platform fact not visible in the source (listed under unresolved). All InboundMessage and ContentBlock extraction is linear in the line (flattenText, compactMap, prefix(200) preview). Per-message amplification is about 10-12x for pathological tiny-element arrays, but the structured parts of a line (tool input) are limited by the model's output budget (hundreds of KB), not by the 64 MiB line cap. EventTranslator keeps Set<String> of message IDs and Set<Int> block indexes (cleared at message_start); growth is per message, not attacker-amplified. A parse failure silently drops the line (ClaudeCLISession.swift:241); for a can_use_tool line this stalls the CLI rather than approving anything.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-parser",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Speech/MarkdownSpeechParser.swift",
+          "Sources/PairVoxCore/Speech/SpeechPlanner.swift"
+        ],
+        "invariant": "Model-authored text of any shape is processed in time linear in its length, because it is parsed synchronously inside the ConversationEngine actor that also handles interrupts, denials and phone-link calls",
+        "method": "source",
+        "result": "Violated for lines whose prefix stays undecided. processLineStart (115-132) calls decide(final: false, line: lineStartBuffer) for every character while atLineStart is true, and decide begins with String(line.drop(while:)) (line 136), an O(n) copy. Several branches return without leaving the line-start state, so the copy repeats per character: a line starting with | (217-220, the whole row stays at line start until the newline), a run of 3+ backticks or tildes (164-167), all-# lines (174), lines of only -, *, +, _ or spaces (188, 196), and all-digit prefixes (206). Some of these branches also run additional O(n) operations (count, allSatisfy, filter). The cost for a line of n characters is about n^2/2 bytes copied plus n large allocations. Text reaches this code from EventTranslator.textDelta (EventTranslator.swift:118-121) through ConversationEngine.handleSession (ConversationEngine.swift:990-996), which runs on the engine actor, so the loop cannot be preempted by interrupt, deny or approve calls. No cap exists on lineStartBuffer. Estimated stall: about 0.5 s at 100 KB, tens of seconds at 300-500 KB, minutes at 1 MB, which needs a model reply with a single very long line starting with one of those prefixes (shapeable by prompt-injected repository content, but bounded by the model's output budget and its willingness). Candidate raised as needs_validation because only execution shows the growth curve and whether the platform allocator makes it worse.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-parser",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Speech/SentenceChunker.swift",
+          "Sources/PairVoxCore/Speech/CodeReader.swift",
+          "Sources/PairVoxCore/Speech/Pronunciation.swift",
+          "Sources/PairVoxCore/Speech/ToolNarrator.swift"
+        ],
+        "invariant": "Chunking, code reading, pronunciation rewriting and tool narration do work proportional to their input and keep output sizes bounded",
+        "method": "source",
+        "result": "SentenceChunker.nextCut stops scanning at maxChunk (220) but rebuilds Array(buffer) of the whole buffer (line 79) and extract() reslices the whole buffer (line 68) for every cut, so one append of D characters with short sentences costs about D^2/sentence-length. Streaming deltas are token-sized, so the buffer stays under about 220 characters. A large single append happens only for an assistant message that was never streamed (EventTranslator.swift:148-155, alreadyStreamed false); with --include-partial-messages on by default (LaunchConfiguration.swift:50) that is limited to short synthetic messages, so recorded as hardening. CodeReader.read maps speakLine over every line before taking the first 30 (CodeReader.swift:46-48): about 16 replacingOccurrences passes per line, linear in the fenced body, which is held until the fence closes or the turn ends. Pronunciation.speak and ToolNarrator operate on tokens or chunks and are linear. Tool names and inputs used in narration are truncated (query at most 60, commandSummary at most 40, 3 words). No catastrophic regex is used anywhere in these files.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "markdown-speech-parser-line-start-requadratic-reclassify"
+    ],
+    "unresolved": [
+      "Foundation JSONDecoder maximum nesting depth (believed 512 on Apple and Linux toolchains) is not visible in the repository; a unit test decoding a 100000-deep nested array would settle that JSONValue.parse throws instead of overflowing the stack.",
+      "Target execution was unavailable in this run, so no growth curve was measured for the markdown parser or the line buffer."
+    ],
+    "parent_hardening": [
+      "LineBuffer.append copies the remainder after every newline (LineBuffer.swift:24) and rescans pending from byte 0 on each chunk (line 20); keep a scan offset and slice with a start index so cost is linear. Not reachable by tool or repo content under unmodified claude, so no finding.",
+      "LineBuffer drops an over-long line silently and only counts it in droppedLines, which nothing reads (grep shows no consumer); a dropped can_use_tool control request leaves the CLI waiting. Surface the drop as a notice or answer the request with a control error when a request_id can be recovered.",
+      "ClaudeCLISession.handleStdout holds `lock` while it JSON-decodes and translates every line (ClaudeCLISession.swift:234-257), so isRunning, sessionID and configuration, which the engine calls, block during a large parse. Parse outside the lock and take it only to mutate state.",
+      "The events AsyncStream is .unbounded (ClaudeCLISession.swift:43) and the stdout reader never waits on the consumer, so a stalled engine lets queued events grow without limit; the child's own output volume is the only bound. Consider a bounded or coalescing buffer for textDelta.",
+      "Replies to unsupported control requests are queued with writeQueue.async without a cap (ClaudeCLISession.swift:261), and write(_:to:) uses writeQueue.sync (line 224), which is called from the engine actor for send, interrupt and respond. If the child stops reading stdin, the engine actor can block in interrupt() behind an earlier blocked write. Child is the owner's own claude, so this is availability hardening only.",
+      "JSONValue has no explicit depth or size limit of its own; add a pre-parse byte cap on tool input and an explicit depth guard in a custom parse so safety does not depend on Foundation's scanner limit.",
+      "SentenceChunker.extract (SentenceChunker.swift:64-75, 79) rebuilds Array(buffer) and reslices the buffer for each cut, quadratic in the size of one append when sentences are short. Only reachable for a non-streamed assistant message (EventTranslator.swift:148-155); fix by scanning from an index and slicing once.",
+      "CodeReader.read maps speakLine over every line of a fenced block before taking the first 30 (CodeReader.swift:46-48), and MarkdownSpeechParser holds fenceBody until the fence closes with no size cap; use lazy prefixing and cap the retained body.",
+      "Display and speech can differ: an unclosed `<tag`, `[link`, or inline backtick makes MarkdownSpeechParser swallow the rest of the text from speech (inTag at line 319-322, inlineCode at 273-281) while the screen shows it; the permission prompt text is generated separately, so no approval path depends on it."
+    ],
+    "parent_uncovered": [
+      {
+        "surface": "Engine-side handling of child text and tool events in ConversationEngine.handleSession and appendAssistantText",
+        "boundary": "The engine actor must stay responsive to interrupt, deny and approve while a long or pathological assistant reply is processed; transcript entry text and spoken arrays grow without a per-entry cap",
+        "subsystem": "Sources/PairVoxCore/Conversation",
+        "attack_class": "Resource exhaustion",
+        "starting_paths": [
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift"
+        ],
+        "reason": "The parser candidate's impact depends on every handleSession path running synchronously on the actor and on transcript growth (updateEntry copies, snapshot publication to UI and phone link); that code is outside the assigned parser unit and was only read for the call chain."
+      }
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxLink%2FLinkHost.swift%23approve%20tap::Sources%2FPairVoxLink%2FLinkHost.swift%23approvalRefusal::profile%2Fquick%2Fall-in-scope-subsystems::PROTOCOLS-RPC-AND-MESSAGING.md%23RPC%20identity%20and%20authorization%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxLink/LinkHost.swift#approve tap",
+      "boundary": "Sources/PairVoxLink/LinkHost.swift#approvalRefusal",
+      "attack_class": "PROTOCOLS-RPC-AND-MESSAGING.md#RPC identity and authorization attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Mac-side check of phone tap approvals",
+    "boundary": "The phone's device-auth claim and project binding on approve",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Pending-action confusion",
+    "starting_paths": [
+      "Sources/PairVoxLink/LinkHost.swift",
+      "Sources/PairVoxLinkKit/LinkMessages.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Core discipline",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#RPC identity and authorization attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Universal moves",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Validation rules"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: Backlog 3.3; a high-risk tap with no passcode is now refused, the phone-asserted claim remains."
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxVoice%2FMicrophoneCapture.swift%23capture::Sources%2FPairVoxCore%2FConversation%2FVoiceActivityDetector.swift%23echo%20ceiling::profile%2Fquick%2Fall-in-scope-subsystems::AI-AND-LLM.md%23Output%20and%20disclosure%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxVoice/MicrophoneCapture.swift#capture",
+      "boundary": "Sources/PairVoxCore/Conversation/VoiceActivityDetector.swift#echo ceiling",
+      "attack_class": "AI-AND-LLM.md#Output and disclosure attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Voice loop on the Mac: microphone capture, echo cancellation, voice-activity detection, speech-to-text and the repository-vocabulary prompt bias",
+    "boundary": "Echo handling must keep PairVox's own spoken prompts and model prose from coming back as a spoken approval; the scanned repo word list must not be an injection channel into the recognizer prompt",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "AI and LLM output fed back as audio input",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/VoiceActivityDetector.swift",
+      "Sources/PairVoxCore/Conversation/GatedSpeechOutput.swift",
+      "Sources/PairVoxVoice/MicrophoneCapture.swift",
+      "Sources/PairVoxVoice/AudioIO.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift",
+      "Sources/PairVoxVoice/Transcription.swift",
+      "Sources/PairVoxVoice/VoiceSpeechOutput.swift",
+      "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+      "Sources/PairVoxApp/AppModel.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Output and disclosure attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#Context, retrieval, and memory attack classes",
+        "reason": "no retrieval store or memory; RepoVocabulary only biases recognition and is bounded"
+      }
+    ],
+    "prior_status": "prior_deferred",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-echo",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/GatedSpeechOutput.swift",
+      "Sources/PairVoxCore/Conversation/VoiceActivityDetector.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+      "Sources/PairVoxVoice/AudioIO.swift",
+      "Sources/PairVoxVoice/MicrophoneCapture.swift",
+      "Sources/PairVoxVoice/Transcription.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift",
+      "Sources/PairVoxVoice/VoiceSpeechOutput.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-echo",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/VoiceActivityDetector.swift",
+          "Sources/PairVoxVoice/VoiceInputController.swift",
+          "Sources/PairVoxVoice/VoiceSpeechOutput.swift",
+          "Sources/PairVoxVoice/AudioIO.swift",
+          "Sources/PairVoxApp/AppModel.swift",
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+        ],
+        "invariant": "PairVox's own spoken permission prompt must not return through the microphone as a spoken approval (VAD echo rejection, playback-active signalling, speech-start vs prompt timing, transcript parsing).",
+        "method": "source",
+        "result": "Echo rejection is VAD-only and exists only while playbackActive is true (VoiceActivityDetector.swift:98-100, 105). playbackActive is cleared the moment the last buffer reports dataPlayedBack (AudioIO.swift:794; VoiceSpeechOutput.swift:268), with no hangover for microphone latency or room reverb. The engine's only echo defence is answerPrecedesPrompt, which compares the VAD speech-start to the time the prompt STARTED (ConversationEngine.swift:1144, 1246-1251), so echo of the prompt's tail counts as after the prompt. Every voice-approvable prompt ends with the single approving word 'Allow?' (PermissionPolicy.swift:82-155). VoiceCommand.permissionAnswer approves any utterance of 5 or fewer words containing an approve word (VoiceCommand.swift:215-231) and there is no transcript-level comparison with the last spoken text. VoiceInputController seeds each utterance with a 0.35 s pre-roll that always holds the last audible echo (VoiceInputController.swift:142-143, 171). Whether the tail clears the VAD gate (floor+12 dB, 0.18 s) and whether the recognizer writes 'Allow.' rather than 'Allow?' (a trailing '?' makes isQuestion true, VoiceCommand.swift:80, 206) depends on acoustics and the recognizer, so it is a needs_validation candidate. The in-app advice to turn barge-in off when AEC is unavailable (AppModel.swift:478-479) does not close this path, because the half-duplex branch (VoiceInputController.swift:164) only skips frames during playback.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-echo",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+          "Sources/PairVoxVoice/Transcription.swift",
+          "Sources/PairVoxApp/AppModel.swift",
+          "Sources/PairVoxVoice/VoiceInputController.swift"
+        ],
+        "invariant": "Repository-derived words used to bias the recognizer must not be able to carry approval or command phrases, and must be bounded and sanitised.",
+        "method": "source",
+        "result": "RepoVocabulary.scan takes whole directory names (RepoVocabulary.swift:37) and whole file base names (:44-45) verbatim, with no character class, length cap or command-word filter; only declaration identifiers are regex-limited (:16-17). Top terms by count (file name +3) are placed into WhisperKit promptTokens (Transcription.swift:77-82) and Apple contextualStrings (:124). A repository can therefore ship names like 'allow it' or 'confirm high risk' that rank in the top 40 and are fed as decoding context. The scan is bounded (1500 files, 50000 entries, 200 KB per file, symlinks skipped, hidden files skipped), the transcript still has to pass VoiceCommand parsing and the freshness, prompt-timing and risk checks, and the effect (recognizer emitting prompt words on noise or echo) is model behaviour that cannot be observed from source, so it is a low-confidence needs_validation candidate.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-echo",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/GatedSpeechOutput.swift",
+          "Sources/PairVoxVoice/MicrophoneCapture.swift"
+        ],
+        "invariant": "A background project's inaudible prompt must not become voice-approvable, and microphone capture must not expose a separate unauthenticated input path.",
+        "method": "source",
+        "result": "GatedSpeechOutput completes a background project's utterances without a .started event, so promptHeardAt stays nil and answerPrecedesPrompt rejects any spoken yes (fail safe). MicrophoneCapture only forwards device buffers to onBuffer; it has no network or file input and no state that the engine trusts.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "voice/echo-tail-of-allow-prompt-approves-pending-request",
+      "voice/repo-names-reach-whisper-prompt-unfiltered"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "Keep playbackActive true for a hangover (about 400 to 600 ms) after the last buffer finishes, and extend the echo ceiling over it.",
+      "Record when the prompt finished playing and require the spoken answer to start at least a short holdoff after that, in addition to after the prompt start.",
+      "Reject a transcript that is a normalised suffix or substring of the last 2 spoken utterances (own-voice filter) before it can count as an approval.",
+      "Consider ending voice-approvable prompts with a non-approving phrase, so the last audible word is not itself an approval word.",
+      "Sanitise vocabulary terms to a conservative identifier pattern with a length cap, and drop terms that equal VoiceCommand approve, deny or confirm words.",
+      "Whisper promptTokens uses tokens.suffix(120), which drops the highest-ranked terms first if the joined text exceeds 120 tokens; use prefix to keep the intended priority."
+    ],
+    "parent_uncovered": []
+  },
+  {
+    "coverage_id": "ios%2FPairVoxPhone%23pairing%20link::Sources%2FPairVoxLinkKit%2FPhoneCredentials.swift%23PhoneCredentials::profile%2Fquick%2Fall-in-scope-subsystems::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Deep-link%2C%20callback%2C%20and%20navigation%20attack%20classes",
+    "canonical_refs": {
+      "surface": "ios/PairVoxPhone#pairing link",
+      "boundary": "Sources/PairVoxLinkKit/PhoneCredentials.swift#PhoneCredentials",
+      "attack_class": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Deep-link, callback, and navigation attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "iPhone app: pairing link or QR scan, stored credentials, Face ID approvals, speech and audio",
+    "boundary": "Phone-side credential storage, pairing-link parsing, Face ID gate before approving",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Mobile app",
+    "starting_paths": [
+      "ios/PairVoxPhone",
+      "ios/project.yml",
+      "Sources/PairVoxLinkKit/PhoneCredentials.swift",
+      "Sources/PairVoxLinkKit/PairingWire.swift",
+      "Sources/PairVoxLinkKit/LinkClient.swift",
+      "Sources/PairVoxLinkKit/Reconnector.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Core discipline",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Deep-link, callback, and navigation attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Application-state and device-lifecycle attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Universal moves",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Webview and native-bridge attack classes",
+        "reason": "no webview in the phone app per recon"
+      }
+    ],
+    "prior_status": "prior_deferred",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-phone2",
+    "reviewed_paths": [
+      "Sources/PairVoxLinkKit/HandshakeWire.swift",
+      "Sources/PairVoxLinkKit/LinkClient.swift",
+      "Sources/PairVoxLinkKit/LinkCrypto.swift",
+      "Sources/PairVoxLinkKit/PairingWire.swift",
+      "Sources/PairVoxLinkKit/PhoneCredentials.swift",
+      "Sources/PairVoxLinkKit/Reconnector.swift",
+      "Sources/PairVoxLinkKit/TCPTransport.swift",
+      "Tests/PairVoxLinkTests/LinkTests.swift",
+      "ios/PairVoxPhone/Info.plist",
+      "ios/PairVoxPhone/PhoneAudio.swift",
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "ios/PairVoxPhone/Views.swift",
+      "ios/project.yml"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-phone2",
+        "reviewed_paths": [
+          "Sources/PairVoxLinkKit/PhoneCredentials.swift",
+          "Tests/PairVoxLinkTests/LinkTests.swift",
+          "Sources/PairVoxLinkKit/TCPTransport.swift"
+        ],
+        "invariant": "Run 6 fix holds: PairingPayload.isAllowedHost accepts only a parsed Tailscale IPv4 (100.64/10) or IPv6 (fd7a:115c:a1e0::/48), loopback, localhost, or a *.ts.net name, so no host that NWEndpoint.Host would treat as an arbitrary DNS name passes",
+        "method": "source",
+        "result": "Held. Characters are limited to ASCII letters, digits, dot, hyphen and colon, up to 253 characters. Any string containing ':' must parse fully as IPv6 in ipv6Bytes: 1 to 4 hex digits per group, at most one '::', at most 8 groups, no embedded IPv4, no zone, and ':::' or a stray colon is refused. Only ::1 or the fd7a:115c:a1e0 /48 prefix is accepted. An all-numeric dotted string must be exactly 4 parts, 3 digits at most, no leading zero except '0', each value 0-255, and either 100.64-127 or 127.x; other shapes such as '127.1' or '100.64.1' return false instead of falling to the name rule. A name must end in '.ts.net' with at least 3 non-empty labels and no label starting or ending in '-'; a trailing dot, empty label or percent-encoded NUL is refused (parse() decodes percent-escapes first, then the ASCII filter rejects them). Every string with ':' that reaches NWEndpoint.Host is a valid IPv6 literal, and every dotted-quad is canonical, so it cannot fall back to DNS. The new tests (LinkTests.swift 817-826) cover the two reported forms. The phone re-checks the same function in PhoneModel.pair (114) and changeAddress (307). The Mac-side use at PhoneLinkModel.swift:161 only filters 'tailscale ip -4' output.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-phone2",
+        "reviewed_paths": [
+          "ios/PairVoxPhone/Views.swift",
+          "ios/PairVoxPhone/Info.plist",
+          "ios/project.yml",
+          "Sources/PairVoxLinkKit/PhoneCredentials.swift"
+        ],
+        "invariant": "Only an explicit in-app QR scan or paste can start pairing; no URL-scheme, universal-link, share, intent or notification route can import a pairing, and a pairing needs a confirmation naming host:port",
+        "method": "source",
+        "result": "Held. Info.plist registers no CFBundleURLTypes, associated domains, document types or app extensions, and project.yml has no entitlements. The pairvox:// text reaches parse() only from the AVCapture QR callback (metadataObjectTypes = [.qr]) or from the paste field and PasteButton in PairView. Both paths set only 'pending', which opens a confirmationDialog showing host:port, and pair() runs only on the Pair button. PairView is shown only when !isPaired, and the credential save is an in-place update, so a replayed or stale link cannot silently replace an existing pairing. The link is single use and expires after 120 s on the Mac (Pairing.redeem: offer = nil before the owner prompt, per-peer and total failure caps), and the payload is bound to this exchange by the HMAC proof and the ChaChaPoly grant authenticated with the phone's fresh clientNonce, so a captured grant cannot be replayed. Duplicate query keys take the first value; the scheme match is case-sensitive; a missing or non-16-byte secret and a port below 1024 are refused.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-phone2",
+        "reviewed_paths": [
+          "Sources/PairVoxLinkKit/PhoneCredentials.swift",
+          "ios/PairVoxPhone/PhoneModel.swift"
+        ],
+        "invariant": "The device key is stored only in the Keychain, this-device-only, non-synced, and is destroyed on Forget",
+        "method": "source",
+        "result": "Held. KeychainCredentialStore uses kSecClassGenericPassword with kSecAttrSynchronizable false and kSecAttrAccessibleWhenUnlockedThisDeviceOnly on add. The update-in-place path keeps the item class, and a failed save never deletes the existing key. forget() deletes the item, clears snapshot, hasFreshSnapshot and state, and stops the reconnector. No credential or secret is written to UserDefaults (only the pushToTalk Bool), logs or print output. The print() calls log only error descriptions, which hold no key or secret. The phone-side key is an HMAC/HKDF input only and is never sent; the pairing grant is the only transfer, and it is sealed.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-phone2",
+        "reviewed_paths": [
+          "ios/PairVoxPhone/PhoneModel.swift",
+          "ios/PairVoxPhone/Views.swift"
+        ],
+        "invariant": "A tap approval is preceded by a local user-presence check and is bound to the displayed request, the live link and the request still waiting after the check; the spoken high-risk path requires real device auth",
+        "method": "source",
+        "result": "Held with caveats recorded under hardening. approveByTap rejects truncated and not-live requests, runs LAContext .deviceOwnerAuthentication (no reuse window), then re-checks stillWaiting (requestID plus project against the latest snapshot) before sending, and the Mac separately checks that the request was shown on this connection. The 'confirm high risk' voice path demands auth != .none and the Mac's voiceHighRisk and voiceNeedsScreen switches. The Curtain overlay hides content when the scene is not active. The caveats (no-passcode fallback to DeviceAuth.none on the tap path, generic Face ID reason string, nil projectID resolving to the Mac's current active project) have no demonstrated cross-principal impact, so they are hardening only.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-phone2",
+        "reviewed_paths": [
+          "Sources/PairVoxLinkKit/LinkClient.swift",
+          "Sources/PairVoxLinkKit/PairingWire.swift",
+          "Sources/PairVoxLinkKit/LinkCrypto.swift",
+          "Sources/PairVoxLinkKit/HandshakeWire.swift",
+          "Sources/PairVoxLinkKit/Reconnector.swift",
+          "Sources/PairVoxLinkKit/TCPTransport.swift",
+          "ios/PairVoxPhone/PhoneAudio.swift"
+        ],
+        "invariant": "The phone authenticates the Mac before accepting session data; pairing and handshake messages cannot be replayed or reflected; reconnect and timeout paths do not leak or reuse stale state",
+        "method": "source",
+        "result": "Held. The host proof covers role, version, deviceID and both nonces, and is compared in constant time before the client proof is sent. The client proof uses a different role string, so a reflection fails. Session keys are directional and derived from both nonces, and the codec enforces strict sequence numbers and a 1 MiB frame cap (TCPTransport.maxMessage). The unauthenticated HandshakeRefusal can only stop retries (a state change plus a text message), so it is not a security effect. The reconnector's generation counter and token checks discard stale loops and states, and withTimeout closes the transport on timeout or cancellation. Mac-supplied audio goes to AVAudioPlayer(data:) after the authenticated, size-capped frame.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": [],
+    "parent_hardening": [
+      "PhoneModel.authenticate returns DeviceAuth.none when LAContext cannot evaluate .deviceOwnerAuthentication (phone has no passcode), and approveByTap sends the approval anyway, high risk included. LinkHost.approvalRefusal returns nil for method == .tap before looking at auth. Info.plist says Face ID is asked 'before you allow a high-risk action', and the spoken-confirm path does refuse .none. Suggest refusing a high-risk tap with .none (tell the person to approve on the Mac) or having the Mac refuse tap+high+none.",
+      "The auth field on .approve is phone-asserted and cannot be verified by the Mac, so a Face ID gate protects only an unmodified phone app (e.g. not a Keychain PSK extracted from a jailbroken device). Document it in THREAT_MODEL, or keep high-risk approvals on the Mac.",
+      "The Face ID reason string is the fixed 'Allow a high-risk action' or 'Allow this action' and does not name the request, and the 'confirm high risk' phrase triggers it from room audio. With a request card and an OtherProjectsCard on screen the person authenticates without the prompt saying which. Suggest putting a short summary (tool and target) or the project name in localizedReason.",
+      "approveByTap and the spoken confirm send projectID nil for the active project's request, and LinkHost.handle resolves nil to latest.activeProjectID at arrival time, despite its comment about 'the project the phone was shown'. A project switch on the Mac between the tap and arrival only misdirects the approval if the new project has the same requestID, and Claude request IDs are random, so impact is nil today. Suggest sending snapshot.activeProjectID explicitly.",
+      "PairingPayload.isAllowedHost accepts localhost, ::1 and all of 127.0.0.0/8 in every build, including the shipping iPhone app. The comment says this is for testing. On a phone, loopback is the phone itself, so it only lets a locally supplied link point at an on-device listener. Suggest compiling those branches only under DEBUG or a test flag on iOS.",
+      "LinkClient.pair sends PairAck before PhoneModel saves the key to the Keychain. If the save fails, the Mac keeps a paired device whose key the phone never stored (the error text already tells the person to remove it). Suggest returning the credentials from pair(), saving, then sending the ack, so the Mac's pruning rule covers the failure.",
+      "forget() clears the link state but does not stop the PhoneSpeaker queue or reset typed, notice, lastHeard and lastSpokenRequest, so speech from the old Mac can finish after Forget. Cosmetic, but it is the only account-switch leftover found. Add speaker.stop() and reset these fields in forget().",
+      "The Mac's Copy link command puts the live pairing secret on the general pasteboard (Universal Clipboard) for the 120 s offer life. This is Mac-side and is not in this unit. Suggest marking the item expiring/concealed (NSPasteboard.PasteboardType.concealed) when it is written.",
+      "PairingPayload.parse accepts userinfo and port components on the pairvox URL (pairvox://x@pair:1?...) because it checks only scheme and host. They are ignored and harmless; tightening to an exact scheme://pair?query match is optional.",
+      "The Keychain item is kSecAttrAccessibleWhenUnlockedThisDeviceOnly and survives an app delete/reinstall (standard iOS behaviour), so a reinstalled app reconnects with the old key until Forget. This is an owner convenience that could be noted in the README."
+    ],
+    "parent_uncovered": [
+      {
+        "surface": "Mac link host approval gate for phone tap approvals",
+        "boundary": "Mac-side enforcement of the phone's Face ID / device-auth claim and project binding on .approve",
+        "subsystem": "Sources/PairVoxLink (LinkHost.approvalRefusal and handle(.approve))",
+        "attack_class": "Pending-action and user-presence confusion",
+        "starting_paths": [
+          "Sources/PairVoxLink/LinkHost.swift",
+          "Sources/PairVoxLinkKit/LinkMessages.swift"
+        ],
+        "reason": "The phone-side no-passcode fallback to DeviceAuth.none is only meaningful together with approvalRefusal returning nil for method == .tap before any auth or risk check, and with a nil projectID resolved at arrival time. Those lines sit outside this unit's starting paths, so any change to enforce auth for high-risk tap approvals needs its own deterministic coverage unit."
+      }
+    ]
+  },
+  {
+    "coverage_id": "ios%2FPairVoxPhone%2FPhoneAudio.swift%23PhoneRecognizer::Sources%2FPairVoxLink%2FLinkHost.swift%23spokenAnswer::profile%2Fquick%2Fall-in-scope-subsystems::AI-AND-LLM.md%23Output%20and%20disclosure%20attack%20classes",
+    "canonical_refs": {
+      "surface": "ios/PairVoxPhone/PhoneAudio.swift#PhoneRecognizer",
+      "boundary": "Sources/PairVoxLink/LinkHost.swift#spokenAnswer",
+      "attack_class": "AI-AND-LLM.md#Output and disclosure attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Phone hands-free microphone and the spokenAnswer approval path",
+    "boundary": "The phone's own spoken prompt must not return through its microphone as an approval",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "AI and LLM output fed back as audio input",
+    "starting_paths": [
+      "ios/PairVoxPhone/PhoneAudio.swift",
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "Sources/PairVoxLink/LinkHost.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Output and disclosure attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#Context, retrieval, and memory attack classes",
+        "reason": "no retrieval store"
+      }
+    ],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: The phone has no echo canceller and resumed listening 0.3 s after speaking; outside the five units. A phone-side own-echo check was added in the same build, but the unit was not reviewed."
+    ]
+  }
+]
