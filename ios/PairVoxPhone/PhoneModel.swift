@@ -228,6 +228,7 @@ final class PhoneModel: ObservableObject {
     func forget() {
         let r = reconnector; reconnector = nil; reconnectorToken = nil; client = nil
         Task { await r?.stop() }
+        notifications.withdrawAll()   // banners carry command text; they go with the pairing
         store.delete(); snapshot = nil; hasFreshSnapshot = false; isPaired = false
         state = .unpaired; lastFailure = nil; failureDetail = nil
     }
@@ -387,11 +388,13 @@ final class PhoneModel: ObservableObject {
         }
         if allow {
             // The notification only offers Allow for a request that is not high risk; the Mac checks again.
-            guard request.risk != "high", !request.truncated, !request.needsScreen else {
+            guard RequestNotice.allowsLockScreenAnswer(request) else {
                 notice = "This one needs a look first. Open it in PairVox to approve."
                 return
             }
-            send(.approve(requestID: request.requestID, method: .tap, auth: .passcode, projectID: request.projectID))
+            // Marked as a lock-screen answer, not as a passcode check the phone did not make: the Mac holds it to the
+            // lock-screen rule.
+            send(.approve(requestID: request.requestID, method: .tap, auth: .notification, projectID: request.projectID))
         } else {
             send(.deny(requestID: request.requestID, projectID: request.projectID))
         }
@@ -440,17 +443,17 @@ final class PhoneModel: ObservableObject {
                 else { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
                 // Spoken even while listening: listening pauses while the phone talks, then resumes for the answer.
                 let prompt = r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen."
-                lastSaidText = prompt
-                sayingPrompt = true
+                noteSaying(prompt)
                 speaker.say(prompt)
             }
-        case .speak(let text): speaker.say(text)
+        case .speak(let text): noteSaying(text); speaker.say(text)
         case .speakAudio(let format, let data, let text):
             // The Mac's own voice. A format this phone cannot play is said as text.
+            noteSaying(text)
             if format == "m4a-aac" { speaker.play(data) } else { speaker.say(text) }
         case .stopSpeaking: speaker.stop()
         case .notice(let text): notice = text
-        case .refused(let text): notice = text; speaker.say(text)
+        case .refused(let text): notice = text; noteSaying(text); speaker.say(text)
         }
     }
 
@@ -516,6 +519,13 @@ final class PhoneModel: ObservableObject {
             default: return .passcode
             }
         } catch { return nil }
+    }
+
+    /// Everything the phone plays is a possible echo, the Mac's mirrored voice (its own "…Allow?") included, not only
+    /// the prompts the phone says itself (audit run 8).
+    private func noteSaying(_ text: String) {
+        lastSaidText = text
+        sayingPrompt = true
     }
 
     /// True when every word of `heard` appears, in order and together, in `said` ("allow" after "…Allow?").

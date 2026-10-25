@@ -125,6 +125,70 @@ final class EngineApprovalTests: XCTestCase {
         XCTAssertNil(snap.ignoredAnswer, "an answered request leaves nothing behind")
     }
 
+    // Audit run 8: the notice after an echo has no answer word in it, and its own echo is not an answer either.
+    func testTheEchoNoticeCannotItselfApprove() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(prompt.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("Allow")
+        await settle()
+        guard let notice = output.queue.last(where: { $0.kind == .notice }) else { return XCTFail("the echo notice") }
+        XCTAssertNil(VoiceCommand.parse(notice.text, context: .init(awaitingPermission: true)), "\(notice.text) is not an answer")
+        output.continuation.yield(.started(notice.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("answer again")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty)
+    }
+
+    // Audit run 8: an earlier request's prompt left in the queue does not open the answer window for the next one.
+    func testAStalePromptDoesNotCountAsTheNextRequestsQuestion() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        let promptA = output.queue.last(where: { $0.kind == .prompt })
+        await engine.approvePending(requestID: "A")   // a click, before A's prompt played
+        backend.emit(edit("B", "b.swift"))
+        await settle()
+        if let a = promptA { output.continuation.yield(.started(a.id)) }
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        XCTAssertEqual(backend.responses.map(\.0), ["A"], "B's own question had not started")
+    }
+
+    // Audit run 8: an announcement about another project heard back is not offered to the cross-project interceptor.
+    func testAnAnnouncementHeardBackIsNotAnAnswerToIt() async {
+        let seen = Recorder()
+        await engine.setUtteranceInterceptor { text in seen.add(text); return true }
+        await engine.announce("Second project wants to edit a dot swift. Say approve, deny, tell me more, or switch.")
+        await settle()
+        guard let notice = output.queue.last(where: { $0.kind == .notice }) else { return XCTFail("announcement") }
+        output.continuation.yield(.started(notice.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("approve")
+        await settle()
+        XCTAssertEqual(seen.items, [], "the announcement's own word, heard while it played")
+        output.continuation.yield(.finished(notice.id))
+        await settle(700)
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("approve")
+        await settle()
+        XCTAssertEqual(seen.items, ["approve"], "said after the announcement ended: an answer")
+    }
+
     func testTypedAnswersAreNotHeldBackByThePrompt() async {
         await engine.submit("Fix it")
         backend.emit(edit("A", "a.swift"))
@@ -645,4 +709,11 @@ final class VoiceForEverythingTests: XCTestCase {
         await engine.setUtteranceInterceptor(nil)
         await engine.shutdown()
     }
+}
+
+final class Recorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _items: [String] = []
+    var items: [String] { lock.withLock { _items } }
+    func add(_ s: String) { lock.withLock { _items.append(s) } }
 }

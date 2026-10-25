@@ -1,0 +1,698 @@
+[
+  {
+    "coverage_id": "Sources%2FPairVoxApp%2FAppModel.swift%23installLatestBuild::scripts%2Fpv-install.sh%23swap_in::profile%2Fquick%2Fall-in-scope-subsystems::SUPPLY-CHAIN-AND-RELEASE.md%23Release%20and%20update%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxApp/AppModel.swift#installLatestBuild",
+      "boundary": "scripts/pv-install.sh#swap_in",
+      "attack_class": "SUPPLY-CHAIN-AND-RELEASE.md#Release and update attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "One-click update: scripts/pv-install.sh, scripts/restart-app.sh (SRC_OVERRIDE), and the app's Install Latest Build menu item that launches the installer",
+    "boundary": "Only the owner's checkout's own code is built and installed; nothing from the environment, the log file, the git remote or another user can choose what runs or what is copied into dist/",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Supply chain",
+    "starting_paths": [
+      "scripts/pv-install.sh",
+      "scripts/restart-app.sh",
+      "scripts/build-app.sh",
+      "scripts/launch-check.sh",
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/PairVoxApp.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Injection",
+    "selected_companion_blocks": [
+      "SUPPLY-CHAIN-AND-RELEASE.md#Core discipline",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Release and update attack classes",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Universal moves",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Validation rules",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Privileged-helper and local-file attack classes"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "SUPPLY-CHAIN-AND-RELEASE.md#CI and automation attack classes",
+        "reason": "CI is unchanged since runs 6 and 7"
+      }
+    ],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-installer",
+    "reviewed_paths": [
+      ".gitignore",
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/PairVoxApp.swift",
+      "Sources/PairVoxCore/Diagnostics/DiagnosticLog.swift",
+      "scripts/build-app.sh",
+      "scripts/launch-check.sh",
+      "scripts/pv-install.sh",
+      "scripts/restart-app.sh"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-installer",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/AppModel.swift",
+          "Sources/PairVoxApp/PairVoxApp.swift"
+        ],
+        "invariant": "Only a modal owner click starts the installer, and only for the checkout the running app lives in; no path, argument or shell string is built from untrusted text",
+        "method": "source",
+        "result": "installLatestBuild (AppModel.swift:831-868) runs behind a modal NSAlert and is reachable only from the menu button at PairVoxApp.swift:28-30; no voice command, phone-link message or HealthModel fix calls it (grep for installLatestBuild finds only these two sites). The target is /usr/bin/nohup with argv [<checkout>/scripts/pv-install.sh, --pull, --json]: no shell, no interpolation of model, log or network text. checkoutRoot requires the bundle to be <root>/dist/PairVox.app with an executable scripts/pv-install.sh, so a release build in /Applications or a translocated copy gets no menu item. The installer's last JSON line is parsed with JSONSerialization and only shown as UI text. The child gets the unfiltered login-shell environment, which is the owner's own and not a lower-trust source.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-installer",
+        "reviewed_paths": [
+          "scripts/pv-install.sh",
+          "scripts/build-app.sh"
+        ],
+        "invariant": "The build installed is the one made from this checkout; the update cannot be downgraded or redirected by the remote, the environment or the log, and the installed app is not touched before the new build is built and structurally verified",
+        "method": "source",
+        "result": "--pull uses git fetch plus merge --ff-only of @{upstream} after refusing a dirty tree, so a force-pushed or older upstream cannot roll the checkout back (non-ff refuses, ancestor is a no-op). The build goes to DIST_DIR=.build/install (explicitly set, ambient DIST_DIR is overridden), is verified with codesign --verify --deep --strict, and dist/ is untouched until swap_in. SRC_OVERRIDE is set explicitly by swap_in on every call and only to .build/ paths created by this script. The only remote-influenced input is the code of the branch the owner configured as upstream; see hardening notes. No finding: that is the documented purpose of --pull and the dialog says it brings the branch up to date and builds it.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-installer",
+        "reviewed_paths": [
+          "scripts/restart-app.sh",
+          "scripts/pv-install.sh"
+        ],
+        "invariant": "The swap into dist/ is verified, never leaves dist without a working app, and rollback/previous-copy handling cannot be steered by external state",
+        "method": "source",
+        "result": "restart-app.sh copies SRC to dist/.PairVox.new, re-verifies the copy with codesign, then rm -rf and mv (non-atomic but verify-before-delete, as already noted in run 6). pv-install keeps the replaced app in .build/install/replaced.app and only promotes it to dist/PairVox.previous.app after the launch check passes; a failed check swaps the old app back through the same verified path. --rollback copies dist/PairVox.previous.app out of dist before the swap that would delete it. All paths are fixed relative paths under the checkout (cd to the script dir), regex-escaped for pgrep, no attacker-chosen path component. The install lock is a mkdir directory with an EXIT trap; the failure branch at line 49 runs before the trap is set so it never removes another run's lock.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-installer",
+        "reviewed_paths": [
+          "scripts/launch-check.sh",
+          "Sources/PairVoxCore/Diagnostics/DiagnosticLog.swift",
+          "scripts/pv-install.sh"
+        ],
+        "invariant": "Text in the shared log file cannot choose what runs or inject into the shell, JSON or arithmetic of the launch check",
+        "method": "source",
+        "result": "Log lines are produced by JSONSerialization (DiagnosticLog.swift:112), so quotes inside user text are escaped and cannot form a literal \"ev\":\"register\" or \"run\":\"..\" token. launch-check extracts the run id with a hex-only pattern, ms values with [0-9]*, validates a supplied run id against ^[a-f0-9]+$, and uses printf with fixed formats; the values reach (( )) only as digits. pv-install uses the run id only for string comparison, never as a command or path. A same-UID writer could forge a passing launch, which defeats only the rollback convenience and crosses no boundary.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-installer",
+        "reviewed_paths": [
+          "scripts/pv-install.sh",
+          "scripts/restart-app.sh",
+          "Sources/PairVoxApp/AppModel.swift",
+          ".gitignore"
+        ],
+        "invariant": "Local file ownership and TOCTOU in the install paths do not cross a user boundary",
+        "method": "source",
+        "result": "All mutable paths (.build/, dist/, ~/Library/Logs/PairVox/update.log) are inside the owner's checkout or home and are gitignored (/dist/, .build/), so a pulled commit cannot ship a tracked symlink or pre-made dist/ entry. The check-then-use gaps (verify at pv-install.sh:111 then copy at restart-app.sh:120, isExecutableFile then run) need write access to the owner's checkout, which already allows editing the scripts themselves; no privileged component or elevated helper exists (nothing runs as root, no sudo). Not a boundary.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": [],
+    "parent_hardening": [
+      "pv-install --pull builds and installs whatever the configured upstream branch holds, signed with the owner's Apple Development identity (and so inheriting its Keychain/TCC grants), and the confirmation dialog (AppModel.swift:833-838) does not show what is incoming. Cheap fix: print `git log --oneline HEAD..@{upstream}` (and the author/signature status from `git verify-commit`) in the dialog or refuse unsigned upstream commits before merging. This is the documented purpose of --pull, so not a finding, but a compromised GitHub account or token would turn one click into code execution on the dev Mac.",
+      "pv-install checks only `codesign --verify --deep --strict`, which proves bundle integrity, not identity. If build-app.sh falls back to ad-hoc signing (no Apple Development certificate found, build-app.sh:38-40, ENABLE_HARDENED_RUNTIME=NO at line 57), the warning goes to /dev/null (pv-install.sh:110) and the hardened-runtime build is silently replaced by an unhardened one. Compare TeamIdentifier, the runtime flag and the entitlement list (as release.sh:63-70 does) between the new build and dist/PairVox.app, and refuse or warn on a downgrade.",
+      "restart-app.sh `running()` uses pgrep -f without -u and `running_bundles` uses `ps -axo command=` for all users, so any other local account (or any process) with a command line shaped like <dir>/PairVox.app/Contents/MacOS/PairVox makes `other_running` refuse every swap, and the attacker-chosen path is echoed in the error shown to the owner. Availability only, and only on a multi-user Mac; restrict both to the current UID (`pgrep -u \"$(id -u)\"`, `ps -u`).",
+      "p.environment = loginEnvironment (AppModel.swift:846) hands the installer, git, xcodegen and every build phase of the pulled tree the owner's full login environment, including any API keys or tokens exported in the shell. Pass a filtered environment (ChildEnvironment.filter or an allowlist of PATH, HOME, DEVELOPER_DIR, SSH_AUTH_SOCK) instead.",
+      "Ambient variables named CONFIG, SIGN_IDENTITY, DIST_DIR, MARKETING_VERSION, BUILD_NUMBER, PAIRVOX_LOG and SRC_OVERRIDE from the login shell are honoured by build-app.sh, restart-app.sh and launch-check.sh. pv-install overrides DIST_DIR and SRC_OVERRIDE itself, but a leftover `CONFIG=Debug` or `SIGN_IDENTITY=-` in the owner's shell rc would change what gets installed. Same-user configuration; pin them with `env -i`-style explicit assignment in pv-install.",
+      "The install lock (.build/install.lock) covers only concurrent pv-install runs; a manual scripts/build-app.sh or restart-app.sh --build uses the same .build/xcode and dist/ unlocked. Reliability, not security.",
+      "installedCheckout trusts any <dir>/dist/PairVox.app that sits next to an executable scripts/pv-install.sh. Adding a check that the root is a git work tree owned by the current UID and not group/world-writable would stop a hand-assembled directory from giving the menu item a script to run."
+    ],
+    "parent_uncovered": []
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxApp%2FViews%2FHealthView.swift%23HealthRows::Sources%2FPairVoxApp%2FSupport%2FHealthModel.swift%23perform::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxApp/Views/HealthView.swift#HealthRows",
+      "boundary": "Sources/PairVoxApp/Support/HealthModel.swift#perform",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Health indicator, popover and Settings Health tab with one-click fix buttons",
+    "boundary": "A fix button does only what its label says, to this Mac's own settings; no fix grants consent the owner did not give, and the report does not show secrets",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Diagnostics/Health.swift",
+      "Sources/PairVoxApp/Support/HealthModel.swift",
+      "Sources/PairVoxApp/Views/HealthView.swift",
+      "Sources/PairVoxApp/Views/SettingsView.swift",
+      "Sources/PairVoxApp/Views/ContentView.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md",
+        "reason": "the fixes call only the app's own methods and a fixed System Settings URL"
+      }
+    ],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-health",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/Support/HealthModel.swift",
+      "Sources/PairVoxApp/Views/ContentView.swift",
+      "Sources/PairVoxApp/Views/HealthView.swift",
+      "Sources/PairVoxApp/Views/SettingsView.swift",
+      "Sources/PairVoxCore/Diagnostics/Health.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-health",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Diagnostics/Health.swift",
+          "Sources/PairVoxApp/Support/HealthModel.swift",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "A fix button does only what its label says, to this Mac's own settings, and grants no consent the owner did not give",
+        "method": "source",
+        "result": "HealthFix is a closed 12-case enum and HealthModel.perform switches over it exhaustively. Each case calls an existing AppModel method (VoicePermissions request, startAudio, openTerminalForLogin, reloadWhisper, downloadKokoroNow) or sets settings.echoCancellation = true. The Privacy buttons open a fixed x-apple.systempreferences URL built from two string literals. chooseClaude, pairPhone and openPhoneSettings only select a Settings tab and start nothing. The one settings write, echoCancellation, is not a consent flag, and it takes the same settingsChanged path as the Settings toggle (AppModel.swift:1033). startAudio and restartAudio pass capture: settings.microphoneEnabled, so a microphone the owner turned off stays off. No fix touches the spoken-confirmation, voice-approval, folder-grant or phone-pairing settings. No input from a repository, model output or phone reaches a fix choice, because the fix is a fixed property of each HealthItem built in HealthReport.evaluate.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-health",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/Views/HealthView.swift",
+          "Sources/PairVoxApp/Views/SettingsView.swift",
+          "Sources/PairVoxApp/Views/ContentView.swift"
+        ],
+        "invariant": "The Settings-tab hand-off and the popover cannot be driven by an untrusted principal, and a stale popover cannot trigger anything beyond its own idempotent fix",
+        "method": "source",
+        "result": "The only cross-view channel is the local @AppStorage 'settingsTab' UserDefaults key, whose value is only used as a TabView selection tag; an unknown value selects nothing. The popover receives a report value that can lag the 2 s TimelineView redraw, but each fix is idempotent and is applied by enum, not by the displayed state. A stale Sign In or Turn On click does no more than a fresh one would. A double click on Download is blocked by the preparingKokoro lock in VoiceStack.prepareKokoro. A double click on Try Again for Whisper has a small check-then-set gap in WhisperTranscriber.load (Transcription.swift:54-57), but the model files are SHA-256 pinned (WhisperModelStore), so the worst case is a duplicate pinned download.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-health",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Diagnostics/Health.swift",
+          "Sources/PairVoxApp/Support/HealthModel.swift",
+          "Sources/PairVoxApp/Views/HealthView.swift"
+        ],
+        "invariant": "The health report does not show secrets and is not sent anywhere",
+        "method": "source",
+        "result": "The report is only rendered by HealthIndicator, HealthPopover and HealthSettings. A grep shows no use in the phone link, DiagnosticsBundle or logs. DiagnosticLog records only the fix rawValue. The detail strings come from fixed text, Whisper and Kokoro error descriptions, phone.status, and snapshot.authProblem. authProblem is the claude stderr tail or an error message, and is gated by looksLikeAuthProblem. The API key is passed to the child only through its environment and is never put in a health input. No credential is read by the health code. See hardening note on authProblem length.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-health",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Diagnostics/Health.swift",
+          "Sources/PairVoxApp/Support/HealthModel.swift"
+        ],
+        "invariant": "A health misreport cannot hide a security-relevant state or make an unsafe state look safe",
+        "method": "source",
+        "result": "The report covers availability of microphone, audio, Claude, recognizer, voice, echo and phone link only. It does not rate or hide permission policy, consents, pairings or approvals. A phone status that does not match the two listening strings is shown as a problem, which is the fail-visible direction. The 'off' status is excluded from overall, but it applies only to parts the owner turned off. The echo row inference at HealthModel.swift:65-69 can report 'active' when audio is not running; the audio row reports that case, and echo is not a security control.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": [],
+    "parent_hardening": [
+      "HealthModel.swift:36 passes snapshot.authProblem (up to an 8 KB claude stderr tail, ClaudeCLISession.swift:269,287-290, matched only by substrings such as 'authentication' or '401') into HealthItem.detail, which HealthRows shows in full with fixedSize and also puts into the accessibility label. SetupView caps the same text at prefix(160). Cap it the same way here (and optionally strip lines that look like keys, e.g. sk-ant-...), so a long or noisy stderr cannot flood the popover or be shown in a screen share. Add a HealthTests case with a 5 KB authProblem.",
+      "The Sign In in Terminal fix is offered for any authProblem, including the API-key-rejected and billing cases (ConversationEngine.noteProblem distinguishes authKind .apiKey). In API-key mode the fix label points at a different credential than the one that failed. This is a wording and routing issue only: the owner completes the login in Terminal themselves. Consider a separate fix that opens the Account tab when the engine is in API-key mode.",
+      "Transcription.swift:54-57 checks the .loading state and sets it in separate steps. Two quick Try Again clicks could start two pinned-hash Whisper loads. Making the check and the setState one lock section would close it. Availability only, no security impact."
+    ],
+    "parent_uncovered": []
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23perform%20approve%20run%208::Sources%2FPairVoxCore%2FPolicy%2FPermissionPolicy.swift%23assess%20run%208::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#perform approve run 8",
+      "boundary": "Sources/PairVoxCore/Policy/PermissionPolicy.swift#assess run 8",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Approval-gate changes since ac00462: prompt-timed and own-echo spoken answers, ignored-answer notes, always-allow narrowing, dangling-symlink resolution, multi-path writes, WebFetch screen-only rule, environment-disclosure rule, wrapper unwrapping",
+    "boundary": "High-risk requests are never approvable by voice; no change makes any approval looser than before; a fix is not bypassable by a near variant",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift",
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "Sources/PairVoxCore/Protocol/OutboundMessage.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Tool and action attack classes",
+      "AI-AND-LLM.md#Output and disclosure attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#Context, retrieval, and memory attack classes",
+        "reason": "no retrieval store"
+      }
+    ],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-gate2",
+    "reviewed_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/CrossProject.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+      "Sources/PairVoxCore/Protocol/OutboundMessage.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-gate2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+          "Sources/PairVoxCore/Conversation/EngineModels.swift"
+        ],
+        "invariant": "Own-echo and prompt-timed spoken answers: no PairVox-spoken text, of any kind, can be heard back as an approval, and a yes counts only if begun after the pending request's own question started",
+        "method": "source",
+        "result": "isOwnPromptEcho (ConversationEngine.swift:1282) compares a heard approval only with lastPromptText, which is set only for utterances of kind .prompt (line 1172). The recovery notice 'If that was you, say yes.' (line 330, kind .notice) ends in the approval word 'yes'; VoiceCommand.parse('say yes') returns .approve (permissionAnswer, VoiceCommand.swift:218; the repo's own PolicyAndCommandTests list 'say yes' as an approval), 'yes' is never a run of the permission prompt, so an echo of the notice's tail passes the echo check and approves a voice-approvable request. Candidate ConversationEngine/own-echo-recovery-notice-ends-with-yes. Also, promptHeardAt (line 1169) is set by any .prompt utterance starting while a request is pending, and prompts of already decided requests stay queued (respondToPermission does not cancel them), so a stale earlier prompt opens the answer window for the next request. Candidate ConversationEngine/prompt-heard-set-by-stale-prompt. Held: the echo check, ignored-answer notes, staleness and answerPrecedesPrompt only ever refuse; none approves anything new. Phone path checked: LinkHost spokenAnswer .notAnAnswer calls LinkEngine.submit which is submitFromRemote (EngineLink.swift:12, answersPermissions false), so phone text cannot reach perform(.approve).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Protocol/OutboundMessage.swift",
+          "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift"
+        ],
+        "invariant": "Always-allow narrowing: only session-scoped allow rules from the CLI's own suggestions are ever sent, and an always request with none left is a plain allow",
+        "method": "source",
+        "result": "PermissionRequest.sessionSuggestions (InboundMessage.swift:398-406) keeps only type addRules with behavior allow and forces destination session; OutboundMessage.allowAlways and PermissionCardView.offersAlwaysAllow both use it; approvePending falls back to .allow when it is empty (ConversationEngine.swift:376-381). setMode, addDirectories and rule removal can no longer be sent. All approvePending callers pass always:false except the Mac card and menu (a click) and the voice approveAlways path, which sits behind voiceApprovable. Tighter than before in every case. Residual: the rule breadth is whatever the CLI suggests (for example a prefix rule for an interpreter), and the spoken prompt never says what 'always' covers (hardening).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/FolderGrants.swift",
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+        ],
+        "invariant": "Dangling-symlink resolution and multi-path writes: every path a write request names is judged where the write would land, and a near variant of a dangling link does not make an outside path look inside",
+        "method": "source",
+        "result": "FolderScope.resolved (FolderGrants.swift:37-60) follows a dangling link found when walking up from the full path, resolves the link's parent first (so a relative target starts from the real directory), re-appends the tail and recurses with a 32-link cap that returns an inside-nothing sentinel. Checked: a dangling directory link with a tail beneath it (the first symlink met walking up is the outermost dangling one), a link chain, a link loop (sentinel, so high risk), a relative target with .., a parent reached through a link. Recursion is linear in the chain length, not exponential, because the parent call never meets another dangling link. writeTargets (PermissionPolicy.swift:236) judges file_path and notebook_path together, risk high if any is outside or sensitive, and FolderScope.editGrant requires every path covered. Held; all changes are tighter than before. Residual: blockedPath is judged only when no path field is present (hardening).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+        ],
+        "invariant": "WebFetch screen-only rule: the host that is spoken is the host that is fetched",
+        "method": "source",
+        "result": "assess (PermissionPolicy.swift:94-111) makes the request screen-only unless the scheme is http or https, a host parses, there is no userinfo, no backslash, no '@' in the authority (taken up to the first / ? #) and no whitespace. Checked '@' after the first slash, '#' and '?' before '@', ':' userinfo, backslash forms, absent or non-string url, mixed-case scheme, and a first '//' that is not the authority one: all either agree between Foundation and WHATWG parsing or end screen-only. Held. Gaps that are not a parser disagreement (non-ASCII hosts, IP literals and localhost, port not spoken) are listed as hardening.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+        ],
+        "invariant": "Environment-disclosure rule and wrapper unwrapping: any spelling that prints the environment is high risk and so never voice-approvable",
+        "method": "source",
+        "result": "The regex rule (PermissionPolicy.swift:311) only matches env, printenv, export, set, declare -x in command position (start of string or after ; & | or an open paren) and the structural pass (lines 452-458) only flags a segment whose program, after wrapper skipping, is printenv or empty after env. A shell that is handed the command (sh -c 'env', bash -c printenv, env sh -c env) is a segment whose program is the shell, so it is rated medium 'Runs a nested shell' and is voice-approvable; the body is not unwrapped. ps eww prints other processes' environments and matches no rule. Candidate BashRisk/environment-disclosure-misses-nested-shell-and-ps. The rm/sudo/push rules do not have this gap because their regexes match anywhere in the string.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/CrossProject.swift",
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift"
+        ],
+        "invariant": "High-risk requests are never voice-approvable on any approval path, including announcements for other projects and approve-all",
+        "method": "source",
+        "result": "perform(.approve/.approveAlways) requires voiceApprovable (ConversationEngine.swift:915); .confirmHighRisk requires canConfirmHighRiskByVoice, which needs the owner's opt-in; approveAllWaiting filters on voiceApprovable; AnnouncementRouter.resolve (CrossProject.swift:204-224) requires voiceApprovable and fitsCompactSurface for a plain approve and the opt-in plus project name for high risk. Held. The cross-project path does not apply the new own-echo or prompt-timing checks (hardening, and listed as uncovered).",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "ConversationEngine/own-echo-recovery-notice-ends-with-yes",
+      "ConversationEngine/prompt-heard-set-by-stale-prompt",
+      "BashRisk/environment-disclosure-misses-nested-shell-and-ps"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "Apply the own-echo timing rule (started while any PairVox utterance is sounding, or within the window after it) to confirm-high-risk and 'allow all' as well. ConversationEngine.swift:325-327 exempts them on the argument that the prompt asks for those words, but a genuine answer and an echo differ only in timing, which is checkable.",
+      "Track the last spoken utterance of every kind, not only .prompt, for the echo check, and keep every PairVox notice free of approval and refusal words (speakableAdvice already enforces this for advisor text).",
+      "AnnouncementRouter and CrossProjectController.intercept (CrossProject.swift:189, CrossProjectController.swift:111) answer other projects' requests from a spoken 'approve' with no echo check and no 'began after the announcement played' check. The announcement ends 'or switch' today, which only switches project, so this is not exploitable now, but nothing enforces it.",
+      "Judge blockedPath as well as file_path/notebook_path for write tools (PermissionPolicy.swift:117, FolderScope.editGrant), so a disagreement with the CLI about where a write lands is treated as outside.",
+      "WebFetch: make non-ASCII (IDN) hosts, IP literals, decimal/hex IPs, localhost and non-default ports screen-only; the spoken readout gives only the host as parsed.",
+      "BashRisk rates find ... -delete medium (PermissionPolicy.swift:496) and the spoken summary drops flags, so 'find home' can be approved by voice while rm -rf of the same tree is high. Treat -delete like a recursive delete.",
+      "The 'always' answer (voice or card) applies whatever rule the CLI suggests (for example a prefix rule for an interpreter). The spoken prompt never says what always covers; add the rule text to the card and require a click for interpreter prefixes.",
+      "Remove a request's unplayed prompt from the speech queue when the request is decided (respondToPermission, approveAllWaiting) and bind promptHeardAt to the utterance id of the pending request's own prompt."
+    ],
+    "parent_uncovered": [
+      {
+        "surface": "Cross-project announcement approval by voice (AnnouncementReply.parse, AnnouncementRouter.resolve, CrossProjectController.intercept/perform)",
+        "boundary": "A spoken approve for another project's request counts only for the announcement the owner actually heard, not for PairVox's own voice or room audio, and never for high-risk requests",
+        "subsystem": "Cross-project approvals",
+        "attack_class": "Business logic",
+        "starting_paths": [
+          "Sources/PairVoxCore/Conversation/CrossProject.swift",
+          "Sources/PairVoxApp/Support/CrossProjectController.swift"
+        ],
+        "reason": "This path decides approvals without the run 8 own-echo, ignored-answer or prompt-timed checks and has a separate 20 s binding window and staleness rule; it is outside the assigned unit's changed code and needs its own deterministic unit."
+      }
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23utteranceInterceptor::Sources%2FPairVoxCore%2FConversation%2FCrossProject.swift%23AnnouncementRouter.resolve::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#utteranceInterceptor",
+      "boundary": "Sources/PairVoxCore/Conversation/CrossProject.swift#AnnouncementRouter.resolve",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Cross-project announcement answers by voice",
+    "boundary": "A spoken approve for another project's request counts only for an announcement the owner heard, never PairVox's own voice",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/CrossProject.swift",
+      "Sources/PairVoxApp/Support/CrossProjectController.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Tool and action attack classes"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: The interceptor ran before the own-echo check, and announcements say \"approve\". The echo check now runs first; the path was not reviewed."
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FProtocol%2FLineBuffer.swift%23append%20run%208::Sources%2FPairVoxCore%2FSession%2FTerminalLogin.swift%23appleScript::profile%2Fquick%2Fall-in-scope-subsystems::RESOURCE-EXHAUSTION-AND-AVAILABILITY.md%23Computational%20amplification%20attack%20classes",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Protocol/LineBuffer.swift#append run 8",
+      "boundary": "Sources/PairVoxCore/Session/TerminalLogin.swift#appleScript",
+      "attack_class": "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Computational amplification attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Input-handling changes since ac00462: LineBuffer, JSON depth cap, speech markdown parser, repository vocabulary filter, Whisper prompt, VAD echo hangover, Terminal login script, Kokoro warm-up",
+    "boundary": "Child output and repository content are processed in bounded time and memory, cannot inject into the Terminal script, and the vocabulary filter cannot be bypassed to bias an approval",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Resource exhaustion",
+    "starting_paths": [
+      "Sources/PairVoxCore/Protocol/LineBuffer.swift",
+      "Sources/PairVoxCore/Protocol/JSONValue.swift",
+      "Sources/PairVoxCore/Speech/MarkdownSpeechParser.swift",
+      "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+      "Sources/PairVoxVoice/Transcription.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift",
+      "Sources/PairVoxCore/Session/TerminalLogin.swift",
+      "Sources/PairVoxVoice/Synthesis.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Injection",
+    "selected_companion_blocks": [
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Core discipline",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Computational amplification attack classes",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Universal moves",
+      "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "RESOURCE-EXHAUSTION-AND-AVAILABILITY.md#Quota and scheduling attack classes",
+        "reason": "no metered quota"
+      }
+    ],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-inputs2",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxCore/Protocol/InboundMessage.swift",
+      "Sources/PairVoxCore/Protocol/JSONValue.swift",
+      "Sources/PairVoxCore/Protocol/LineBuffer.swift",
+      "Sources/PairVoxCore/Session/ClaudeCLISession.swift",
+      "Sources/PairVoxCore/Session/ClaudeLocator.swift",
+      "Sources/PairVoxCore/Session/TerminalLogin.swift",
+      "Sources/PairVoxCore/Speech/MarkdownSpeechParser.swift",
+      "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+      "Sources/PairVoxVoice/Synthesis.swift",
+      "Sources/PairVoxVoice/Transcription.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-inputs2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Protocol/LineBuffer.swift",
+          "Sources/PairVoxCore/Session/ClaudeCLISession.swift"
+        ],
+        "invariant": "Each stdout byte is scanned a bounded number of times, an oversized line is dropped whole, and the buffer never retains more than maxLineBytes plus one chunk",
+        "method": "source",
+        "result": "Traced append() for one-chunk, many-chunk, CRLF-split, skip-then-newline and flush paths. scanned/search keep the newline search linear, removeSubrange runs once per chunk and moves at most the unconsumed tail, oversized lines are dropped in both the same-chunk and cross-chunk cases, and flush() returns nil while skipping. No quadratic or off-by-one path found. Residual: the default cap is 64 MiB, the buffer keeps up to that much skipped garbage instead of discarding it as it arrives, and each line is parsed while holding the session lock (hardening only).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-inputs2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Protocol/JSONValue.swift",
+          "Sources/PairVoxCore/Protocol/InboundMessage.swift"
+        ],
+        "invariant": "A hostile tool result cannot drive unbounded decoder recursion through the stream-json parse path",
+        "method": "source",
+        "result": "nestingDepth is a single linear pass with correct string and escape tracking for valid JSON; the cap of 100 is checked before JSONDecoder runs. Malformed input that could desynchronise the scanner (stray closers, unbalanced quotes) is rejected by the decoder before any value recursion, and the platform decoder has its own nesting limit. JSONValue.init(from:) uses a try? ladder, but a failing alternative fails fast on a container-type mismatch, so there is no exponential retry. InboundMessage.parse is the only JSONValue.parse caller on child output.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-inputs2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Speech/MarkdownSpeechParser.swift"
+        ],
+        "invariant": "Streaming markdown parsing is linear in input size and the maxUndecided change does not change classification",
+        "method": "source",
+        "result": "After 64 UTF-8 bytes of lineStartBuffer the per-character decide() is skipped and the line is classified once at its newline (or finish) with final: true; table, fence-open and rule kinds are already set on the first character so the result is the same. drain() only merges adjacent text pieces, and emit() always follows text with a non-text piece, so the prev + t merge cannot go quadratic. Unterminated inline code and link text are closed at each newline. fenceBody is unbounded until the fence closes, but that is bounded by the input itself. A long indented or dash-run line is now spoken only after its newline (latency, not safety).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-inputs2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+          "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+          "Sources/PairVoxVoice/Transcription.swift",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "A repository name that is nothing but an answer (AllowIt, ConfirmHighRisk, yes_please) is never admitted to the recognizer vocabulary",
+        "method": "source",
+        "result": "admissible() gates directory names (line 37), file base names (45) and declared identifiers (51). termPattern ends in $, and under ICU (NSRegularExpression) without anchorsMatchLines $ also matches before a trailing line terminator, so a file or directory name such as AllowIt followed by a newline passes the shape test. answerWords then keeps the terminator inside the last word (it\\n), which is not in answerFillers or the answer vocabulary, so neither the all-answer rule nor the approvePhrases check drops it. The term reaches Whisper promptTokens (Transcription.swift:79) as in a normal filtered case. Needs a unit test to confirm the ICU behaviour. Regex scans use bounded input (1500 files x 200 KB) and linear patterns.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-inputs2",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Session/TerminalLogin.swift",
+          "Sources/PairVoxCore/Session/ClaudeLocator.swift",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "The claude path cannot break out of the shell word or the AppleScript string passed to Terminal",
+        "method": "source",
+        "result": "shellQuoted wraps in single quotes and writes each embedded quote as '\\'' (correct for sh and zsh); the AppleScript literal then escapes backslash first and double quote second (correct order). $, backticks and spaces stay inside one word. The path only comes from an executable file found via the owner's login PATH, the fixed install directories, or the owner-validated override, so it is owner-controlled, not repository-controlled. Control characters (such as ^U or ^C) are not rejected, which is hardening only because the owner would have to create such a directory.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-inputs2",
+        "reviewed_paths": [
+          "Sources/PairVoxVoice/Synthesis.swift",
+          "Sources/PairVoxVoice/VoiceInputController.swift",
+          "Sources/PairVoxVoice/Transcription.swift"
+        ],
+        "invariant": "Kokoro warm-up, echo hangover and Whisper prompt truncation stay bounded and do not widen what room audio can do",
+        "method": "source",
+        "result": "warmUpIfIdle is guarded by a lock-held warming flag and a 20 s idle threshold, so at most one one-word render per 20 s runs on the serial synthesis queue regardless of how often it is called. setPlaybackActive adds one 0.5 s timer per false transition, cancelled logically by playbackGeneration, and all vad access is under the controller lock. During the hangover the detector keeps the playback penalty but playbackLevelDB is nil, so only the penalty (not the echo ceiling) applies; this narrows rather than widens echo-start risk. promptTokens uses prefix(120) of tokens filtered below specialTokenBegin from at most 40 terms of at most 61 characters, so the prompt stays under Whisper's context limit.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "RepoVocabulary.admissible.termPattern-trailing-line-terminator"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "LineBuffer: the default maxLineBytes is 64 MiB. A near-cap line is parsed under ClaudeCLISession's lock (handleStdout), which blocks interrupt and send for the whole parse, and JSONValue decoding multiplies memory several-fold. Consider a cap near the largest legitimate tool result (low single-digit MiB) and discarding bytes immediately while skipping instead of retaining up to the cap.",
+      "RepoVocabulary: by design only whole answer-only names are dropped, so names like ConfirmHighRisk2, AllowAllX or YesDoThis still reach the Whisper prompt. Consider dropping any name whose words include an approve word or approvePhrases member, or limiting the prompt to names that do not contain answerVocabulary words at all.",
+      "RepoVocabulary: the user's own vocabulary preference list (AppModel.swift:306) is prepended without the admissible filter; it is owner-controlled, so this is only a note.",
+      "TerminalLogin: claudePath is quoted correctly, but control characters (ESC, ^C, ^U, newline) in a directory name would be typed into the Terminal line editor. The path is owner-controlled, so reject paths containing characters below 0x20 for defence in depth.",
+      "MarkdownSpeechParser: a line that is still undecided after 64 UTF-8 bytes is buffered whole and spoken only at its newline. This is linear and safe, but a long first line delays speech and keeps the whole line in lineStartBuffer.",
+      "VoiceInputController: during the 0.5 s echo hangover vad.playbackLevelDB is nil, so only the playback penalty applies and the echo ceiling does not. Acceptable, but a test that the end of 'Allow?' does not start an utterance with the real VAD would pin this."
+    ],
+    "parent_uncovered": []
+  },
+  {
+    "coverage_id": "ios%2FPairVoxPhone%2FPhoneModel.swift%23finishedListening::Sources%2FPairVoxLink%2FLinkHost.swift%23spokenAnswer::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "ios/PairVoxPhone/PhoneModel.swift#finishedListening",
+      "boundary": "Sources/PairVoxLink/LinkHost.swift#spokenAnswer",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "iPhone hands-free spoken answers and the Mac's spokenAnswer handler",
+    "boundary": "PairVox's own voice heard by the phone microphone cannot become an approval",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "Sources/PairVoxLink/LinkHost.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Tool and action attack classes"
+    ],
+    "excluded_blocks": [],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: The phone's echo source covered only its own prompts. Widened in the same build to everything the phone plays; not reviewed, and the Mac still does not check timing for phone voice answers."
+    ]
+  },
+  {
+    "coverage_id": "ios%2FPairVoxPhone%2FPhoneNotifications.swift%23userNotificationCenter%20didReceive::Sources%2FPairVoxLink%2FLinkHost.swift%23approvalRefusal%20tap::profile%2Fquick%2Fall-in-scope-subsystems::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Application-state%20and%20device-lifecycle%20attack%20classes",
+    "canonical_refs": {
+      "surface": "ios/PairVoxPhone/PhoneNotifications.swift#userNotificationCenter didReceive",
+      "boundary": "Sources/PairVoxLink/LinkHost.swift#approvalRefusal tap",
+      "attack_class": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Application-state and device-lifecycle attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "iPhone lock-screen notification actions (Allow, Deny) for requests that arrive while the app is in the background",
+    "boundary": "A notification answer is bound to the request it names, needs the phone unlocked, never approves high risk, and the Mac re-checks it (approvalRefusal, including high-risk tap without a passcode)",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Mobile app",
+    "starting_paths": [
+      "ios/PairVoxPhone/PhoneNotifications.swift",
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "Sources/PairVoxLinkKit/RequestNotice.swift",
+      "Sources/PairVoxLink/LinkHost.swift",
+      "Sources/PairVoxLinkKit/LinkMessages.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Core discipline",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Application-state and device-lifecycle attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Universal moves",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#RPC identity and authorization attack classes"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Webview and native-bridge attack classes",
+        "reason": "no webview"
+      }
+    ],
+    "prior_status": "new",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-lockscreen",
+    "reviewed_paths": [
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxLink/EngineLink.swift",
+      "Sources/PairVoxLink/LinkHost.swift",
+      "Sources/PairVoxLinkKit/LinkMessages.swift",
+      "Sources/PairVoxLinkKit/RequestNotice.swift",
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "ios/PairVoxPhone/PhoneNotifications.swift",
+      "ios/PairVoxPhone/Views.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-lockscreen",
+        "reviewed_paths": [
+          "ios/PairVoxPhone/PhoneNotifications.swift",
+          "Sources/PairVoxLinkKit/RequestNotice.swift",
+          "ios/PairVoxPhone/PhoneModel.swift"
+        ],
+        "invariant": "A notification answer is bound to the request it names: the identifier request:<project>:<id> is parsed with maxSplits 2, the answer re-finds the request in the live snapshot by id and project, re-checks it is still waiting, and sends the project of the snapshot request, not the one in the identifier",
+        "method": "source",
+        "result": "Holds. Notifications are local only (no remote push), the identifier is built by the app, a nil project in the identifier matches any project but the approve is re-addressed with the found request's own projectID, and the Mac approves by request id inside the named project's engine (PhoneLinkModel.approve). Request ids come from the claude child, not an attacker-chosen value. A stale banner whose request is gone ends in 'no longer waiting'. Deny is always safe to send.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-lockscreen",
+        "reviewed_paths": [
+          "ios/PairVoxPhone/PhoneNotifications.swift",
+          "ios/PairVoxPhone/PhoneModel.swift"
+        ],
+        "invariant": "A lock-screen Allow or Deny needs the phone unlocked and never approves a high-risk, truncated or needs-screen request",
+        "method": "source",
+        "result": "Allow and Deny carry .authenticationRequired (unlock, not a per-action Face ID check; an already unlocked phone runs the action with no prompt). The no-high-risk rule is enforced twice on the phone (RequestNotice.make chooses the category, answerFromNotification re-checks risk, truncated, needsScreen) but not by the Mac: the notification answer is sent as method .tap with a phone-asserted auth .passcode that the phone never verified, so approvalRefusal cannot tell it from a Face ID tap and accepts it for any risk (a modified phone could approve high risk; same trust level as backlog 3.3, so hardening only).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-lockscreen",
+        "reviewed_paths": [
+          "Sources/PairVoxLinkKit/RequestNotice.swift",
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+          "ios/PairVoxPhone/Views.swift",
+          "Sources/PairVoxLink/EngineLink.swift"
+        ],
+        "invariant": "The person approving from the lock screen is shown what will run, and a request the Mac marked screen-only is not offered a one-tap Allow",
+        "method": "source",
+        "result": "Fails. RequestNotice.make cuts the body to 160 characters and still offers Allow; the buttons test ignores that cut and ignores the Mac's own voiceApprovable/screenOnly decision (network commands, redirection, heredocs, MCP tools, odd WebFetch hosts are medium risk with voiceApprovable false). The in-app card shows the whole summary (up to 2048 bytes) and every reason; the notification shows neither. See candidate fingerprint.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-lockscreen",
+        "reviewed_paths": [
+          "Sources/PairVoxLink/LinkHost.swift",
+          "Sources/PairVoxLinkKit/LinkMessages.swift"
+        ],
+        "invariant": "approvalRefusal tap branch: request must exist, not be truncated, have been presented on this connection, and a high-risk tap with auth none is refused",
+        "method": "source",
+        "result": "Holds as written for the changed line (risk == high && auth == .none refused; presented[key] is per connection, so a reconnect needs a fresh snapshot before an approve works; truncated refused). A tap has no age limit by design. The auth field is documented as phone-asserted and never relied on.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-lockscreen",
+        "reviewed_paths": [
+          "ios/PairVoxPhone/PhoneModel.swift"
+        ],
+        "invariant": "Notifications and pending state do not survive unpair or link loss into a different authority",
+        "method": "source",
+        "result": "forget() does not call notifications.withdrawAll(), so delivered banners (command text) stay on the lock screen after the Mac is forgotten; answering one ends in 'no longer waiting' because there is no reconnector, so no approval results. Privacy residue only. Stale snapshot after iOS suspends the app can let answerFromNotification send at once over a dead client; the Mac refuses anything not presented on the new connection.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "ios/lockscreen-allow-offered-on-partially-shown-or-screen-only-request"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "Make the notification Allow decision depend on voiceApprovable (and on the body not being cut): offer buttons only when the whole summary fits and the Mac did not mark the request screen-only; otherwise open-only.",
+      "Send lock-screen answers with a distinct auth value or method (for example a new DeviceAuth case 'notification') so approvalRefusal can refuse high risk, truncated and screen-only requests on the Mac instead of relying on the phone's own guard; today the Mac cannot tell a notification tap from a Face ID tap and the phone claims .passcode without evaluating LAContext.",
+      "Consider requiring a LocalAuthentication evaluation in answerFromNotification (or marking the Allow action .foreground) so an already unlocked, handed-over phone still asks for Face ID as the in-app card does.",
+      "PhoneModel.forget() should call notifications.withdrawAll() so delivered banners carrying command text do not outlive the pairing.",
+      "A tap approval has no age limit on the Mac (only voice does); a very old lock-screen banner for a request still pending can still be allowed. Consider the same 300 s staleness rule for notification answers.",
+      "RequestNotice.request(from:) splits on ':' with maxSplits 2, so a project id containing ':' would be misparsed; project ids are Mac-generated so this is not exploitable today."
+    ],
+    "parent_uncovered": []
+  }
+]

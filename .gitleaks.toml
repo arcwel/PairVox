@@ -1,0 +1,10 @@
+# Gitleaks: the default rules, plus one allowance. The recorded Claude Code session in the test fixtures carries
+# message IDs (msg_…) that the generic-api-key rule takes for keys; they are public identifiers. Only that shape is
+# allowed, so a real key anywhere, the fixture included, is still reported.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Claude Code message IDs in the recorded session fixture"
+regexTarget = "match"
+regexes = ['''msg_[A-Za-z0-9]{20,}''']

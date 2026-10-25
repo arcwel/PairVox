@@ -1,0 +1,24 @@
+{
+  "run_id": "pairvox-run-8",
+  "repo": "arcwel/PairVox",
+  "target": "/Users/anthonyguidry/security-audit-skill/PairVox/run-3/src",
+  "source_ref": {
+    "commit": "de91222",
+    "dirty": false
+  },
+  "profile": "quick",
+  "scope_paths": [
+    "git diff ac00462 de91222 -- Sources ios scripts"
+  ],
+  "budget": 14,
+  "execution_policy": "sandboxed-source-and-local-only",
+  "target_execution": "none, as in runs 6 and 7",
+  "prior_runs": [
+    "/Users/anthonyguidry/security-audit-skill/PairVox/run-1",
+    "/Users/anthonyguidry/security-audit-skill/PairVox/run-2"
+  ],
+  "shared_file_owner": "parent",
+  "reviewer_model": "claude-sonnet-5-5",
+  "run_status": "complete",
+  "agents_spent": 11
+}

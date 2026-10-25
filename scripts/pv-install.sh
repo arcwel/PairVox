@@ -109,6 +109,14 @@ fi
 # Build beside the installed app, never over it: DIST_DIR keeps build-app.sh away from dist/ while the app runs.
 DIST_DIR=.build/install scripts/build-app.sh >/dev/null 2>&1 || finish false "The build failed; the installed app was not touched. Run scripts/build-app.sh to see why." 1
 codesign --verify --deep --strict .build/install/PairVox.app 2>/dev/null || finish false "The new build's signature is broken; the installed app was not touched." 1
+# A build with no signing team (no Apple Development certificate found) loses the hardened runtime and the Keychain and
+# microphone grants keyed on the team: never let one replace a team-signed app (audit run 8).
+team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
+old_team=$([[ -d dist/PairVox.app ]] && team_of dist/PairVox.app || true)
+new_team=$(team_of .build/install/PairVox.app)
+if [[ -n "$old_team" && "$old_team" != "not set" && "$new_team" != "$old_team" ]]; then
+  finish false "The new build is signed by team '${new_team:-none}', the installed app by '$old_team'. It was not installed; check the Apple Development certificate in Keychain Access." 1
+fi
 say "Built $(git rev-parse --short HEAD)"
 
 had_app=0

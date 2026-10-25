@@ -446,6 +446,12 @@ public actor LinkHost {
         let key = key(projectID, requestID)
         guard let shown = c.presented[key] else { return "That request has not been shown on this phone yet." }
         let age = clock().timeIntervalSince(firstSeen[key] ?? shown)
+        if auth == .notification {
+            // Answered from the lock screen, where the phone asked only for an unlock and showed a short body.
+            guard RequestNotice.allowsLockScreenAnswer(request) else { return "Check this one on the phone's screen or the Mac before allowing it." }
+            guard age <= Self.staleAfter else { return "This request is old. Open PairVox to check it." }
+            return nil
+        }
         if method == .tap {
             // A deliberate tap is the click: the phone asked for Face ID, Touch ID or the passcode first. A phone with
             // none of those set up says so, and a high-risk request then waits for the Mac (audit run 7). The claim is

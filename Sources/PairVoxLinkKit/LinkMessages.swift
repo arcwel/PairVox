@@ -78,8 +78,10 @@ public struct LinkProject: Codable, Sendable, Equatable {
 public enum ApprovalMethod: String, Codable, Sendable { case voice, tap }
 
 /// How the phone says the person proved they were holding it. The Mac cannot check this, so it is recorded for
-/// the log and never relied on; a deliberate tap is what high-risk requests need.
-public enum DeviceAuth: String, Codable, Sendable { case faceID, touchID, passcode, none }
+/// the log and never relied on; a deliberate tap is what high-risk requests need. `notification` is an answer given
+/// from a lock-screen notification, where only an unlock was asked for: the Mac allows it only for a request that is
+/// fully shown, not high risk, not screen-only and fresh (audit run 8).
+public enum DeviceAuth: String, Codable, Sendable { case faceID, touchID, passcode, none, notification }
 
 extension LinkSnapshot {
     /// Largest encoded snapshot the host will send, well under the frame limit.

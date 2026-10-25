@@ -405,6 +405,32 @@ final class AuditRun6PolicyTests: XCTestCase {
     }
 }
 
+/// Audit run 8 (2026-10-25): the environment rule missed a nested shell and `ps` with the e flag.
+final class AuditRun8PolicyTests: XCTestCase {
+    func testANestedShellAndPsThatPrintTheEnvironmentAreHigh() {
+        let policy = PermissionPolicy(projectRoot: "/Users/dev/app")
+        for c in ["sh -c 'env'", "bash -c printenv", "env sh -c env", "bash -c 'export -p'", "zsh -lc \"printenv HOME\"", "bash -lc env", "bash -c export", "ps eww", "ps -E", "ps auxe"] {
+            let a = policy.assess(PermissionRequest(requestID: "r", toolName: "Bash", input: ["command": .string(c)]))
+            XCTAssertEqual(a.risk, .high, c)
+            XCTAssertFalse(a.voiceApprovable, c)
+        }
+        for c in ["ps aux", "sh -c 'swift test'", "bash scripts/build.sh"] {
+            XCTAssertLessThan(BashRisk.classify(c).level, .high, c)
+        }
+        XCTAssertEqual(BashRisk.classify("sh -c 'rm -rf build'").level, .high, "every rule applies to the nested text")
+    }
+}
+
+/// Audit run 8 (2026-10-25): a name ending in a line terminator got past the vocabulary filter's shape test.
+final class AuditRun8VocabularyTests: XCTestCase {
+    func testANameWithATrailingLineTerminatorIsRefused() {
+        for bad in ["AllowIt\n", "ConfirmHighRisk\r", "yes_please\u{2028}", "ParserCore\n", "Allow It"] {
+            XCTAssertFalse(RepoVocabulary.admissible(bad), bad.debugDescription)
+        }
+        XCTAssertTrue(RepoVocabulary.admissible("ParserCore"))
+    }
+}
+
 /// Audit run 7 (2026-10-24): the Terminal login script escaped only double quotes.
 final class TerminalLoginTests: XCTestCase {
     func testTheClaudePathIsOneShellWordInsideTheAppleScriptString() {

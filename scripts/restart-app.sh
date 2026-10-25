@@ -27,11 +27,12 @@ done
 
 SRC="${SRC_OVERRIDE:-.build/xcode/Build/Products/Release/PairVox.app}"   # SRC_OVERRIDE: scripts/pv-install.sh
 BIN="$ROOT/dist/PairVox.app/Contents/MacOS/PairVox"
-# Only the copy in this checkout's dist/ counts: an anchored, literal match (pgrep -f is a regular expression).
-running() { pgrep -f "^$(printf '%s' "$BIN" | sed 's/[][\.*^$+?(){}|/]/\\&/g')\$" >/dev/null; }
+# Only the copy in this checkout's dist/ counts: an anchored, literal match (pgrep -f is a regular expression),
+# among this user's own processes, so another account's process cannot block a swap (audit run 8).
+running() { pgrep -u "$(id -u)" -f "^$(printf '%s' "$BIN" | sed 's/[][\.*^$+?(){}|/]/\\&/g')\$" >/dev/null; }
 # Every running PairVox, from any checkout: the bundle path of each (one per line). Two instances trample each other's
 # sessions, and a copy from another checkout used to look "not running" here, so a second one was opened.
-running_bundles() { { ps -axo command= 2>/dev/null || true; } | sed -n 's#^\(/.*/PairVox\.app\)/Contents/MacOS/PairVox$#\1#p'; }
+running_bundles() { { ps -U "$(id -u)" -o command= 2>/dev/null || true; } | sed -n 's#^\(/.*/PairVox\.app\)/Contents/MacOS/PairVox$#\1#p'; }
 other_running() { running_bundles | grep -vxF "$ROOT/dist/PairVox.app" | head -1 || true; }
 say() { [[ $JSON -eq 1 ]] || echo "$*"; }
 was_running=false swapped=false launched=false
@@ -59,7 +60,7 @@ prune() {
   done < <(find "$ROOT" -maxdepth 8 -type d \( -name PairVox.app -o -name PairVoxPhone.app \) -not -path "*/Contents/*" -print0 2>/dev/null)
   local pid cd_dist cd_run
   cd_dist=$({ codesign -dvvv "$keep_mac" 2>&1 || true; } | sed -n 's/^CDHash=//p')   # no dist yet: empty, not fatal
-  pid=$(pgrep -f "^$(printf '%s' "$BIN" | sed 's/[][\.*^$+?(){}|/]/\\&/g')\$" | head -1 || true)
+  pid=$(pgrep -u "$(id -u)" -f "^$(printf '%s' "$BIN" | sed 's/[][\.*^$+?(){}|/]/\\&/g')\$" | head -1 || true)
   if [[ -n "$pid" ]]; then
     cd_run=$({ codesign -dvvv +"$pid" 2>&1 || true; } | sed -n 's/^CDHash=//p')
     if [[ "$cd_run" == "$cd_dist" ]]; then say "Running app matches dist (CDHash $cd_dist)."; else say "Running app (CDHash $cd_run) is NOT the one in dist ($cd_dist): restart it."; fi

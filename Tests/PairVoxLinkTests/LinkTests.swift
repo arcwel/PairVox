@@ -1465,7 +1465,36 @@ final class RequestNoticeTests: XCTestCase {
         var screen = edit; screen.needsScreen = true
         XCTAssertFalse(RequestNotice.make(for: screen, project: nil).offersButtons)
         var long = edit; long.summary = String(repeating: "x", count: 400)
-        XCTAssertLessThan(RequestNotice.make(for: long, project: nil).body.count, 170)
+        XCTAssertLessThan(RequestNotice.make(for: long, project: nil).body.count, 200, "cut to 160, plus the open-the-app note")
+        // Audit run 8: a body cut for the lock screen, or a request the Mac keeps to the screen, gets no buttons.
+        XCTAssertFalse(RequestNotice.make(for: long, project: nil).offersButtons, "the end of a long command would not be seen")
+        var screenOnly = edit; screenOnly.voiceApprovable = false
+        XCTAssertFalse(RequestNotice.make(for: screenOnly, project: nil).offersButtons)
+    }
+
+    // Audit run 8: the Mac holds a lock-screen answer to the lock-screen rule, whatever the phone sends.
+    func testTheMacHoldsALockScreenAnswerToTheLockScreenRule() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, clock) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        let screenOnly = h.snapshot(risk: "medium", voice: false, id: "S")
+        await host.publish(screenOnly)
+        _ = try await h.nextSnapshot(client)
+        try await client.send(.approve(requestID: "S", method: .tap, auth: .notification))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "screen-only: not from the lock screen")
+        await host.publish(h.snapshot(risk: "medium", voice: true, id: "L"))
+        _ = try await h.nextSnapshot(client)
+        clock.advance(LinkHost.staleAfter + 1)
+        try await client.send(.approve(requestID: "L", method: .tap, auth: .notification))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "an old request is checked in the app")
+        await host.publish(h.snapshot(risk: "medium", voice: true, id: "OK"))
+        _ = try await h.nextSnapshot(client)
+        try await client.send(.approve(requestID: "OK", method: .tap, auth: .notification))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(engine.calls, ["approve:OK"])
     }
 
     func testTheIdentifierCarriesTheRequestAndItsProject() {

@@ -33,7 +33,8 @@ extension AppModel {
         i.checkingClaude = setup.checking
         i.claudeFound = setup.claudeFound
         i.claudeVersion = setup.cliVersion
-        i.authProblem = snapshot.authProblem
+        // Claude's stderr tail can be kilobytes; the setup screen shows its first 160 characters, and so does this.
+        i.authProblem = snapshot.authProblem.map { $0.count > 160 ? String($0.prefix(160)) + "…" : $0 }
         if settings.transcriber == .apple {
             i.recognizer = .appleSpeech
         } else {

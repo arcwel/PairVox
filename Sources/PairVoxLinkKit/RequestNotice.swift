@@ -22,15 +22,27 @@ public struct RequestNotice: Sendable, Equatable {
         self.identifier = identifier; self.title = title; self.body = body; self.offersButtons = offersButtons
     }
 
+    /// The longest summary a notification shows whole. A longer one is cut, and a request that is not shown whole is
+    /// approved where it is (audit run 8).
+    public static let maxBody = 160
+
     public static func make(for request: LinkRequest, project: String?) -> RequestNotice {
         let place = request.projectName ?? project
         let title = place.map { "Claude needs your OK in \($0)" } ?? "Claude needs your OK"
-        let buttons = request.risk != "high" && !request.truncated && !request.needsScreen
+        let buttons = allowsLockScreenAnswer(request)
         var body = request.summary
-        if body.count > 160 { body = String(body.prefix(160)) + "…" }
+        if body.count > maxBody { body = String(body.prefix(maxBody)) + "…" }
         if !buttons { body += request.risk == "high" ? " High risk: open PairVox to check it." : " Open PairVox to check it." }
         return RequestNotice(identifier: identifier(requestID: request.requestID, projectID: request.projectID),
                              title: title, body: body, offersButtons: buttons)
+    }
+
+    /// Whether Allow may be offered on the lock screen: the request is shown whole, is not high risk, and the Mac did
+    /// not keep it to the screen (network access, redirection, MCP tools and the like say "check it on screen"). The
+    /// Mac applies the same rule to an answer marked `.notification`.
+    public static func allowsLockScreenAnswer(_ request: LinkRequest) -> Bool {
+        request.risk != "high" && !request.truncated && !request.needsScreen && request.voiceApprovable
+            && request.summary.count <= maxBody
     }
 
     public static func identifier(requestID: String, projectID: String?) -> String {

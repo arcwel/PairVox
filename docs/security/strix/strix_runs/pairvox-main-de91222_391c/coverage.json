@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-25 16:11:25 UTC",
+  "run_id": "pairvox-main-de91222_391c",
+  "run_name": "pairvox-main-de91222_391c",
+  "scope": {
+    "targets": [
+      {
+        "type": "local_code",
+        "details": {
+          "target_path": "/Users/anthonyguidry/strix-targets/PairVox-main-de91222",
+          "workspace_subdir": "PairVox-main-de91222"
+        },
+        "original": "/Users/anthonyguidry/strix-targets/PairVox-main-de91222"
+      }
+    ],
+    "scan_mode": "standard",
+    "scope_mode": "auto",
+    "diff_scope": {
+      "active": false,
+      "mode": "auto"
+    },
+    "instruction": ""
+  },
+  "summary": {
+    "surfaces_reviewed": 18,
+    "outcomes": {
+      "no_issue_found": 18
+    },
+    "findings_filed": 0,
+    "gaps": 8
+  },
+  "machine_observed": {
+    "agents": [
+      {
+        "agent_id": "458b4863",
+        "agent_name": "PairVoxCore Code Auditor",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "argument_injection",
+          "rce"
+        ],
+        "task": "Call get_threat_model for target /workspace/PairVox-main-de91222.\nPerform internal application security code review and invariant verification of PairVoxCore (/workspace/PairVox-main-de91222/Sources/PairVoxCore).\nReview:\n1. PermissionPolicy.swift and FolderGrants.swift: Verify tool permission evaluation, voice request handling, folder grants, and path matching.\n2. ConversationEngine.swift and session processing: Verify input handling, state transitions, and tool authorization guards.\n3. Process execution: Inspect child process spawning and CLI argument formatting in PairVoxCore and PairVoxCLI.\nExecute swift test or add test cases to verify invariants. Record coverage and file any identified issues using create_vulnerability_report.",
+        "is_root": false
+      },
+      {
+        "agent_id": "0338fcd0",
+        "agent_name": "PairVoxCore Test Runner",
+        "status": "completed",
+        "skills": [
+          "source_aware_sast"
+        ],
+        "task": "Read threat model with get_threat_model for target /workspace/PairVox-main-de91222.\nExecute swift test on /workspace/PairVox-main-de91222.\nInspect Sources/PairVoxCore (PermissionPolicy.swift, FolderGrants.swift, ConversationEngine.swift, Advisor/, Session/, Config/) and Tests.\nReview implementation of PermissionPolicy, FolderGrants, ConversationEngine, and subprocess invocation.\nWrite notes using create_note and record coverage entries using record_coverage for each component reviewed.",
+        "is_root": false
+      },
+      {
+        "agent_id": "c2ccbd54",
+        "agent_name": "PairVoxCore Verification Agent",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "argument_injection"
+        ],
+        "task": "Read threat model with get_threat_model for target /workspace/PairVox-main-de91222.\nInspect the Swift code in /workspace/PairVox-main-de91222/Sources/PairVoxCore (PermissionPolicy.swift, FolderGrants.swift, ConversationEngine.swift, Session/, Config/, Speech/) and run swift test on /workspace/PairVox-main-de91222.\nExamine:\n1. PermissionPolicy.swift and FolderGrants.swift: verify tool permission evaluation, voice request rules, folder grants, path normalization, and wildcard matching.\n2. ConversationEngine.swift: verify event processing, state handling, and tool execution boundaries.\n3. Process spawning: inspect how child processes (like claude CLI) are spawned and how arguments/environment variables are passed.\nRun swift test or write Swift test cases to verify these behaviors.\nRecord coverage entries for each file/component reviewed. If any actionable bug or logic issue is confirmed with a test or PoC, file a report using create_vulnerability_report with code_locations (fix_before/fix_after) and fix_pr_body.",
+        "is_root": false
+      },
+      {
+        "agent_id": "7508ae00",
+        "agent_name": "PairVoxLink Code Auditor",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "rce",
+          "authentication_jwt"
+        ],
+        "task": "Call get_threat_model for target /workspace/PairVox-main-de91222.\nPerform internal application security review and invariant verification of PairVoxLink (/workspace/PairVox-main-de91222/Sources/PairVoxLink).\nReview:\n1. DeviceKeyStore.swift, EngineLink.swift, LinkCommands.swift, LinkHost.swift, Pairing.swift, TailnetAddress.swift.\n2. Analyze pairing logic, signature checks, authentication and authorization in LinkHost message handling, device key store operations, and command dispatch in LinkCommands.\n3. Execute swift test or add Swift test cases to verify authorization and cryptographic invariants. Record coverage entries and file any findings using create_vulnerability_report.",
+        "is_root": false
+      },
+      {
+        "agent_id": "43609e9f",
+        "agent_name": "PairVoxLink Security Specialist",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "rce",
+          "authentication_jwt"
+        ],
+        "task": "Call get_threat_model for target /workspace/PairVox-main-de91222.\nPerform deep source review and dynamic testing of PairVoxLink, LinkHost, Pairing, DeviceKeyStore, EngineLink, and LinkCommands in /workspace/PairVox-main-de91222/Sources/PairVoxLink.\nAnalyze:\n1. Authentication and authorization in LinkHost / Pairing (pairing codes, device key verification, signature checks, replay attacks, session state).\n2. Remote command execution or arbitrary command injection in LinkCommands and LinkHost message handling.\n3. Network / WebSocket listeners and Tailnet connection handling.\n4. Device key storage and cryptographic operations in DeviceKeyStore.swift.\nIf vulnerabilities are found, validate with dynamic tests/PoCs (e.g. swift test or standalone execution script), record coverage entries, and file findings using create_vulnerability_report with complete inline code_locations (fix_before/fix_after) and fix_pr_body.",
+        "is_root": false
+      },
+      {
+        "agent_id": "213a0ec4",
+        "agent_name": "PairVoxLink Test Runner",
+        "status": "completed",
+        "skills": [
+          "source_aware_sast"
+        ],
+        "task": "Read threat model with get_threat_model for target /workspace/PairVox-main-de91222.\nExecute swift test on /workspace/PairVox-main-de91222.\nInspect Sources/PairVoxLink (DeviceKeyStore.swift, EngineLink.swift, LinkCommands.swift, LinkHost.swift, Pairing.swift, TailnetAddress.swift) and Tests.\nReview implementation of pairing logic, device key store, AEAD encryption, and command handlers.\nWrite notes using create_note and record coverage entries using record_coverage for each component reviewed.",
+        "is_root": false
+      },
+      {
+        "agent_id": "507d8efd",
+        "agent_name": "PairVoxLink Verification Agent",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "authentication_jwt"
+        ],
+        "task": "Read threat model with get_threat_model for target /workspace/PairVox-main-de91222.\nInspect the Swift code in /workspace/PairVox-main-de91222/Sources/PairVoxLink (DeviceKeyStore.swift, EngineLink.swift, LinkCommands.swift, LinkHost.swift, Pairing.swift, TailnetAddress.swift) and run swift test on /workspace/PairVox-main-de91222.\nExamine:\n1. Device key verification, signature checking, pairing code validation, and state machine transitions in LinkHost.swift and Pairing.swift.\n2. LinkCommands.swift and message parsing: verify how commands are handled and checked.\n3. DeviceKeyStore.swift: verify cryptographic operations and storage behavior.\nCreate test cases or run swift test to verify all properties.\nRecord coverage entries for each file/component reviewed. If any actionable bug or logic issue is confirmed with a passing test or PoC, file a report using create_vulnerability_report with code_locations (fix_before/fix_after) and fix_pr_body.",
+        "is_root": false
+      },
+      {
+        "agent_id": "efc6f2a7",
+        "agent_name": "Permission Policy & Core Engine Specialist",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "argument_injection",
+          "rce"
+        ],
+        "task": "Call get_threat_model for target /workspace/PairVox-main-de91222.\nPerform deep source review and dynamic testing of PairVoxCore (/workspace/PairVox-main-de91222/Sources/PairVoxCore).\nAnalyze:\n1. PermissionPolicy.swift and FolderGrants.swift: Voice approval logic, tool permission checks, high-risk request bypasses, path traversal or folder grant escalation, wildcards, or logic flaws in .approve / .deny / auto-approval gates.\n2. ConversationEngine.swift and Session handling: Prompt injection or malformed response/JSONL handling leading to unauthorized tool execution or state manipulation.\n3. Subprocess execution & Argument Injection: How Claude CLI or child processes are spawned, CLI argument building, environment variable handling.\n4. Advisor / Diagnostics / Speech pipeline security: Data leakage of keys/tokens or improper file writes.\nIf vulnerabilities are found, validate with dynamic tests/PoCs (e.g. running swift test or creating unit tests/scripts), record coverage entries, and file findings using create_vulnerability_report with complete inline code_locations (fix_before/fix_after) and fix_pr_body.",
+        "is_root": false
+      },
+      {
+        "agent_id": "518f7bfc",
+        "agent_name": "Root Agent",
+        "status": "completed",
+        "skills": [],
+        "task": "\n\nLocal Codebases: - /Users/anthonyguidry/strix-targets/PairVox-main-de91222 (available at: /workspace/PairVox-main-de91222; this is the user's real directory, mounted live and writable — .git/.agents/.codex are read-only)",
+        "is_root": true
+      },
+      {
+        "agent_id": "2d2976b1",
+        "agent_name": "SAST Triage Agent",
+        "status": "completed",
+        "skills": [
+          "source_aware_sast",
+          "semgrep"
+        ],
+        "task": "Call get_threat_model for target /workspace/PairVox-main-de91222.\nPerform static analysis and automated scanner checks on /workspace/PairVox-main-de91222 (semgrep, gitleaks, trufflehog, trivy fs, ast-grep / structural analysis).\nMap overall architecture, high-risk code paths, secret exposures, and dependency CVEs.\nIf any dependency CVEs are found, report them via create_dependency_report.\nShare key architectural and code findings by creating notes for the scan team and recording coverage entries.",
+        "is_root": false
+      }
+    ],
+    "skills_exercised": [
+      "argument_injection",
+      "authentication_jwt",
+      "business_logic",
+      "rce",
+      "semgrep",
+      "source_aware_sast"
+    ],
+    "findings_filed": 0,
+    "source": "runtime"
+  },
+  "completeness": {
+    "complete": true,
+    "scan_status": "completed",
+    "exit_reason": "finished_by_tool",
+    "caveats": []
+  },
+  "entries": [
+    {
+      "surface": "/workspace/PairVox-main-de91222/Package.resolved",
+      "risk_area": "Known Dependency Vulnerabilities / Supply Chain",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Trivy FS scanned Package.resolved and identified 0 CVEs across pinned dependencies (WhisperKit 1.1.1, Kokoro 1.0.11, MLX 0.30.2, Swift Argument Parser 1.8.2, ZIPFoundation 0.9.20).",
+      "recorded_by": "SAST Triage Agent",
+      "recorded_at": "2026-10-25 16:08:15 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Session/ClaudeCLISession.swift",
+      "risk_area": "Subprocess Command Injection & Executable Path Validation",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "ClaudeCLISession launches the claude CLI using Foundation Process with explicit URL, argument array ([String]), and environment dictionary. No shell command string interpolation is used. ClaudeLocator enforces file ownership and POSIX permission checks (mode 0o755/0o700, parent folder non-world-writable) on custom executable overrides.",
+      "recorded_by": "SAST Triage Agent",
+      "recorded_at": "2026-10-25 16:08:17 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLink/LinkHost.swift",
+      "risk_area": "Remote Pairing & Cryptographic Transport Security",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed LinkHost.swift in detail. Enforces mutual HMAC-SHA256 handshake and ChaCha20Poly1305 frame AEAD encryption with 64-bit sequence counters. Pre-auth limits cap global pre-auth at 8 and per-peer at 3 with 10s timeouts. Max 3 connections per device. Approval authorization rules enforce presentation checks, truncation limits, device biometrics for high-risk requests, and stale request expiration (300s).",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:08:19 UTC",
+      "updated_at": "2026-10-25 16:10:56 UTC",
+      "previous_outcomes": [
+        "no_issue_found"
+      ],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "risk_area": "Permission Policy & Folder Scope Enforcement",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "PermissionPolicy and FolderGrants use symlink-resolved path canonicalization (resolvingSymlinksInPath) to prevent traversal. Folder grants for shell commands strictly disqualify commands containing variables, command substitution ($ or backticks), inline code interpreters (python -c, node -e), or redirection operators.",
+      "recorded_by": "SAST Triage Agent",
+      "recorded_at": "2026-10-25 16:08:21 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxApp/Support/KeychainStore.swift",
+      "risk_area": "Credential Storage & Diagnostic Exposure",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "KeychainStore saves Anthropic API keys in the macOS Keychain with kSecAttrAccessibleWhenUnlocked. Device keys are stored in Keychain or 0600 file stores. LogRedactor scrubs API keys, bearer tokens, emails, and usernames before diagnostic export. Gitleaks and Trufflehog confirmed 0 secrets in product code.",
+      "recorded_by": "SAST Triage Agent",
+      "recorded_at": "2026-10-25 16:08:23 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "risk_area": "Permission policy risk classification & voice approval guardrails",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed PermissionPolicy.swift. Risk classification correctly categorizes tools, file writes, and bash commands. Protected folders (PairVox settings & Claude config) are rated high risk. MCP tools force screen confirmation. Risk level low/medium/high and voice approvability logic verified.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:19 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "risk_area": "Directory access control, symlink traversal, & shell auto-approval scope",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed FolderGrants.swift and FolderScope. FolderScope.resolved() recursively resolves symlinks up to 32 depth (falling back to unresolvable). Shell grants strictly disqualify command variables, backticks, globs, redirects, and cd leaving the folder.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:21 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "risk_area": "Voice command processing, prompt echo cancellation, and permission queue timing",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed ConversationEngine.swift. Timestamps verify voice answers occurred after prompt playback started. Echo detection prevents application from approving its own prompt audio. Remote commands from phone link disable permission approval capability. Single-request queue prevents batch approvals.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:23 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Advisor/",
+      "risk_area": "Advisor subprocess sandboxing & prompt injection fence isolation",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed ClaudeAdvisor.swift and RequestAdvisor.swift. Subprocess sandboxed with --tools Read,Grep,Glob and all write/eval/network tools disallowed. Empty MCP config enforced. Prompts sanitized via fenceSafe() to break prompt injection delimiters.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:25 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLink/DeviceKeyStore.swift",
+      "risk_area": "Device Secret Key Storage, Keychain Access, and Distribution Build Isolation",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed DeviceKeyStore.swift. KeychainDeviceKeyStore uses kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly without iCloud sync. FileDeviceKeyStore uses 0700 dir, 0600 file permissions, atomic file replacement, and Time Machine exclusion. Distribution builds force Keychain storage. Legacy import marker prevents planted key attacks.",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:10:37 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Session/",
+      "risk_area": "Subprocess execution isolation, environment variable filtering, & executable path verification",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed ClaudeCLISession.swift, ChildEnvironment.swift, LaunchConfiguration.swift, and ClaudeLocator.swift. ChildEnvironment filters ANTHROPIC_*, CLAUDE_CODE_*, NODE_OPTIONS, and TLS manipulation variables. Untrusted project configuration is disabled by default (--setting-sources user). Executable path overrides enforce permissions and ownership checks.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:42 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLink/Pairing.swift",
+      "risk_area": "Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed Pairing.swift. Offers use 128-bit random secrets valid for 120s. Proofs use constant-time HMAC-SHA256 comparison. Device names sanitized against control/newlines/bidi injection. Anti-bruteforce caps wrong attempts at 3 per peer and 12 total. Grants delivered via ChaCha20Poly1305 sealed boxes with Mac user approval gate.",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:10:42 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxCore/Config/",
+      "risk_area": "Configuration persistence, settings file permission validation, & system prompt configuration",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed SystemPrompts.swift, Settings.swift, and SettingsStore. SystemPrompts.voice configures Claude Code system prompt. SettingsStore loads AppSettings and validates file ownership/permissions to prevent untrusted files from setting executable path overrides or standing grants.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:43 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLink/EngineLink.swift",
+      "risk_area": "Engine Link Proxying & Permission Approval Delegation",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed EngineLink.swift. Approvals from remote devices pass always=false to prevent persistent policy overrides. Transcripts are bounded to 40 items. Sentences and playback audio remain on the Mac.",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:10:44 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Tests/",
+      "risk_area": "Test suite execution & security test coverage validation",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Executed swift test (failed with swift command not found due to missing Swift toolchain in Linux container). Reviewed SecurityHardeningTests, PolicyAndCommandTests, FolderGrantTests, and CLISessionTests. Test cases cover permission policy classification, folder grant scope, symlink handling, environment filtering, and path override verification.",
+      "recorded_by": "PairVoxCore Test Runner",
+      "recorded_at": "2026-10-25 16:10:46 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLink/LinkCommands.swift",
+      "risk_area": "Local IPC Socket Control & Peer UID Authorization",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed LinkCommands.swift. Unix domain socket is created in 0700 folder with 0600 permissions. Connections verify getpeereid peer UID matches getuid(). Socket timeouts (2s) and SO_NOSIGPIPE prevent local IPC denial of service.",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:10:48 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Sources/PairVoxLink/TailnetAddress.swift",
+      "risk_area": "Network Binding & Tailnet Interface Filtering",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed TailnetAddress.swift. Listener and peer validation strictly enforce Tailscale CGNAT IP ranges (100.64.0.0/10 IPv4, fd7a:115c:a1e0::/48 IPv6) on utun interfaces or loopback (127.0.0.1 / ::1), preventing interface exposure on public LANs.",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:10:51 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Tests/PairVoxLinkTests",
+      "risk_area": "PairVoxLink Test Suite Verification & Security Coverage",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Reviewed test suite in Tests/PairVoxLinkTests (LinkTests, LinkHeartbeatTests, ReconnectorTests, LinkSoakTests). Tests verify AEAD frame encryption, replay rejection, HMAC pairing proofs, pre-auth limits, biometric & voice approval risk rules, Unix socket UID authorization, and heartbeat timeout loops. Execution of swift test was attempted but swift compiler toolchain is absent in this Linux container.",
+      "recorded_by": "PairVoxLink Test Runner",
+      "recorded_at": "2026-10-25 16:10:53 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    }
+  ],
+  "gaps": [
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "argument injection",
+      "detail": "Agent(s) PairVoxCore Code Auditor, PairVoxCore Verification Agent, Permission Policy & Core Engine Specialist were assigned the 'argument_injection' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "business logic",
+      "detail": "Agent(s) PairVoxCore Code Auditor, PairVoxCore Verification Agent, PairVoxLink Code Auditor, PairVoxLink Security Specialist, PairVoxLink Verification Agent, Permission Policy & Core Engine Specialist were assigned the 'business_logic' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxCore Code Auditor",
+      "detail": "PairVoxCore Code Auditor ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxCore Verification Agent",
+      "detail": "PairVoxCore Verification Agent ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxLink Code Auditor",
+      "detail": "PairVoxLink Code Auditor ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxLink Security Specialist",
+      "detail": "PairVoxLink Security Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxLink Verification Agent",
+      "detail": "PairVoxLink Verification Agent ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Permission Policy & Core Engine Specialist",
+      "detail": "Permission Policy & Core Engine Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    }
+  ]
+}

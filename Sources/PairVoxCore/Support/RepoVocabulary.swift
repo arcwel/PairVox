@@ -55,7 +55,8 @@ public enum RepoVocabulary {
             .prefix(limit).map(\.key)
     }
 
-    static let termPattern = try! NSRegularExpression(pattern: #"^_{0,2}[A-Za-z][A-Za-z0-9_\-]{2,60}$"#)
+    /// `\A` and `\z`, not `^` and `$`: ICU's `$` also matches before a final newline, so "AllowIt\n" passed (audit run 8).
+    static let termPattern = try! NSRegularExpression(pattern: #"\A_{0,2}[A-Za-z][A-Za-z0-9_\-]{2,60}\z"#)
     /// Words that only fill out an answer ("allow all", "yes please", "go ahead").
     static let answerFillers: Set<String> = ["all", "it", "please", "go", "ahead", "do", "them", "everything", "high", "risk", "once", "now"]
 

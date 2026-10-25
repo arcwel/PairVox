@@ -85,6 +85,9 @@ public actor ConversationEngine {
     /// of it, begun while it played or just after, is PairVox hearing itself (audit run 7: the end of "…Allow?").
     private var lastPromptText: String?
     private var lastPromptID: Int?
+    /// The prompts spoken for the request (or folder offer) now waiting. Only one of these starting opens the answer
+    /// window, so an earlier request's prompt still in the queue cannot (audit run 8).
+    private var pendingPromptIDs: Set<Int> = []
     private var lastPromptEndedAt: Date?
     static let ownEchoWindow: TimeInterval = 0.6
     private var pausedRemaining: [Utterance] = []
@@ -263,7 +266,11 @@ public actor ConversationEngine {
 
     /// A final transcript (or typed text) from the user.
     public func submit(_ rawText: String) {
-        if let intercept = utteranceInterceptor, intercept(rawText) { userIsSpeaking = false; transcribing = false; recomputePhase(); return }
+        // Words PairVox itself just said ("…Say approve, deny…" from an announcement) are not offered to the
+        // cross-project interceptor: heard back, they would answer another project's request (audit run 8).
+        if !isOwnPromptEcho(rawText, spokenAt: speechStartedAt), let intercept = utteranceInterceptor, intercept(rawText) {
+            userIsSpeaking = false; transcribing = false; recomputePhase(); return
+        }
         process(rawText, allowProjectSwitch: true)
     }
 
@@ -322,12 +329,13 @@ public actor ConversationEngine {
                 ["text": log.content(text), "command": parsed.map { "\($0)" } ?? "none",
                  "awaitingPermission": .bool(context.awaitingPermission), "claudeWorking": .bool(context.claudeIsWorking)])
         if parsed != .approveAllWaiting { approveAllArmed = nil }
-        // Only a plain yes is checked: "confirm high risk" and "allow all" are the phrases those prompts ask for, so
-        // saying them back is the answer, and PairVox's own copy of them is caught by the echo canceller and VAD.
-        if let command = parsed, [.approve, .approveAlways].contains(command), isOwnPromptEcho(text) {
+        // Every spoken approval is checked, "confirm high risk" and "allow all" too: PairVox says those phrases itself,
+        // and a real answer and an echo differ only in timing (audit run 8). The notice asks again without an answer
+        // word in it, so it cannot be heard back as one ("…say yes." was).
+        if let command = parsed, [.approve, .approveAlways, .confirmHighRisk, .approveAllWaiting].contains(command), isOwnPromptEcho(text, spokenAt: answerSpokenAt) {
             log.log(.info, .policy, "voice.ownEcho", ["words": .int(VoiceCommand.normalize(text).count)])
             noteIgnored(.ownEcho)
-            speak([make("If that was you, say yes.", .notice)], record: false, force: true)
+            speak([make("That sounded like my own voice. If it was you, answer again.", .notice)], record: false, force: true)
             return
         }
         if let command = parsed {
@@ -492,9 +500,9 @@ public actor ConversationEngine {
     /// Says again what is waiting for the user's decision, because it was swallowed while they were away.
     private func repromptWaitingQuestion() {
         if let p = snapshot.pendingPermission {
-            speak([make(permissionPrompt(for: p), .prompt)], record: false, force: true)
+            speakPrompt(permissionPrompt(for: p))
         } else if let offer = snapshot.grantOffer {
-            speak([make(offer.text, .prompt)], record: false, force: true)
+            speakPrompt(offer.text)
         }
     }
 
@@ -596,7 +604,8 @@ public actor ConversationEngine {
         }
         snapshot.grantOffer = o
         promptHeardAt = nil
-        speak([make(o.text, .prompt)], record: false, force: true)
+        pendingPromptIDs = []
+        speakPrompt(o.text)
         publish()
     }
 
@@ -948,7 +957,7 @@ public actor ConversationEngine {
                 var text = "\(eligible.count) \(eligible.count == 1 ? "request" : "requests") can be allowed together. " + items.joined(separator: ". Then, ") + ". "
                 if skipped > 0 { text += "\(skipped) high-risk \(skipped == 1 ? "one" : "ones") will still ask. " }
                 text += "Say allow all again to allow them."
-                speak([make(text, .prompt)], record: false, force: true)
+                speakPrompt(text)
             }
         case .explain:
             guard let pending = snapshot.pendingPermission else { break }
@@ -1166,10 +1175,9 @@ public actor ConversationEngine {
         case .started(let id):
             log.log(.debug, .tts, "utterance.started", ["id": .int(id)])
             startedIDs.insert(id)
-            if queued[id]?.kind == .prompt, snapshot.pendingPermission != nil || snapshot.grantOffer != nil, promptHeardAt == nil {
-                promptHeardAt = now()
-            }
-            if let u = queued[id], u.kind == .prompt { lastPromptText = u.text; lastPromptID = id; lastPromptEndedAt = nil }
+            if pendingPromptIDs.contains(id), promptHeardAt == nil { promptHeardAt = now() }
+            // Prompts and notices are what PairVox says about a request; either could come back as an answer.
+            if let u = queued[id], u.kind == .prompt || u.kind == .notice { lastPromptText = u.text; lastPromptID = id; lastPromptEndedAt = nil }
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
             if latency.firstSound == nil, let start = sendTimes.first { latency.firstSound = Date().timeIntervalSince(start) }
@@ -1242,6 +1250,7 @@ public actor ConversationEngine {
     private func respondToPermission(_ request: PermissionRequest, decision: PermissionDecision) {
         cancelAdvisorWork(for: request.requestID)
         sendDecision(request, decision)
+        dropUnplayedPrompts()
         snapshot.pendingPermission = nil
         snapshot.ignoredAnswer = nil
         promoteNextPermission()
@@ -1279,8 +1288,8 @@ public actor ConversationEngine {
 
     /// A spoken utterance whose words are a run of the last prompt's words, begun while that prompt played or within
     /// `ownEchoWindow` of its end. "Yes" is never one: no prompt says it.
-    private func isOwnPromptEcho(_ text: String) -> Bool {
-        guard let spoken = answerSpokenAt, let prompt = lastPromptText, let promptID = lastPromptID else { return false }
+    private func isOwnPromptEcho(_ text: String, spokenAt: Date?) -> Bool {
+        guard let spoken = spokenAt, let prompt = lastPromptText, let promptID = lastPromptID else { return false }
         if let ended = lastPromptEndedAt {
             if spoken.timeIntervalSince(ended) > Self.ownEchoWindow { return false }
         } else if queued[promptID] == nil {
@@ -1300,9 +1309,27 @@ public actor ConversationEngine {
         noteIgnored(.beforePrompt)
         let promptOnItsWay = queueOrder.contains { queued[$0]?.kind == .prompt && !startedIDs.contains($0) }
         if !promptOnItsWay {
-            speak([make("I heard that before I asked.", .notice), make(permissionPrompt(for: pending), .prompt)], record: false, force: true)
+            speakPrompt(permissionPrompt(for: pending), after: [make("I heard that before I asked.", .notice)])
         }
         return true
+    }
+
+    /// Speaks a prompt for the request or offer now waiting, and remembers it as one of that request's prompts.
+    private func speakPrompt(_ text: String, after lead: [Utterance] = []) {
+        let prompt = make(text, .prompt)
+        pendingPromptIDs.insert(prompt.id)
+        speak(lead + [prompt], record: false, force: true)
+    }
+
+    /// A decided request's prompt that has not started is taken out of the queue, so it is not played afterwards as
+    /// if it asked about the next request (audit run 8).
+    private func dropUnplayedPrompts() {
+        let unplayed = pendingPromptIDs.filter { !startedIDs.contains($0) && queued[$0] != nil }
+        pendingPromptIDs = []
+        guard !unplayed.isEmpty else { return }
+        let removed = Set(output.cancelQueued(Array(unplayed)))
+        for id in removed { queued[id] = nil }
+        queueOrder.removeAll { removed.contains($0) }
     }
 
     /// Records, for the card, a spoken answer to the request on screen that was not counted.
@@ -1316,9 +1343,10 @@ public actor ConversationEngine {
         snapshot.grantOffer = nil   // a real request outranks the standing-access question
         snapshot.pendingPermission = pending
         snapshot.ignoredAnswer = nil
+        pendingPromptIDs = []
         promptHeardAt = nil
         ackTask?.cancel()
-        speak([make(permissionPrompt(for: pending), .prompt)], record: false, force: true)
+        speakPrompt(permissionPrompt(for: pending))
         startExplanation(pending)
     }
 

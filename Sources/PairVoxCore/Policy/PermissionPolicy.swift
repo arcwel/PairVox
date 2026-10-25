@@ -306,6 +306,8 @@ public enum BashRisk {
         // `xargs` (security audit 2026-10-24: `ls | xargs rm -rf` and `timeout 60 rm --recursive` rated medium).
         Rule(pattern: #"\brm\s+([^;&|]*\s)?(-[a-zA-Z]*[rRfF][a-zA-Z]*|--recursive|--force|--no-preserve-root)(\s|$|['"])"#, level: .high, reason: "Deletes files recursively or forcefully."),
         // Printing the environment shows the API key Claude Code was started with (security audit 2026-10-24).
+        // `ps` with the e flag prints each process's environment, the claude child's included (audit run 8).
+        Rule(pattern: #"(^|[;&|(]\s*)ps\s+(-?[A-Za-z]*[eE][A-Za-z]*)(\s|$)"#, level: .high, reason: "Reads the environment, which holds your API key."),
         // Only in command position, so `python3 -m venv env` or `grep ANTHROPIC_API_KEY Sources` is not caught; the
         // structural pass catches the respellings (`/usr/bin/env`, `pr''intenv`, `env -0`).
         Rule(pattern: #"(^|[;&|(]\s*)(printenv|env|export|set|declare\s+-[a-zA-Z]*[xp][a-zA-Z]*|typeset\s+-[a-zA-Z]*[xp][a-zA-Z]*|compgen\s+-e)\s*($|\d?[>;&|)])|\bexport\s+-p\b|/proc/[^/\s]+/environ|\$\{?ANTHROPIC_(API_KEY|AUTH_TOKEN)"#, level: .high, reason: "Reads the environment, which holds your API key."),
@@ -679,9 +681,28 @@ public enum BashRisk {
     }
 
     public static func classify(_ original: String, projectRoot: String? = nil) -> Result {
+        classify(original, projectRoot: projectRoot, depth: 0)
+    }
+
+    /// The text a shell is handed with `-c` (`sh -c 'env'`, `bash -c printenv`), judged as a command of its own: the
+    /// rules that look at command position would otherwise see only the shell (audit run 8).
+    static let nestedShellBody = try! NSRegularExpression(
+        pattern: #"\b(?:sh|bash|zsh|dash|ksh|fish)\b[^;&|]*?\s-[A-Za-z]*c\s+(?:'([^']*)'|"([^"]*)"|([^\s;&|]+))"#)   // -c alone or in a group (-lc, -ec)
+
+    static func classify(_ original: String, projectRoot: String?, depth: Int) -> Result {
         let command = normalizedForMatching(original)
         var level: RiskLevel = .low
         var reasons: [String] = []
+        if depth < 3 {
+            let ns0 = original as NSString
+            for m in nestedShellBody.matches(in: original, range: NSRange(location: 0, length: ns0.length)) {
+                for g in 1...3 where m.range(at: g).location != NSNotFound {
+                    let inner = classify(ns0.substring(with: m.range(at: g)), projectRoot: projectRoot, depth: depth + 1)
+                    if inner.level > level { level = inner.level }
+                    for r in inner.reasons where !reasons.contains(r) { reasons.append(r) }
+                }
+            }
+        }
         let ns = command as NSString
         let range = NSRange(location: 0, length: ns.length)
         for rule in rules {

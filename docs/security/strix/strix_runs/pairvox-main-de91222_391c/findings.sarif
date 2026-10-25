@@ -1,0 +1,906 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Strix",
+          "informationUri": "https://strix.ai",
+          "rules": [
+            {
+              "id": "strix-coverage/known-dependency-vulnerabilities-supply-chain",
+              "name": "Known Dependency Vulnerabilities / Supply Chain",
+              "shortDescription": {
+                "text": "Coverage: Known Dependency Vulnerabilities / Supply Chain"
+              },
+              "fullDescription": {
+                "text": "Coverage of Known Dependency Vulnerabilities / Supply Chain across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Known Dependency Vulnerabilities / Supply Chain across the assessed attack surface.",
+                "markdown": "Coverage of Known Dependency Vulnerabilities / Supply Chain across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/subprocess-command-injection-executable-path-validation",
+              "name": "Subprocess Command Injection & Executable Path Validation",
+              "shortDescription": {
+                "text": "Coverage: Subprocess Command Injection & Executable Path Validation"
+              },
+              "fullDescription": {
+                "text": "Coverage of Subprocess Command Injection & Executable Path Validation across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Subprocess Command Injection & Executable Path Validation across the assessed attack surface.",
+                "markdown": "Coverage of Subprocess Command Injection & Executable Path Validation across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/remote-pairing-cryptographic-transport-security",
+              "name": "Remote Pairing & Cryptographic Transport Security",
+              "shortDescription": {
+                "text": "Coverage: Remote Pairing & Cryptographic Transport Security"
+              },
+              "fullDescription": {
+                "text": "Coverage of Remote Pairing & Cryptographic Transport Security across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Remote Pairing & Cryptographic Transport Security across the assessed attack surface.",
+                "markdown": "Coverage of Remote Pairing & Cryptographic Transport Security across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/permission-policy-folder-scope-enforcement",
+              "name": "Permission Policy & Folder Scope Enforcement",
+              "shortDescription": {
+                "text": "Coverage: Permission Policy & Folder Scope Enforcement"
+              },
+              "fullDescription": {
+                "text": "Coverage of Permission Policy & Folder Scope Enforcement across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Permission Policy & Folder Scope Enforcement across the assessed attack surface.",
+                "markdown": "Coverage of Permission Policy & Folder Scope Enforcement across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/credential-storage-diagnostic-exposure",
+              "name": "Credential Storage & Diagnostic Exposure",
+              "shortDescription": {
+                "text": "Coverage: Credential Storage & Diagnostic Exposure"
+              },
+              "fullDescription": {
+                "text": "Coverage of Credential Storage & Diagnostic Exposure across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Credential Storage & Diagnostic Exposure across the assessed attack surface.",
+                "markdown": "Coverage of Credential Storage & Diagnostic Exposure across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/permission-policy-risk-classification-voice-approval-guardrails",
+              "name": "Permission policy risk classification & voice approval guardrails",
+              "shortDescription": {
+                "text": "Coverage: Permission policy risk classification & voice approval guardrails"
+              },
+              "fullDescription": {
+                "text": "Coverage of Permission policy risk classification & voice approval guardrails across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Permission policy risk classification & voice approval guardrails across the assessed attack surface.",
+                "markdown": "Coverage of Permission policy risk classification & voice approval guardrails across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/directory-access-control-symlink-traversal-shell-auto-approval-scope",
+              "name": "Directory access control, symlink traversal, & shell auto-approval scope",
+              "shortDescription": {
+                "text": "Coverage: Directory access control, symlink traversal, & shell auto-approval scope"
+              },
+              "fullDescription": {
+                "text": "Coverage of Directory access control, symlink traversal, & shell auto-approval scope across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Directory access control, symlink traversal, & shell auto-approval scope across the assessed attack surface.",
+                "markdown": "Coverage of Directory access control, symlink traversal, & shell auto-approval scope across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/voice-command-processing-prompt-echo-cancellation-and-permission-queue-timing",
+              "name": "Voice command processing, prompt echo cancellation, and permission queue timing",
+              "shortDescription": {
+                "text": "Coverage: Voice command processing, prompt echo cancellation, and permission queue timing"
+              },
+              "fullDescription": {
+                "text": "Coverage of Voice command processing, prompt echo cancellation, and permission queue timing across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Voice command processing, prompt echo cancellation, and permission queue timing across the assessed attack surface.",
+                "markdown": "Coverage of Voice command processing, prompt echo cancellation, and permission queue timing across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/advisor-subprocess-sandboxing-prompt-injection-fence-isolation",
+              "name": "Advisor subprocess sandboxing & prompt injection fence isolation",
+              "shortDescription": {
+                "text": "Coverage: Advisor subprocess sandboxing & prompt injection fence isolation"
+              },
+              "fullDescription": {
+                "text": "Coverage of Advisor subprocess sandboxing & prompt injection fence isolation across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Advisor subprocess sandboxing & prompt injection fence isolation across the assessed attack surface.",
+                "markdown": "Coverage of Advisor subprocess sandboxing & prompt injection fence isolation across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/device-secret-key-storage-keychain-access-and-distribution-build-isolation",
+              "name": "Device Secret Key Storage, Keychain Access, and Distribution Build Isolation",
+              "shortDescription": {
+                "text": "Coverage: Device Secret Key Storage, Keychain Access, and Distribution Build Isolation"
+              },
+              "fullDescription": {
+                "text": "Coverage of Device Secret Key Storage, Keychain Access, and Distribution Build Isolation across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Device Secret Key Storage, Keychain Access, and Distribution Build Isolation across the assessed attack surface.",
+                "markdown": "Coverage of Device Secret Key Storage, Keychain Access, and Distribution Build Isolation across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/subprocess-execution-isolation-environment-variable-filtering-executable-path-verification",
+              "name": "Subprocess execution isolation, environment variable filtering, & executable path verification",
+              "shortDescription": {
+                "text": "Coverage: Subprocess execution isolation, environment variable filtering, & executable path verification"
+              },
+              "fullDescription": {
+                "text": "Coverage of Subprocess execution isolation, environment variable filtering, & executable path verification across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Subprocess execution isolation, environment variable filtering, & executable path verification across the assessed attack surface.",
+                "markdown": "Coverage of Subprocess execution isolation, environment variable filtering, & executable path verification across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/device-pairing-protocol-hmac-proof-verification-anti-bruteforce-controls",
+              "name": "Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls",
+              "shortDescription": {
+                "text": "Coverage: Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls"
+              },
+              "fullDescription": {
+                "text": "Coverage of Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls across the assessed attack surface.",
+                "markdown": "Coverage of Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/configuration-persistence-settings-file-permission-validation-system-prompt-configuration",
+              "name": "Configuration persistence, settings file permission validation, & system prompt configuration",
+              "shortDescription": {
+                "text": "Coverage: Configuration persistence, settings file permission validation, & system prompt configuration"
+              },
+              "fullDescription": {
+                "text": "Coverage of Configuration persistence, settings file permission validation, & system prompt configuration across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Configuration persistence, settings file permission validation, & system prompt configuration across the assessed attack surface.",
+                "markdown": "Coverage of Configuration persistence, settings file permission validation, & system prompt configuration across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/engine-link-proxying-permission-approval-delegation",
+              "name": "Engine Link Proxying & Permission Approval Delegation",
+              "shortDescription": {
+                "text": "Coverage: Engine Link Proxying & Permission Approval Delegation"
+              },
+              "fullDescription": {
+                "text": "Coverage of Engine Link Proxying & Permission Approval Delegation across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Engine Link Proxying & Permission Approval Delegation across the assessed attack surface.",
+                "markdown": "Coverage of Engine Link Proxying & Permission Approval Delegation across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/test-suite-execution-security-test-coverage-validation",
+              "name": "Test suite execution & security test coverage validation",
+              "shortDescription": {
+                "text": "Coverage: Test suite execution & security test coverage validation"
+              },
+              "fullDescription": {
+                "text": "Coverage of Test suite execution & security test coverage validation across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Test suite execution & security test coverage validation across the assessed attack surface.",
+                "markdown": "Coverage of Test suite execution & security test coverage validation across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/local-ipc-socket-control-peer-uid-authorization",
+              "name": "Local IPC Socket Control & Peer UID Authorization",
+              "shortDescription": {
+                "text": "Coverage: Local IPC Socket Control & Peer UID Authorization"
+              },
+              "fullDescription": {
+                "text": "Coverage of Local IPC Socket Control & Peer UID Authorization across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Local IPC Socket Control & Peer UID Authorization across the assessed attack surface.",
+                "markdown": "Coverage of Local IPC Socket Control & Peer UID Authorization across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/network-binding-tailnet-interface-filtering",
+              "name": "Network Binding & Tailnet Interface Filtering",
+              "shortDescription": {
+                "text": "Coverage: Network Binding & Tailnet Interface Filtering"
+              },
+              "fullDescription": {
+                "text": "Coverage of Network Binding & Tailnet Interface Filtering across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Network Binding & Tailnet Interface Filtering across the assessed attack surface.",
+                "markdown": "Coverage of Network Binding & Tailnet Interface Filtering across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/pairvoxlink-test-suite-verification-security-coverage",
+              "name": "PairVoxLink Test Suite Verification & Security Coverage",
+              "shortDescription": {
+                "text": "Coverage: PairVoxLink Test Suite Verification & Security Coverage"
+              },
+              "fullDescription": {
+                "text": "Coverage of PairVoxLink Test Suite Verification & Security Coverage across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of PairVoxLink Test Suite Verification & Security Coverage across the assessed attack surface.",
+                "markdown": "Coverage of PairVoxLink Test Suite Verification & Security Coverage across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            }
+          ],
+          "version": "1.7.0"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "strix-coverage/known-dependency-vulnerabilities-supply-chain",
+          "ruleIndex": 0,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Known Dependency Vulnerabilities / Supply Chain — No issue identified: /workspace/PairVox-main-de91222/Package.resolved\n\nTrivy FS scanned Package.resolved and identified 0 CVEs across pinned dependencies (WhisperKit 1.1.1, Kokoro 1.0.11, MLX 0.30.2, Swift Argument Parser 1.8.2, ZIPFoundation 0.9.20)."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "/workspace/PairVox-main-de91222/Package.resolved"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Known Dependency Vulnerabilities / Supply Chain",
+              "surface": "/workspace/PairVox-main-de91222/Package.resolved",
+              "recorded_by": "SAST Triage Agent",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/subprocess-command-injection-executable-path-validation",
+          "ruleIndex": 1,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Subprocess Command Injection & Executable Path Validation — No issue identified: Sources/PairVoxCore/Session/ClaudeCLISession.swift\n\nClaudeCLISession launches the claude CLI using Foundation Process with explicit URL, argument array ([String]), and environment dictionary. No shell command string interpolation is used. ClaudeLocator enforces file ownership and POSIX permission checks (mode 0o755/0o700, parent folder non-world-writable) on custom executable overrides."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Session/ClaudeCLISession.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Subprocess Command Injection & Executable Path Validation",
+              "surface": "Sources/PairVoxCore/Session/ClaudeCLISession.swift",
+              "recorded_by": "SAST Triage Agent",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/remote-pairing-cryptographic-transport-security",
+          "ruleIndex": 2,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Remote Pairing & Cryptographic Transport Security — No issue identified: Sources/PairVoxLink/LinkHost.swift\n\nReviewed LinkHost.swift in detail. Enforces mutual HMAC-SHA256 handshake and ChaCha20Poly1305 frame AEAD encryption with 64-bit sequence counters. Pre-auth limits cap global pre-auth at 8 and per-peer at 3 with 10s timeouts. Max 3 connections per device. Approval authorization rules enforce presentation checks, truncation limits, device biometrics for high-risk requests, and stale request expiration (300s)."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLink/LinkHost.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Remote Pairing & Cryptographic Transport Security",
+              "surface": "Sources/PairVoxLink/LinkHost.swift",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/permission-policy-folder-scope-enforcement",
+          "ruleIndex": 3,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Permission Policy & Folder Scope Enforcement — No issue identified: Sources/PairVoxCore/Policy/PermissionPolicy.swift\n\nPermissionPolicy and FolderGrants use symlink-resolved path canonicalization (resolvingSymlinksInPath) to prevent traversal. Folder grants for shell commands strictly disqualify commands containing variables, command substitution ($ or backticks), inline code interpreters (python -c, node -e), or redirection operators."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Permission Policy & Folder Scope Enforcement",
+              "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+              "recorded_by": "SAST Triage Agent",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/credential-storage-diagnostic-exposure",
+          "ruleIndex": 4,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Credential Storage & Diagnostic Exposure — No issue identified: Sources/PairVoxApp/Support/KeychainStore.swift\n\nKeychainStore saves Anthropic API keys in the macOS Keychain with kSecAttrAccessibleWhenUnlocked. Device keys are stored in Keychain or 0600 file stores. LogRedactor scrubs API keys, bearer tokens, emails, and usernames before diagnostic export. Gitleaks and Trufflehog confirmed 0 secrets in product code."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxApp/Support/KeychainStore.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Credential Storage & Diagnostic Exposure",
+              "surface": "Sources/PairVoxApp/Support/KeychainStore.swift",
+              "recorded_by": "SAST Triage Agent",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/permission-policy-risk-classification-voice-approval-guardrails",
+          "ruleIndex": 5,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Permission policy risk classification & voice approval guardrails — No issue identified: Sources/PairVoxCore/Policy/PermissionPolicy.swift\n\nReviewed PermissionPolicy.swift. Risk classification correctly categorizes tools, file writes, and bash commands. Protected folders (PairVox settings & Claude config) are rated high risk. MCP tools force screen confirmation. Risk level low/medium/high and voice approvability logic verified."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Permission policy risk classification & voice approval guardrails",
+              "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/directory-access-control-symlink-traversal-shell-auto-approval-scope",
+          "ruleIndex": 6,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Directory access control, symlink traversal, & shell auto-approval scope — No issue identified: Sources/PairVoxCore/Policy/FolderGrants.swift\n\nReviewed FolderGrants.swift and FolderScope. FolderScope.resolved() recursively resolves symlinks up to 32 depth (falling back to unresolvable). Shell grants strictly disqualify command variables, backticks, globs, redirects, and cd leaving the folder."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Policy/FolderGrants.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Directory access control, symlink traversal, & shell auto-approval scope",
+              "surface": "Sources/PairVoxCore/Policy/FolderGrants.swift",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/voice-command-processing-prompt-echo-cancellation-and-permission-queue-timing",
+          "ruleIndex": 7,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Voice command processing, prompt echo cancellation, and permission queue timing — No issue identified: Sources/PairVoxCore/Conversation/ConversationEngine.swift\n\nReviewed ConversationEngine.swift. Timestamps verify voice answers occurred after prompt playback started. Echo detection prevents application from approving its own prompt audio. Remote commands from phone link disable permission approval capability. Single-request queue prevents batch approvals."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Conversation/ConversationEngine.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Voice command processing, prompt echo cancellation, and permission queue timing",
+              "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/advisor-subprocess-sandboxing-prompt-injection-fence-isolation",
+          "ruleIndex": 8,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Advisor subprocess sandboxing & prompt injection fence isolation — No issue identified: Sources/PairVoxCore/Advisor/\n\nReviewed ClaudeAdvisor.swift and RequestAdvisor.swift. Subprocess sandboxed with --tools Read,Grep,Glob and all write/eval/network tools disallowed. Empty MCP config enforced. Prompts sanitized via fenceSafe() to break prompt injection delimiters."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Advisor/"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Advisor subprocess sandboxing & prompt injection fence isolation",
+              "surface": "Sources/PairVoxCore/Advisor/",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/device-secret-key-storage-keychain-access-and-distribution-build-isolation",
+          "ruleIndex": 9,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Device Secret Key Storage, Keychain Access, and Distribution Build Isolation — No issue identified: Sources/PairVoxLink/DeviceKeyStore.swift\n\nReviewed DeviceKeyStore.swift. KeychainDeviceKeyStore uses kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly without iCloud sync. FileDeviceKeyStore uses 0700 dir, 0600 file permissions, atomic file replacement, and Time Machine exclusion. Distribution builds force Keychain storage. Legacy import marker prevents planted key attacks."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLink/DeviceKeyStore.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Device Secret Key Storage, Keychain Access, and Distribution Build Isolation",
+              "surface": "Sources/PairVoxLink/DeviceKeyStore.swift",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/subprocess-execution-isolation-environment-variable-filtering-executable-path-verification",
+          "ruleIndex": 10,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Subprocess execution isolation, environment variable filtering, & executable path verification — No issue identified: Sources/PairVoxCore/Session/\n\nReviewed ClaudeCLISession.swift, ChildEnvironment.swift, LaunchConfiguration.swift, and ClaudeLocator.swift. ChildEnvironment filters ANTHROPIC_*, CLAUDE_CODE_*, NODE_OPTIONS, and TLS manipulation variables. Untrusted project configuration is disabled by default (--setting-sources user). Executable path overrides enforce permissions and ownership checks."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Session/"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Subprocess execution isolation, environment variable filtering, & executable path verification",
+              "surface": "Sources/PairVoxCore/Session/",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/device-pairing-protocol-hmac-proof-verification-anti-bruteforce-controls",
+          "ruleIndex": 11,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls — No issue identified: Sources/PairVoxLink/Pairing.swift\n\nReviewed Pairing.swift. Offers use 128-bit random secrets valid for 120s. Proofs use constant-time HMAC-SHA256 comparison. Device names sanitized against control/newlines/bidi injection. Anti-bruteforce caps wrong attempts at 3 per peer and 12 total. Grants delivered via ChaCha20Poly1305 sealed boxes with Mac user approval gate."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLink/Pairing.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Device Pairing Protocol, HMAC Proof Verification, & Anti-Bruteforce Controls",
+              "surface": "Sources/PairVoxLink/Pairing.swift",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/configuration-persistence-settings-file-permission-validation-system-prompt-configuration",
+          "ruleIndex": 12,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Configuration persistence, settings file permission validation, & system prompt configuration — No issue identified: Sources/PairVoxCore/Config/\n\nReviewed SystemPrompts.swift, Settings.swift, and SettingsStore. SystemPrompts.voice configures Claude Code system prompt. SettingsStore loads AppSettings and validates file ownership/permissions to prevent untrusted files from setting executable path overrides or standing grants."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxCore/Config/"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Configuration persistence, settings file permission validation, & system prompt configuration",
+              "surface": "Sources/PairVoxCore/Config/",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/engine-link-proxying-permission-approval-delegation",
+          "ruleIndex": 13,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Engine Link Proxying & Permission Approval Delegation — No issue identified: Sources/PairVoxLink/EngineLink.swift\n\nReviewed EngineLink.swift. Approvals from remote devices pass always=false to prevent persistent policy overrides. Transcripts are bounded to 40 items. Sentences and playback audio remain on the Mac."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLink/EngineLink.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Engine Link Proxying & Permission Approval Delegation",
+              "surface": "Sources/PairVoxLink/EngineLink.swift",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/test-suite-execution-security-test-coverage-validation",
+          "ruleIndex": 14,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Test suite execution & security test coverage validation — No issue identified: Tests/\n\nExecuted swift test (failed with swift command not found due to missing Swift toolchain in Linux container). Reviewed SecurityHardeningTests, PolicyAndCommandTests, FolderGrantTests, and CLISessionTests. Test cases cover permission policy classification, folder grant scope, symlink handling, environment filtering, and path override verification."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Tests/"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Test suite execution & security test coverage validation",
+              "surface": "Tests/",
+              "recorded_by": "PairVoxCore Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/local-ipc-socket-control-peer-uid-authorization",
+          "ruleIndex": 15,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Local IPC Socket Control & Peer UID Authorization — No issue identified: Sources/PairVoxLink/LinkCommands.swift\n\nReviewed LinkCommands.swift. Unix domain socket is created in 0700 folder with 0600 permissions. Connections verify getpeereid peer UID matches getuid(). Socket timeouts (2s) and SO_NOSIGPIPE prevent local IPC denial of service."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLink/LinkCommands.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Local IPC Socket Control & Peer UID Authorization",
+              "surface": "Sources/PairVoxLink/LinkCommands.swift",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/network-binding-tailnet-interface-filtering",
+          "ruleIndex": 16,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Network Binding & Tailnet Interface Filtering — No issue identified: Sources/PairVoxLink/TailnetAddress.swift\n\nReviewed TailnetAddress.swift. Listener and peer validation strictly enforce Tailscale CGNAT IP ranges (100.64.0.0/10 IPv4, fd7a:115c:a1e0::/48 IPv6) on utun interfaces or loopback (127.0.0.1 / ::1), preventing interface exposure on public LANs."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Sources/PairVoxLink/TailnetAddress.swift"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Network Binding & Tailnet Interface Filtering",
+              "surface": "Sources/PairVoxLink/TailnetAddress.swift",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/pairvoxlink-test-suite-verification-security-coverage",
+          "ruleIndex": 17,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "PairVoxLink Test Suite Verification & Security Coverage — No issue identified: Tests/PairVoxLinkTests\n\nReviewed test suite in Tests/PairVoxLinkTests (LinkTests, LinkHeartbeatTests, ReconnectorTests, LinkSoakTests). Tests verify AEAD frame encryption, replay rejection, HMAC pairing proofs, pre-auth limits, biometric & voice approval risk rules, Unix socket UID authorization, and heartbeat timeout loops. Execution of swift test was attempted but swift compiler toolchain is absent in this Linux container."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Tests/PairVoxLinkTests"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "PairVoxLink Test Suite Verification & Security Coverage",
+              "surface": "Tests/PairVoxLinkTests",
+              "recorded_by": "PairVoxLink Test Runner",
+              "source": "agent_reported"
+            }
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ]
+    }
+  ]
+}
