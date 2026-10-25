@@ -11,6 +11,8 @@ enum Style {
     static let fieldHorizontal: CGFloat = 16
     static let bannerVertical: CGFloat = 16
     static let bannerHorizontal: CGFloat = 20
+    /// The toolbar tint and badge colour while the microphone is asleep.
+    static let asleep = Color(nsColor: .systemOrange)
 }
 
 /// A text field with room around the text and the shared corner radius. The stock rounded-border style pads the

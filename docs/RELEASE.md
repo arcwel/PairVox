@@ -23,6 +23,8 @@ What exists, what each step needs, and what is still missing. Nothing here runs 
 
 ## Release checklist
 
+`scripts/release-assets.sh X.Y.Z[-pre] [--signed]` does steps 2 and 5's building in one go: it builds the DMG (ad-hoc, or signed and notarized with `--signed`) and the unsigned iPhone `.ipa`, adds the newest Strix report and a zip of the security reports, writes `SHA256SUMS` into `.build/release-assets/VERSION/`, and prints the `gh release create` line. `--dry-run --json` shows the plan.
+
 1. `CHANGELOG.md`: move "Unreleased" under the version heading.
 2. `scripts/release.sh X.Y.Z --dry-run` passes.
 3. `swift test --build-system native` passes; `scripts/soak.sh 120` passes; `docs/security/` has a report for this milestone (full `security-audit` mode).

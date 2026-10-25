@@ -28,9 +28,12 @@ struct ControlBarView: View {
                 Button {
                     model.toggleMute()
                 } label: {
-                    Image(systemName: model.listeningMode == .muted ? "mic.slash.fill" : "mic.fill")
+                    Image(systemName: model.micAsleep ? "moon.zzz.fill" : (model.listeningMode == .muted ? "mic.slash.fill" : "mic.fill"))
+                        .foregroundStyle(model.micAsleep ? Style.asleep : Color.primary)
                 }
-                .accessibilityHint("\(model.listeningMode == .muted ? "Unmute" : "Mute") microphone (\(Shortcuts.of(.toggleMute).display), anywhere: ⌃⌥M)")
+                // Named explicitly: the moon symbol's own name is "Snooze".
+                .accessibilityLabel(model.micAsleep ? "Wake microphone" : (model.listeningMode == .muted ? "Microphone Off" : "Microphone"))
+                .accessibilityHint("\(model.micAsleep ? "Wake" : (model.listeningMode == .muted ? "Unmute" : "Mute")) microphone (\(Shortcuts.of(.toggleMute).display), anywhere: ⌃⌥M)")
 
                 Button {
                     model.stopSpeaking()

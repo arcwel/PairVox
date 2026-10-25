@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The hands-free microphone goes to sleep after 3 minutes without conversation. Asleep, it is muted, the top bar turns orange and shows "Microphone asleep · Wake", and the microphone icon becomes a moon. Click Wake, press the mute shortcut (⌃⌥M anywhere) or hold push-to-talk to turn it back on. Claude thinking, working or speaking in any project counts as conversation, and so does anything you send. Sound that never became a message does not, and it never sleeps while you are talking. Settings, General, Listening sets the time (3, 5, 10 or 30 minutes) or turns it off.
+- `scripts/release-assets.sh VERSION` builds every file a release carries into one folder: the Mac DMG, the unsigned iPhone `.ipa`, the newest Strix report, a zip of the security reports and `SHA256SUMS`. It accepts `--out`, `--signed` (signed and notarized through `scripts/release.sh`), `--dry-run` and `--json`, never touches `dist/`, never uploads, and prints the `gh release create` line to run.
+- `pairvox-link-testhost` answers an approval or denial with a reply, so a phone run shows the whole loop.
 - Folder access is no longer granted by voice by default. A spoken or typed yes to the "allow Claude to edit all files inside it" offer, or to the shell-commands offer, gets "Folder access needs a click", and the question now ends "Answer on screen, or say no." A spoken no still declines. With "Allow confirming high-risk requests by voice" on, "yes" then "confirm" still grant it, but each must be begun after that step's question started playing, must not be PairVox's own words heard back, and must come within five minutes of the question. With Touch ID or password confirmation on, a spoken grant asks for that too. The buttons work as before. On 2026-10-25 a hands-free session in a room where people were talking ended with a grant for the demo folder.
 
 ## 0.1.0-beta.1 (2026-10-25)

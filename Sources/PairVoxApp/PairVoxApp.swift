@@ -56,7 +56,7 @@ struct PairVoxApp: App {
             CommandMenu("Conversation") {
                 Button(Shortcuts.of(.stopSpeaking).title) { model.stopSpeaking() }.shortcut(.stopSpeaking)
                 Button(Shortcuts.of(.interrupt).title) { model.interrupt() }.shortcut(.interrupt)
-                Button(model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone") { model.toggleMute() }
+                Button(model.micAsleep ? "Wake Microphone" : (model.listeningMode == .muted ? "Unmute Microphone" : "Mute Microphone")) { model.toggleMute() }
                     .shortcut(.toggleMute)
                 Divider()
                 Button(Shortcuts.of(.repeatLast).title) { model.perform(.repeatLast) }.shortcut(.repeatLast)
@@ -131,7 +131,7 @@ extension AppModel {
         case .thinking, .working: return "ellipsis.bubble"
         case .awaitingPermission: return "exclamationmark.bubble"
         case .needsSetup: return "exclamationmark.triangle"
-        default: return listeningMode == .muted ? "mic.slash" : "bubble.left.and.bubble.right"
+        default: return micAsleep ? "moon.zzz" : (listeningMode == .muted ? "mic.slash" : "bubble.left.and.bubble.right")
         }
     }
 }

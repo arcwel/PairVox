@@ -37,6 +37,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var inputLevel: Float = -90 { didSet { UITrace.tick("set.inputLevel") } }
     @Published private(set) var listeningMode: VoiceInputController.ListeningMode = .handsFree
     @Published private(set) var pushToTalkActive = false
+    /// The hands-free microphone went to sleep after `settings.micSleepMinutes` without conversation. It stays muted
+    /// until the user turns it back on; the toolbar is highlighted meanwhile.
+    @Published private(set) var micAsleep = false
+    private var micSleep = MicHibernation()
+    private static let micSleepCheckSeconds: UInt64 = 5
     /// A request explainer exists for the open project (questions about a request can be asked).
     @Published private(set) var advisorAvailable = false
     @Published private(set) var hasAPIKey = KeychainStore.hasAPIKey()
@@ -136,6 +141,11 @@ final class AppModel: ObservableObject {
         setup.speechRecognition = VoicePermissions.speechRecognition
         notifier.requestAuthorization()
 
+        startMicSleepClock()
+        // For screenshots and UI checks: start with the microphone already asleep, so nothing is ever heard.
+        if ProcessInfo.processInfo.environment["PAIRVOX_START_MIC_ASLEEP"] == "1", listeningMode == .handsFree {
+            putMicToSleep(reason: "launchOption")
+        }
         hotKeys.onPress = { [weak self] id in self?.globalHotKey(id, down: true) }
         hotKeys.onRelease = { [weak self] id in self?.globalHotKey(id, down: false) }
         for key in [Shortcuts.pushToTalk(settings.pushToTalkKey)] + Shortcuts.global.dropFirst() {
@@ -668,6 +678,8 @@ final class AppModel: ObservableObject {
     func sendTyped(_ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, let engine else { return }
+        // Typing is conversation, but it does not wake a sleeping microphone: only turning it on does.
+        micSleep.noteActivity()
         Task {
             await engine.userStartedSpeaking(typed: true)
             await engine.userStoppedSpeaking()
@@ -771,6 +783,9 @@ final class AppModel: ObservableObject {
         guard let input else { return }
         if down {
             guard !pushToTalkActive else { return }
+            // Holding the key is the user asking to be heard, so it wakes a sleeping microphone.
+            if micAsleep { setListeningMode(settings.handsFree ? .handsFree : .pushToTalk) }
+            micSleep.noteActivity()
             pushToTalkActive = true
             if listeningMode == .muted { input.setMode(.pushToTalk) }
             input.pushToTalkBegan()
@@ -785,8 +800,46 @@ final class AppModel: ObservableObject {
     func setListeningMode(_ mode: VoiceInputController.ListeningMode) {
         listeningMode = mode
         input?.setMode(mode)
-        if mode != .muted { settings.handsFree = mode == .handsFree }
+        if mode != .muted {
+            settings.handsFree = mode == .handsFree
+            if micAsleep {
+                micAsleep = false
+                log.log(.info, .app, "mic.wake", [:])
+            }
+            micSleep.noteActivity()
+        }
     }
+
+    // MARK: Microphone sleep
+
+    /// Checks every few seconds whether the hands-free microphone has heard no conversation for the chosen time.
+    private func startMicSleepClock() {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.micSleepCheckSeconds * 1_000_000_000)
+                guard let self else { return }
+                self.checkMicSleep()
+            }
+        }
+    }
+
+    private func checkMicSleep() {
+        let listening = listeningMode == .handsFree && settings.microphoneEnabled && microphoneAvailable
+            && !pushToTalkActive && !micAsleep
+        let phases = sessionOrder.compactMap { liveSessions[$0]?.snapshot.phase }
+        guard micSleep.tick(phases: phases, handsFreeListening: listening, minutes: settings.micSleepMinutes) else { return }
+        putMicToSleep(reason: "idle")
+    }
+
+    private func putMicToSleep(reason: String) {
+        micAsleep = true
+        listeningMode = .muted
+        input?.setMode(.muted)
+        log.log(.info, .app, "mic.sleep", ["minutes": .int(settings.micSleepMinutes), "reason": .string(reason)])
+    }
+
+    /// Turns a sleeping microphone back on, in the mode it was in.
+    func wakeMicrophone() { setListeningMode(settings.handsFree ? .handsFree : .pushToTalk) }
 
     func toggleMute() {
         setListeningMode(listeningMode == .muted ? (settings.handsFree ? .handsFree : .pushToTalk) : .muted)
@@ -1121,6 +1174,7 @@ final class AppModel: ObservableObject {
         case .starting: return "Starting…"
         case .idle:
             if !settings.microphoneEnabled { return "Microphone off" }
+            if micAsleep { return "Microphone asleep" }
             if !microphoneAvailable { return "No microphone" }
             return listeningMode == .muted ? "Muted" : (listeningMode == .pushToTalk ? "Hold \(Shortcuts.pushToTalk(settings.pushToTalkKey).display) to talk" : "Listening")
         case .listening: return "Hearing you…"
