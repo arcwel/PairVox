@@ -114,6 +114,11 @@ public struct GrantOffer: Sendable, Equatable {
     public var stage: Stage
     /// The words PairVox says (and the banner shows) at this stage.
     public var text: String
+    /// When this stage's question was asked. A spoken answer stops counting after `Announcer.staleAfter`, as for a
+    /// request; the buttons still work.
+    public var askedAt = Date()
+
+    public func isStale(now: Date) -> Bool { now.timeIntervalSince(askedAt) > Announcer.staleAfter }
 }
 
 /// What the engine reports back so the app can save or forget a grant.

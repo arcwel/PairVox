@@ -112,6 +112,7 @@ final class FolderGrantEngineTests: XCTestCase {
     }
 
     func testGrantNeedsTwoYesAnswersAndThenEditsSkipThePrompt() async {
+        await engine.setSpokenHighRiskConfirmation(true)
         await engine.offerFolderGrant()
         var snap = await engine.snapshot
         XCTAssertEqual(snap.grantOffer?.stage, .asking)
@@ -143,6 +144,7 @@ final class FolderGrantEngineTests: XCTestCase {
     }
 
     func testNoAtEitherStageDeclinesAndNothingIsGranted() async {
+        await engine.setSpokenHighRiskConfirmation(true)
         await engine.offerFolderGrant()
         await engine.submit("no")
         var snap = await engine.snapshot
@@ -184,6 +186,7 @@ final class FolderGrantEngineTests: XCTestCase {
     }
 
     func testShellGrantIsItsOwnTwoStepQuestionAndNeedsTheEditGrant() async {
+        await engine.setSpokenHighRiskConfirmation(true)
         await engine.offerFolderGrant(shell: true)
         var snap = await engine.snapshot
         XCTAssertNil(snap.grantOffer, "no edit grant yet")
@@ -215,5 +218,148 @@ final class FolderGrantEngineTests: XCTestCase {
         await settle()
         let snap = await engine.snapshot
         XCTAssertEqual(snap.pendingPermission?.request.requestID, "B")
+    }
+
+    // MARK: - Spoken answers to the offer (2026-10-25: hands-free PairVox in a room where people were talking)
+
+    /// Plays the newest prompt to its end, then moves the clock past the echo window.
+    func playLatestPrompt(_ clock: EngineApprovalTests.FakeClock) async {
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("a prompt to play") }
+        output.continuation.yield(.started(prompt.id))
+        output.continuation.yield(.finished(prompt.id))
+        await settle()
+        clock.advance(1)
+    }
+
+    /// Speech the microphone heard: it starts and ends, then its words arrive.
+    func say(_ text: String) async {
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit(text)
+        await settle()
+    }
+
+    func withClock() async -> EngineApprovalTests.FakeClock {
+        let clock = EngineApprovalTests.FakeClock()
+        await engine.setClock { clock.now }
+        return clock
+    }
+
+    func testByDefaultOnlyTheButtonsGrantAndASpokenNoStillDeclines() async {
+        let clock = await withClock()
+        await engine.offerFolderGrant()
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.text.hasSuffix("without asking each time? Answer on screen, or say no."), true,
+                       "the question does not invite a spoken yes: \(snap.grantOffer?.text ?? "")")
+        await playLatestPrompt(clock)
+        await say("yes")
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .asking, "a spoken yes does not even open the confirmation")
+        XCTAssertTrue(output.allTexts.contains("Folder access needs a click. Please use the buttons on screen."))
+        await engine.answerGrantOffer(yes: true)   // the first button
+        await playLatestPrompt(clock)
+        await say("confirm")
+        await engine.submit("confirm")             // typed, too
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming)
+        XCTAssertTrue(changes.all.isEmpty)
+        await engine.answerGrantOffer(yes: true)   // the second button
+        XCTAssertEqual(changes.all, [.granted(path: root, shell: false)])
+
+        await engine.setFolderGrants([])
+        await engine.offerFolderGrant()
+        await playLatestPrompt(clock)
+        await say("no")
+        snap = await engine.snapshot
+        XCTAssertNil(snap.grantOffer)
+        XCTAssertEqual(changes.all.last, .declined(path: root), "no by voice still works")
+    }
+
+    func testASpokenYesBegunBeforeTheOfferPlayedDoesNotCount() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        let clock = await withClock()
+        await engine.offerFolderGrant()
+        await say("yes")   // begun before the question started: a reply to something else
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .asking)
+        XCTAssertTrue(output.allTexts.contains("I heard that before I asked."))
+        await playLatestPrompt(clock)
+        await say("yes")
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming, "said after the question played, it opens the confirmation")
+        await say("confirm")   // the confirmation has not started playing yet
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming)
+        XCTAssertTrue(changes.all.isEmpty, "a confirm begun before the confirmation played grants nothing")
+        await playLatestPrompt(clock)
+        await say("confirm")
+        XCTAssertEqual(changes.all, [.granted(path: root, shell: false)])
+    }
+
+    func testTheOffersOwnWordsHeardBackAreNotAnAnswer() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        let clock = await withClock()
+        await engine.offerFolderGrant()
+        guard let ask = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("the question") }
+        output.continuation.yield(.started(ask.id))
+        await settle()
+        await say("yes")   // "…Say yes or no." from the speakers, while it plays
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .asking)
+        XCTAssertTrue(output.allTexts.contains("That sounded like my own voice. If it was you, answer again."))
+        clock.advance(1)
+        await say("yes")
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming)
+        guard let confirm = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("the confirmation") }
+        output.continuation.yield(.started(confirm.id))
+        await settle()
+        await say("confirm to allow it")   // the confirmation's own tail
+        await say("confirm")
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming)
+        XCTAssertTrue(changes.all.isEmpty, "PairVox's own voice grants nothing")
+    }
+
+    func testAnOfferLeftWaitingTakesNoSpokenAnswerButTheButtonsStillWork() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        let clock = await withClock()
+        await engine.offerFolderGrant()
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.askedAt, clock.now, "the question is stamped with the engine's clock")
+        await playLatestPrompt(clock)
+        clock.advance(Announcer.staleAfter + 1)
+        await say("yes")
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .asking, "a question left waiting takes no stray yes from the room")
+        XCTAssertTrue(output.allTexts.contains("That question has been waiting a while. Please use the buttons on screen."))
+        await engine.answerGrantOffer(yes: true)
+        await playLatestPrompt(clock)
+        clock.advance(Announcer.staleAfter + 1)
+        await say("confirm")
+        snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming)
+        XCTAssertTrue(changes.all.isEmpty, "nor a stray confirm")
+        await engine.answerGrantOffer(yes: true)
+        XCTAssertEqual(changes.all, [.granted(path: root, shell: false)], "the buttons are not subject to the age limit")
+    }
+
+    func testAVoiceGrantAlsoAsksForTouchIDWhenThatIsOn() async {
+        await engine.setSpokenHighRiskConfirmation(true)
+        await engine.setSecondConfirmation { false }
+        await engine.offerFolderGrant()
+        await engine.submit("yes")
+        await engine.submit("confirm")
+        await settle()
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.grantOffer?.stage, .confirming)
+        XCTAssertTrue(changes.all.isEmpty, "Touch ID was refused")
+        XCTAssertTrue(output.allTexts.contains("Not confirmed. Nothing has changed."))
+        await engine.setSecondConfirmation { true }
+        await engine.submit("confirm")
+        await settle()
+        snap = await engine.snapshot
+        XCTAssertNil(snap.grantOffer)
+        XCTAssertEqual(changes.all, [.granted(path: root, shell: false)])
     }
 }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Folder access is no longer granted by voice by default. A spoken or typed yes to the "allow Claude to edit all files inside it" offer, or to the shell-commands offer, gets "Folder access needs a click", and the question now ends "Answer on screen, or say no." A spoken no still declines. With "Allow confirming high-risk requests by voice" on, "yes" then "confirm" still grant it, but each must be begun after that step's question started playing, must not be PairVox's own words heard back, and must come within five minutes of the question. With Touch ID or password confirmation on, a spoken grant asks for that too. The buttons work as before. On 2026-10-25 a hands-free session in a room where people were talking ended with a grant for the demo folder.
+
 ## 0.1.0-beta.1 (2026-10-25)
 
 First public pre-release: the Mac app (ad-hoc signed DMG, not notarized) and the iPhone app (unsigned .ipa). Release notes: docs/release-notes/v0.1.0-beta.1.md.

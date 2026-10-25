@@ -134,7 +134,7 @@ private struct GeneralSettings: View {
                 Text("On by default. Each request is read as one line: the file name, or the first step of a command and how many more there are; the full command is on the card. A spoken “yes” answers that line. Off, a command too long to read in full needs a click.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Allow confirming high-risk requests by voice", isOn: $model.settings.spokenHighRiskConfirmation)
-                Text("Off by default: high-risk requests then need a click. When on, PairVox reads the request back and you can say “confirm high risk” instead. PairVox's own spoken prompt contains those words, so speech from your speakers that the microphone hears can approve a high-risk request. Use headphones, or leave this off in a shared room. Anything Claude Code says needs you at the screen still needs a click.")
+                Text("Off by default: high-risk requests then need a click. When on, PairVox reads the request back and you can say “confirm high risk” instead. PairVox's own spoken prompt contains those words, so speech from your speakers that the microphone hears can approve a high-risk request. Use headphones, or leave this off in a shared room. Anything Claude Code says needs you at the screen still needs a click. The same setting lets you grant folder access by voice (“yes”, then “confirm”); off, folder access takes the buttons.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Also allow voice for requests Claude Code says need the screen", isOn: Binding(
                     get: { model.settings.voiceApprovesNeedsScreen },
@@ -144,7 +144,7 @@ private struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Ask for Touch ID or my password after the spoken phrase", isOn: $model.settings.macSecondConfirmation)
                     .disabled(!model.settings.spokenHighRiskConfirmation)
-                Text("Off by default. When on, a high-risk request approved by voice also asks this Mac for Touch ID or your login password before it is allowed.")
+                Text("Off by default. When on, a high-risk request approved by voice, or folder access granted by voice, also asks this Mac for Touch ID or your login password before it is allowed.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Load this project's own Claude Code settings, hooks and MCP servers", isOn: $model.settings.trustProjectConfiguration)
                 Text("Off by default. A repository you downloaded can include settings that run commands or approve tools without asking you. Turn this on only for projects you wrote or trust. Your own Claude Code settings and MCP servers always load.")

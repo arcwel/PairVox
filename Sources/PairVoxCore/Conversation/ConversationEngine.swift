@@ -588,19 +588,25 @@ public actor ConversationEngine {
         publish()
     }
 
+    /// Standing access to a folder is wider than any single request, so a spoken yes counts for it only where a
+    /// high-risk request may be confirmed by voice. Otherwise it takes the buttons; a spoken no always works.
+    private var grantsByVoice: Bool { config.spokenHighRiskConfirmation }
+
     private func setOffer(_ offer: GrantOffer, stage: GrantOffer.Stage) {
         var o = offer
         o.stage = stage
+        o.askedAt = now()
         let spokenPath = pronunciation.speak(o.folder)
+        let answer = grantsByVoice ? (stage == .asking ? " Say yes or no." : " Say confirm to allow it, or no.") : " Answer on screen, or say no."
         switch (o.kind, stage) {
         case (.edit, .asking):
-            o.text = "This project works in \(spokenPath). Do you want to allow Claude to edit all files inside it without asking each time? Say yes or no."
+            o.text = "This project works in \(spokenPath). Do you want to allow Claude to edit all files inside it without asking each time?" + answer
         case (.edit, .confirming):
-            o.text = "To confirm: Claude will be able to edit every file inside \(spokenPath), with no further questions, until you remove this in Settings. Shell commands are not included. Say confirm to allow it, or no."
+            o.text = "To confirm: Claude will be able to edit every file inside \(spokenPath), with no further questions, until you remove this in Settings. Shell commands are not included." + answer
         case (.shell, .asking):
-            o.text = "Do you also want Claude to run shell commands inside \(spokenPath) without asking? Commands that reach outside the folder, use the network or install things will still ask. Say yes or no."
+            o.text = "Do you also want Claude to run shell commands inside \(spokenPath) without asking? Commands that reach outside the folder, use the network or install things will still ask." + answer
         case (.shell, .confirming):
-            o.text = "To confirm: Claude will be able to run commands inside \(spokenPath) with no further questions, until you turn this off in Settings. Say confirm to allow it, or no."
+            o.text = "To confirm: Claude will be able to run commands inside \(spokenPath) with no further questions, until you turn this off in Settings." + answer
         }
         snapshot.grantOffer = o
         promptHeardAt = nil
@@ -897,20 +903,7 @@ public actor ConversationEngine {
         case .approve, .approveAlways:
             guard !catchUpOpen else { break }   // never approve what has not been announced yet
             if snapshot.pendingPermission == nil, let offer = snapshot.grantOffer {
-                // The offer's own question must have started playing before a spoken yes counts for it.
-                if let spoken = answerSpokenAt, promptHeardAt.map({ spoken < $0 }) ?? true {
-                    log.log(.info, .policy, "grantOffer.answerBeforePrompt", [:])
-                    break
-                }
-                // Standing access takes a deliberate answer: one word to open it, the word "confirm" to finish it.
-                // A longer sentence, or one that begins "say", could be PairVox's own prompt heard back.
-                let w = lastUtteranceWords
-                let deliberate = w.first != "say"
-                    && (offer.stage == .asking ? w.count <= 2 : (w.contains("confirm") && w.count <= 3))
-                if deliberate { answerGrantOffer(yes: true) } else {
-                    speak([make(offer.stage == .asking ? "Please answer yes or no." : "To grant it, say confirm. Or say no.", .notice)],
-                          record: false, force: true)
-                }
+                answerGrantOfferBySpeech(offer)
                 break
             }
             // Spoken approvals only count for requests the policy rates as voice-approvable, and only while the
@@ -1303,15 +1296,68 @@ public actor ConversationEngine {
     /// True (and handled) when a spoken answer was begun before the waiting request's prompt started playing: it was
     /// a reply to something else. The prompt is played if it is not still on its way, and the answer is not counted.
     private func answerPrecedesPrompt(for pending: PendingPermission) -> Bool {
-        guard let spoken = answerSpokenAt else { return false }
-        if let heard = promptHeardAt, spoken >= heard { return false }
+        guard answerBeganBeforePrompt else { return false }
         log.log(.info, .policy, "permission.answerBeforePrompt", ["tool": .string(pending.request.toolName)])
         noteIgnored(.beforePrompt)
-        let promptOnItsWay = queueOrder.contains { queued[$0]?.kind == .prompt && !startedIDs.contains($0) }
-        if !promptOnItsWay {
-            speakPrompt(permissionPrompt(for: pending), after: [make("I heard that before I asked.", .notice)])
-        }
+        repromptAfterEarlyAnswer(permissionPrompt(for: pending))
         return true
+    }
+
+    private var answerBeganBeforePrompt: Bool {
+        guard let spoken = answerSpokenAt else { return false }
+        return promptHeardAt.map { spoken < $0 } ?? true
+    }
+
+    private func repromptAfterEarlyAnswer(_ prompt: String) {
+        let promptOnItsWay = queueOrder.contains { queued[$0]?.kind == .prompt && !startedIDs.contains($0) }
+        if !promptOnItsWay { speakPrompt(prompt, after: [make("I heard that before I asked.", .notice)]) }
+    }
+
+    /// A spoken or typed yes to the folder offer. It gets every check a spoken approval gets (the echo check runs
+    /// before this, in `process`), and then more: standing access is click-only unless high-risk requests may be
+    /// confirmed by voice, and a voice grant also asks for Touch ID when that is on. A hands-free microphone in a
+    /// room where people talk must not be able to grant a folder (2026-10-25).
+    private func answerGrantOfferBySpeech(_ offer: GrantOffer) {
+        guard grantsByVoice else {
+            log.log(.info, .policy, "grantOffer.needsClick", ["kind": "\(offer.kind)", "stage": "\(offer.stage)"])
+            speak([make("Folder access needs a click. Please use the buttons on screen.", .notice)], record: false, force: true)
+            return
+        }
+        // The offer's own question must have started playing before a spoken yes counts for it.
+        if answerBeganBeforePrompt {
+            log.log(.info, .policy, "grantOffer.answerBeforePrompt", ["stage": "\(offer.stage)"])
+            repromptAfterEarlyAnswer(offer.text)
+            return
+        }
+        if offer.isStale(now: now()) {
+            log.log(.info, .policy, "grantOffer.staleVoiceAnswer", ["stage": "\(offer.stage)"])
+            speak([make("That question has been waiting a while. Please use the buttons on screen.", .notice)], record: false, force: true)
+            return
+        }
+        // Standing access takes a deliberate answer: one word to open it, the word "confirm" to finish it.
+        // A longer sentence, or one that begins "say", could be PairVox's own prompt heard back.
+        let w = lastUtteranceWords
+        let deliberate = w.first != "say"
+            && (offer.stage == .asking ? w.count <= 2 : (w.contains("confirm") && w.count <= 3))
+        guard deliberate else {
+            speak([make(offer.stage == .asking ? "Please answer yes or no." : "To grant it, say confirm. Or say no.", .notice)],
+                  record: false, force: true)
+            return
+        }
+        guard offer.stage == .confirming, let confirm = secondConfirmation else { answerGrantOffer(yes: true); return }
+        log.log(.info, .policy, "grantOffer.secondConfirmation", ["kind": "\(offer.kind)"])
+        Task { [weak self] in
+            let ok = await confirm()
+            await self?.finishGrantConfirmation(offer, confirmed: ok)
+        }
+    }
+
+    private func finishGrantConfirmation(_ offer: GrantOffer, confirmed: Bool) {
+        // Only the question that was confirmed: not one replaced, answered on screen or pushed aside by a request.
+        guard snapshot.pendingPermission == nil, let open = snapshot.grantOffer, open.folder == offer.folder,
+              open.kind == offer.kind, open.stage == .confirming, open.askedAt == offer.askedAt else { return }
+        if confirmed { answerGrantOffer(yes: true) }
+        else { speak([make("Not confirmed. Nothing has changed.", .notice)], record: false, force: true) }
     }
 
     /// Speaks a prompt for the request or offer now waiting, and remembers it as one of that request's prompts.

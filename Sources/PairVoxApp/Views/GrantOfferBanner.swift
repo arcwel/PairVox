@@ -19,7 +19,7 @@ struct GrantOfferBanner: View {
             // whenever this banner appeared (blank sidebar and transcript, toolbar still live; 2026-10-16, measured by
             // view-body tracing). The folder is one unbreakable word, so it is clipped in the middle rather than wrapped.
             Text(offer.folder).font(.system(.callout, design: .monospaced)).lineLimit(1).truncationMode(.middle)
-            Text(offer.text.replacingOccurrences(of: " Say yes or no.", with: "").replacingOccurrences(of: " Say yes again to allow, or no.", with: ""))
+            Text(offer.text.replacingOccurrences(of: " Say yes or no.", with: "").replacingOccurrences(of: " Answer on screen, or say no.", with: ""))
                 .font(.callout)
                 .lineLimit(nil)
             HStack {
