@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-25 21:34:22 UTC",
+  "run_id": "pairvox-main-a3e5940_297a",
+  "run_name": "pairvox-main-a3e5940_297a",
+  "scope": {
+    "targets": [
+      {
+        "type": "local_code",
+        "details": {
+          "target_path": "/Users/anthonyguidry/strix-targets/PairVox-main-a3e5940",
+          "workspace_subdir": "PairVox-main-a3e5940"
+        },
+        "original": "/Users/anthonyguidry/strix-targets/PairVox-main-a3e5940"
+      }
+    ],
+    "scan_mode": "standard",
+    "scope_mode": "auto",
+    "diff_scope": {
+      "active": false,
+      "mode": "auto"
+    },
+    "instruction": ""
+  },
+  "summary": {
+    "surfaces_reviewed": 5,
+    "outcomes": {
+      "no_issue_found": 5
+    },
+    "findings_filed": 0,
+    "gaps": 11
+  },
+  "machine_observed": {
+    "agents": [
+      {
+        "agent_id": "da574e1a",
+        "agent_name": "Credentials & Diagnostics Code Reviewer",
+        "status": "completed",
+        "skills": [
+          "information_disclosure",
+          "business_logic"
+        ],
+        "task": "You are an internal software security engineer auditing /workspace/PairVox-main-a3e5940/Sources. Call get_threat_model('/workspace/PairVox-main-a3e5940'). Analyze KeychainStore.swift, LogRedactor.swift, DiagnosticLog.swift, DiagnosticsExporter.swift, and Updater.swift. Check LogRedactor pattern matching and sanitization for regex bypasses or sensitive token exposure in logs. Check KeychainStore and Updater for secure handling. If a bug is confirmed, file a report using create_vulnerability_report with full code_locations (fix_before/fix_after) and record coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "9adda1a5",
+        "agent_name": "Credentials & Diagnostics Specialist",
+        "status": "completed",
+        "skills": [
+          "information_disclosure",
+          "business_logic"
+        ],
+        "task": "Perform security review on KeychainStore.swift, LogRedactor.swift, DiagnosticLog.swift, DiagnosticsExporter.swift, and Updater.swift (/workspace/PairVox-main-a3e5940/Sources). Call get_threat_model('/workspace/PairVox-main-a3e5940'). Audit LogRedactor for incomplete redaction patterns or regex bypasses that allow secrets/tokens to leak into DiagnosticLog or exported diagnostics. Review KeychainStore and DeviceKeyStore for key storage security. Review Updater.swift for insecure update download/verification. Validate findings, file reports with inline fixes, and record coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "2729bf67",
+        "agent_name": "Dependency SCA Specialist",
+        "status": "completed",
+        "skills": [
+          "dependency_cve_scanning"
+        ],
+        "task": "Perform dependency and supply-chain vulnerability assessment on Package.swift and Package.resolved (/workspace/PairVox-main-a3e5940). Call get_threat_model('/workspace/PairVox-main-a3e5940'). Run trivy fs or inspect third-party package dependencies for published CVEs. File verified dependency findings using create_dependency_report with reachability analysis and contextual CVSS breakdown. Record coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "e13947e2",
+        "agent_name": "PairVoxCore Code Reviewer",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "rce",
+          "path_traversal_lfi_rfi"
+        ],
+        "task": "You are an internal software security engineer reviewing /workspace/PairVox-main-a3e5940/Sources/PairVoxCore. Call get_threat_model('/workspace/PairVox-main-a3e5940'). Analyze PermissionPolicy.swift, FolderGrants.swift, ClaudeCLISession.swift, ChildEnvironment.swift, TerminalLogin.swift, ClaudeAdvisor.swift, RequestAdvisor.swift, and ConversationEngine.swift. Verify path validation logic, folder grant checks, subprocess argument construction, and approval handling for edge cases or bypasses. If a defect or security bug is confirmed, file a report using create_vulnerability_report with full code_locations and fix suggestions (fix_before/fix_after), and record coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "a2f8ce50",
+        "agent_name": "PairVoxCore Specialist",
+        "status": "completed",
+        "skills": [
+          "business_logic",
+          "rce",
+          "path_traversal_lfi_rfi"
+        ],
+        "task": "Perform deep security review and validation on PairVoxCore (/workspace/PairVox-main-a3e5940/Sources/PairVoxCore). Call get_threat_model('/workspace/PairVox-main-a3e5940'). Focus on Policy (PermissionPolicy.swift, FolderGrants.swift), Subprocess Execution (ClaudeCLISession.swift, ChildEnvironment.swift, TerminalLogin.swift), Advisor logic (ClaudeAdvisor.swift, RequestAdvisor.swift), and Conversation/VoiceCommand handling. Test for path traversal escaping folder grants, policy bypasses auto-approving destructive actions or shell execution, argument injection in process execution, or prompt injection flaws. Validate any finding with PoC, file vulnerability reports with inline code fixes, and record coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "ccf34ba3",
+        "agent_name": "PairVoxLink Code Reviewer",
+        "status": "completed",
+        "skills": [
+          "authentication_jwt",
+          "semantic_confusion",
+          "information_disclosure"
+        ],
+        "task": "You are an internal application security reviewer verifying code in /workspace/PairVox-main-a3e5940/Sources/PairVoxLink and PairVoxLinkKit. Call get_threat_model('/workspace/PairVox-main-a3e5940'). Perform code analysis on TCPTransport, HandshakeWire, PairingWire, LinkCrypto, LinkHost, LinkClient, DeviceKeyStore, and PhoneCredentials. Look for logic flaws, weak cryptography, authentication issues, replay vulnerabilities, or credential handling flaws. If you find a verified security bug, file a report via create_vulnerability_report with full code_locations (including fix_before and fix_after), and record coverage with record_coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "c3ea2ed3",
+        "agent_name": "PairVoxLink Specialist",
+        "status": "completed",
+        "skills": [
+          "authentication_jwt",
+          "semantic_confusion",
+          "information_disclosure"
+        ],
+        "task": "Perform deep security assessment of PairVoxLink and PairVoxLinkKit (/workspace/PairVox-main-a3e5940/Sources/PairVoxLink and PairVoxLinkKit). Call get_threat_model('/workspace/PairVox-main-a3e5940'). Analyze TCPTransport, HandshakeWire, PairingWire, LinkCrypto, LinkHost, LinkClient, DeviceKeyStore, and PhoneCredentials for authentication bypasses, weak crypto, replay attacks, man-in-the-middle vulnerabilities, state machine flaws, or authorization bypasses. Run tests/PoCs if possible. If a vulnerability is found, validate it, file a report using create_vulnerability_report with full code_locations and fix_before/fix_after, and record coverage.",
+        "is_root": false
+      },
+      {
+        "agent_id": "7f769955",
+        "agent_name": "Root Agent",
+        "status": "completed",
+        "skills": [],
+        "task": "\n\nLocal Codebases: - /Users/anthonyguidry/strix-targets/PairVox-main-a3e5940 (available at: /workspace/PairVox-main-a3e5940; this is the user's real directory, mounted live and writable — .git/.agents/.codex are read-only)",
+        "is_root": true
+      },
+      {
+        "agent_id": "6c3381c7",
+        "agent_name": "SAST Triage Specialist",
+        "status": "completed",
+        "skills": [
+          "source_aware_sast"
+        ],
+        "task": "Perform static analysis triage on /workspace/PairVox-main-a3e5940 using semgrep, ast-grep (sg), gitleaks, trufflehog, and trivy fs. Save output artifacts to /workspace/.source-aware/. Call get_threat_model('/workspace/PairVox-main-a3e5940') first. Identify initial static findings across all Swift source files and publish key findings as notes. Record coverage for static analysis.",
+        "is_root": false
+      }
+    ],
+    "skills_exercised": [
+      "authentication_jwt",
+      "business_logic",
+      "dependency_cve_scanning",
+      "information_disclosure",
+      "path_traversal_lfi_rfi",
+      "rce",
+      "semantic_confusion",
+      "source_aware_sast"
+    ],
+    "findings_filed": 0,
+    "source": "runtime"
+  },
+  "completeness": {
+    "complete": true,
+    "scan_status": "completed",
+    "exit_reason": "finished_by_tool",
+    "caveats": []
+  },
+  "entries": [
+    {
+      "surface": "PairVox Swift Codebase (/workspace/PairVox-main-a3e5940)",
+      "risk_area": "Static Code Analysis / SAST Triage",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Executed semgrep, ast-grep, gitleaks, trufflehog, and trivy fs on 295 files (161 Swift source files). Artifacts saved in /workspace/.source-aware/. Verified policy enforcement, process execution filtering, remote link transport cryptography, keychain access, and diagnostic redactor logic.",
+      "recorded_by": "SAST Triage Specialist",
+      "recorded_at": "2026-10-25 21:32:25 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Package.swift and Package.resolved",
+      "risk_area": "Dependency CVEs / Supply Chain",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Inspected Package.swift and Package.resolved in /workspace/PairVox-main-a3e5940. Evaluated 8 total direct and transitive dependencies (WhisperKit 1.1.1, kokoro-ios 1.0.11, mlx-swift 0.30.2, MLXUtilsLibrary 0.0.6, MisakiSwift 1.0.6, swift-argument-parser 1.8.2, swift-numerics 1.1.1, ZIPFoundation 0.9.20) using Trivy, OSV API, NVD API, and GitHub Security Advisories. Confirmed ZIPFoundation 0.9.20 contains the fix for CVE-2023-39138 (path escape fixed in v0.9.18), and no pinned dependency versions contain open published CVEs.",
+      "recorded_by": "Dependency SCA Specialist",
+      "recorded_at": "2026-10-25 21:33:30 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "PairVoxLink & PairVoxLinkKit",
+      "risk_area": "Network Pairing & Wire Protocol Security",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Audited LinkHost.swift, TCPTransport.swift, LinkCrypto.swift, HandshakeWire.swift, PairingWire.swift, and DeviceKeyStore.swift. Verified ChaCha20-Poly1305 frame encryption with strict sequence counters, HMAC-SHA256 constant-time handshake proofs, HKDF key derivation, and process UID verification via getpeereid on control sockets.",
+      "recorded_by": "Root Agent",
+      "recorded_at": "2026-10-25 21:33:55 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "PairVoxCore Policy & Execution",
+      "risk_area": "Authorization Policy & Process Sandboxing",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Audited PermissionPolicy.swift, FolderGrants.swift, ClaudeCLISession.swift, and ChildEnvironment.swift. Verified symlink resolution up to 32 depth in FolderScope, strict prefix matching, shell execution token guards (disallowing $, backticks, redirects), and ChildEnvironment variable filtering (dropping ANTHROPIC_*, CLAUDE_CODE_*, NODE_OPTIONS).",
+      "recorded_by": "Root Agent",
+      "recorded_at": "2026-10-25 21:33:57 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    },
+    {
+      "surface": "Keychain, LogRedactor & Diagnostic Controls",
+      "risk_area": "Secret Storage & Diagnostic Information Disclosure",
+      "outcome": "no_issue_found",
+      "outcome_label": "No issue identified",
+      "evidence": "Audited KeychainStore.swift, DeviceKeyStore.swift, LogRedactor.swift, and DiagnosticLog.swift. Verified system Keychain storage with kSecAttrAccessibleWhenUnlocked, regex scrubbing of API keys, tokens, emails, and paths in LogRedactor, and opt-in conversation logging in DiagnosticLog.",
+      "recorded_by": "Root Agent",
+      "recorded_at": "2026-10-25 21:33:59 UTC",
+      "updated_at": "",
+      "previous_outcomes": [],
+      "source": "agent_reported"
+    }
+  ],
+  "gaps": [
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "authentication jwt",
+      "detail": "Agent(s) PairVoxLink Code Reviewer, PairVoxLink Specialist were assigned the 'authentication_jwt' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "business logic",
+      "detail": "Agent(s) Credentials & Diagnostics Code Reviewer, Credentials & Diagnostics Specialist, PairVoxCore Code Reviewer, PairVoxCore Specialist were assigned the 'business_logic' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "path traversal lfi rfi",
+      "detail": "Agent(s) PairVoxCore Code Reviewer, PairVoxCore Specialist were assigned the 'path_traversal_lfi_rfi' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "rce",
+      "detail": "Agent(s) PairVoxCore Code Reviewer, PairVoxCore Specialist were assigned the 'rce' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "unrecorded_risk_class",
+      "risk_area": "semantic confusion",
+      "detail": "Agent(s) PairVoxLink Code Reviewer, PairVoxLink Specialist were assigned the 'semantic_confusion' skill, but no coverage entry records this class being assessed. Treat it as unexamined, not as clean."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Credentials & Diagnostics Code Reviewer",
+      "detail": "Credentials & Diagnostics Code Reviewer ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "Credentials & Diagnostics Specialist",
+      "detail": "Credentials & Diagnostics Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxCore Code Reviewer",
+      "detail": "PairVoxCore Code Reviewer ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxCore Specialist",
+      "detail": "PairVoxCore Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxLink Code Reviewer",
+      "detail": "PairVoxLink Code Reviewer ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    },
+    {
+      "kind": "agent_recorded_no_coverage",
+      "agent_name": "PairVoxLink Specialist",
+      "detail": "PairVoxLink Specialist ran (status: completed) without recording any coverage. Whatever it examined is absent from this record."
+    }
+  ]
+}

@@ -35,6 +35,9 @@ public final class VoiceInputController: @unchecked Sendable {
     private var playbackActive = false
     private var capturing = false
     private var utterance: [Float] = []
+    /// When the utterance being captured began. It goes to the engine with that utterance's transcript, so a spoken
+    /// answer is timed against the prompt by its own start, not by whichever utterance began last (audit run 9).
+    private var utteranceStartedAt: Date?
     private var preRoll: [Float] = []
     private let preRollSamples = Int(AudioIO.captureSampleRate * 0.35)
     private var vocabulary: [String] = []
@@ -73,10 +76,18 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.lock()
         mode = newMode
         let wasCapturing = capturing
-        if newMode == .muted { capturing = false; utterance = [] }
+        let started = utteranceStartedAt
+        if newMode == .muted {
+            capturing = false; utterance = []; utteranceStartedAt = nil
+            // Audio from before the mute must not seed the next push-to-talk, and a transcription begun before it
+            // must not be picked up later (audit run 9).
+            preRoll = []
+            speculative?.cancel(); speculative = nil
+            vad.reset()
+        }
         lock.unlock()
         if newMode == .muted && wasCapturing {
-            Task { await engine.transcriptionFailed() }
+            Task { await engine.transcriptionFailed(startedAt: started) }
         }
     }
 
@@ -133,19 +144,23 @@ public final class VoiceInputController: @unchecked Sendable {
         pushToTalkHeld = true
         capturing = true
         utterance = preRoll
+        let started = Date()
+        utteranceStartedAt = started
         vad.reset()
         lock.unlock()
-        Task { await engine.userStartedSpeaking() }
+        Task { await engine.userStartedSpeaking(at: started) }
     }
 
     public func pushToTalkEnded() {
         lock.lock()
         pushToTalkHeld = false
         let samples = utterance
+        let started = utteranceStartedAt
         capturing = false
         utterance = []
+        utteranceStartedAt = nil
         lock.unlock()
-        finishUtterance(samples)
+        finishUtterance(samples, startedAt: started)
     }
 
     // MARK: Audio
@@ -156,14 +171,19 @@ public final class VoiceInputController: @unchecked Sendable {
         levelCounter += 1
         let level = levelCounter % 3 == 0 ? VoiceActivityDetector.levelDB(frame) : nil
 
-        preRoll.append(contentsOf: frame)
-        if preRoll.count > preRollSamples { preRoll.removeFirst(preRoll.count - preRollSamples) }
+        // Nothing heard while muted is kept, not even as the lead-in of the next push-to-talk (audit run 9).
+        if mode != .muted {
+            preRoll.append(contentsOf: frame)
+            if preRoll.count > preRollSamples { preRoll.removeFirst(preRoll.count - preRollSamples) }
+        }
 
         var startEvent = false
         var finished: [Float]?
         var earlyStart: [Float]?
         var resumed = false
         var carriedOver: Task<String, Error>?
+        var startedAt: Date?
+        var finishedStartedAt: Date?
         let wasPlaying = playbackActive
 
         switch mode {
@@ -187,9 +207,13 @@ public final class VoiceInputController: @unchecked Sendable {
                 capturing = true
                 utterance = preRoll
                 startEvent = true
+                startedAt = Date()
+                utteranceStartedAt = startedAt
             case .speechEnded?:
                 capturing = false
                 finished = utterance
+                finishedStartedAt = utteranceStartedAt
+                utteranceStartedAt = nil
                 utterance = []
                 carriedOver = speculative
                 speculative = nil
@@ -210,12 +234,12 @@ public final class VoiceInputController: @unchecked Sendable {
         if resumed { log.log(.info, .stt, "stt.speculative.discarded", ["reason": "speech resumed"]) }
         if startEvent {
             log.log(.info, .input, "vad.speech.start", ["playbackActive": .bool(wasPlaying), "bargeIn": .bool(wasPlaying)])
-            Task { await engine.userStartedSpeaking() }
+            Task { [startedAt] in await engine.userStartedSpeaking(at: startedAt) }
         }
         if let finished {
             log.log(.info, .input, "vad.speech.end",
                     ["seconds": .double(Double(finished.count) / AudioIO.captureSampleRate)])
-            finishUtterance(finished, speculative: carriedOver)
+            finishUtterance(finished, speculative: carriedOver, startedAt: finishedStartedAt)
         }
     }
 
@@ -231,7 +255,7 @@ public final class VoiceInputController: @unchecked Sendable {
         log.log(.info, .stt, "stt.speculative.started", ["audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate)])
     }
 
-    private func finishUtterance(_ samples: [Float], speculative: Task<String, Error>? = nil) {
+    private func finishUtterance(_ samples: [Float], speculative: Task<String, Error>? = nil, startedAt: Date?) {
         lock.lock()
         let words = vocabulary
         lock.unlock()
@@ -241,7 +265,7 @@ public final class VoiceInputController: @unchecked Sendable {
             // Ignore blips shorter than 0.3 s.
             guard samples.count > Int(AudioIO.captureSampleRate * 0.3) else {
                 self.log.log(.info, .input, "utterance.ignored", ["reason": "shorter than 0.3 s"])
-                await engine.transcriptionFailed()
+                await engine.transcriptionFailed(startedAt: startedAt)
                 return
             }
             let began = DispatchTime.now()
@@ -259,12 +283,12 @@ public final class VoiceInputController: @unchecked Sendable {
                 self.log.log(.info, .stt, "transcribed",
                              ["engine": .string(transcriber.displayName), "audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate),
                               "decodeMs": .double(ms), "text": self.log.content(text)])
-                await engine.submit(text)
+                await engine.submit(text, startedAt: startedAt)
             } catch {
                 self.log.log(.error, .stt, "transcribe.failed", ["engine": .string(transcriber.displayName),
                                                                  "error": .string(error.localizedDescription)])
                 self.onError?(error.localizedDescription)
-                await engine.transcriptionFailed()
+                await engine.transcriptionFailed(startedAt: startedAt)
             }
         }
     }

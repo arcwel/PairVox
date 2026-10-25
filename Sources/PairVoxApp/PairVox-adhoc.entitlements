@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Ad-hoc builds only: scripts/build-app.sh re-signs the app with these (SIGN_IDENTITY=-, which the published DMG is until there is a
+	     Developer ID). They keep the hardened runtime, which refuses a debugger and DYLD_* injection, and carry no
+	     get-task-allow (audit run 9). Ad-hoc signatures have no Team ID, so library validation would refuse the
+	     embedded frameworks; it is turned off, which is the only difference from PairVox.entitlements. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

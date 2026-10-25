@@ -253,7 +253,7 @@ for await line in stdinLines() {
     // Typing is treated like speaking: it barges in on any speech in progress.
     await engine.userStartedSpeaking(typed: true)
     await engine.userStoppedSpeaking()
-    await engine.submit(trimmed)
+    await engine.submit(trimmed, typed: true)
 }
 // stdin closed (e.g. piped input): give Claude time to finish, then exit.
 var idleChecks = 0

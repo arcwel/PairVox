@@ -1497,6 +1497,33 @@ final class RequestNoticeTests: XCTestCase {
         XCTAssertEqual(engine.calls, ["approve:OK"])
     }
 
+    // Audit run 9: a short command spread over several lines, or text with a direction override, could hide what Allow
+    // approves on the lock screen. Neither the phone nor the Mac allows it from there.
+    func testALockScreenAllowNeedsOnePlainLine() async throws {
+        let edit = LinkRequest(requestID: "M", summary: "Run: ls\n\n\n\n\n\n\n\ntouch dummy.txt", spokenPrompt: "", risk: "medium",
+                               reasons: [], voiceApprovable: true)
+        XCTAssertLessThan(edit.summary.count, RequestNotice.maxBody)
+        XCTAssertFalse(RequestNotice.make(for: edit, project: nil).offersButtons)
+        for odd in ["Run: ls\u{2028}touch x", "Run: ls\rtouch x", "Edit a\u{202E}tfiws.b", "Run: ls\u{0007}"] {
+            var r = edit; r.summary = odd
+            XCTAssertFalse(RequestNotice.allowsLockScreenAnswer(r), odd.debugDescription)
+        }
+        var plain = edit; plain.summary = "Run: swift test"
+        XCTAssertTrue(RequestNotice.allowsLockScreenAnswer(plain))
+
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var snap = h.snapshot(risk: "medium", voice: true, id: "M")
+        snap.request = edit
+        await host.publish(snap)
+        _ = try await h.nextSnapshot(client)
+        try await client.send(.approve(requestID: "M", method: .tap, auth: .notification))
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "the Mac refuses a lock-screen answer to a multi-line request")
+    }
+
     func testTheIdentifierCarriesTheRequestAndItsProject() {
         let id = RequestNotice.identifier(requestID: "abc:1", projectID: "p2")
         XCTAssertEqual(RequestNotice.request(from: id)?.requestID, "abc:1")

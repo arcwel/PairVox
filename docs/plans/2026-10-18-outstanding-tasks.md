@@ -1,4 +1,12 @@
-# PairVox: outstanding tasks (2026-10-18, updated 2026-10-24)
+# PairVox: outstanding tasks (2026-10-18, updated 2026-10-25)
+
+**Update 2026-10-25.** Two public pre-releases are out on GitHub: 0.1.0-beta.1 and 0.1.0-beta.2.
+- **Shipped in beta.2.** Hands-free microphone sleep, click-only folder access, `scripts/release-assets.sh`, and the fixes from audit runs 8 and 9.
+- **beta.1 should be replaced.** Its DMG carried the debug entitlement (docs/security/2026-10-25-audit-run-9/REPORT.md §6).
+- **Gates passed.** Strix found nothing on `de91222` or `a3e5940`, and Gitleaks over the full history is clean.
+- **Still open from the audits.** The two units run 9's critic deferred: the phone's spoken answers, and prompt-queue cleanup on cancel and exit. Also backlog 3.3 and the hardening notes in run 9 §5.
+- **The v0.1 checks.** Checks 2 to 4 still need the headset session on an installed build.
+- **The Apple Developer Program.** Without the paid program the DMG stays ad-hoc and the iPhone build unsigned.
 
 **Update 2026-10-24.** Check 5 now passes on branch `fix/v0.1-security-gate`, which is not merged or installed yet. HANDOFF is marked historical. What is left is the headset session (checks 2, 3, and the spoken "Allow" for check 4), done on a build installed from that branch.
 
@@ -14,7 +22,9 @@
   - The health indicator, plus Settings, Health.
   - One-click update (`scripts/pv-install.sh`, and PairVox, Install Latest Build…).
 
-Install a build of `feat/ease-of-use` before the headset session: it has all three. Still open from the audits are the areas run 7's critic deferred (docs/security/2026-10-24-audit-run-7/REPORT.md §5), and backlog 3.3 for a modified phone.
+**Evening of 2026-10-24.** All three branches are merged into `main` and pushed. The installed `dist/PairVox.app` is built from that code, installed with `scripts/pv-install.sh` (the app code is that of e81325d; 0805dac only fixed the install script). Launch check run ab0902eb on it passes: shortcuts at 1.2 s, audio engine at 1.7 s. The local branches `fix/v0.1-security-gate`, `feat/stability-a` and `feat/ease-of-use` hold nothing that is not on `main`. The headset session can be done on this build now.
+
+Still open from the audits are the areas run 7's critic deferred (docs/security/2026-10-24-audit-run-7/REPORT.md §5), and backlog 3.3 for a modified phone.
 
 This is the open work as of 2026-10-18, after PRs #1 to #5 were merged. The repository has one branch, `main` (98a3726), with no open PRs, other branches or worktrees. The installed app, `dist/PairVox.app`, is built from that commit. The previous build is kept as `dist/PairVox.previous.app`.
 
@@ -28,7 +38,7 @@ The rule from 2026-10-17 still holds: v0.1 is done when the five checks in [2026
 | 2 | Voice session | **Not measured.** The few turns logged so far had first sound at 4.4 to 6.4 s, over the 3.5 s limit. | Owner: 10 questions with the headset. Then `scripts/v01-check.py`. |
 | 3 | Approvals by voice (Mac) | **Not measured.** | Owner: `docs/MIC_TEST.md` parts 4 and 5. A spoken yes creates a file; a spoken yes does not run `git push`; a request from a second project is answered at a pause. |
 | 4 | Phone | **Mostly pass.** It connects over Tailscale, switches projects, approves with a tap and Face ID, and speaks with the Mac's Kokoro voice. | Owner: say "Allow" on the phone for one real request. This has not been tested yet. |
-| 5 | Security gates | **Pass** (2026-10-24). `security-audit` full mode: 8 leads, 7 fixed with regression tests, 1 accepted. `strix-qa` on Gemini: no findings. Reports in `docs/security/2026-10-24-audit-run-6/` and `docs/security/strix/2026-10-24-v0.1-gate.md`. | Merge `fix/v0.1-security-gate` and install that build, so checks 2 to 4 are measured on the fixed approval gate. |
+| 5 | Security gates | **Pass** (2026-10-24). `security-audit` full mode: 8 leads, 7 fixed with regression tests, 1 accepted. `strix-qa` on Gemini: no findings. Reports in `docs/security/2026-10-24-audit-run-6/` and `docs/security/strix/2026-10-24-v0.1-gate.md`. | Nothing. Merged and installed on 2026-10-24 (see the evening update above). |
 
 ## 2. Known problems to look at only if a check fails
 

@@ -380,6 +380,8 @@ public enum BashRisk {
         /// Program name without its directory, with leading `VAR=value` words and wrappers like `env` skipped.
         var program: String
         var args: [String]
+        /// The wrapper names skipped before the program, so `nice env` is known to end in `env` (audit run 9).
+        var wrappers: [String] = []
     }
 
     /// The word as the shell sees it after quote removal: `cu''rl` → `curl`, `"cu"rl` → `curl`, `cu\rl` → `curl`.
@@ -405,12 +407,14 @@ public enum BashRisk {
             }.filter { !$0.isEmpty }
             if !words.isEmpty {
                 var rest = words[...]
+                var wrappers: [String] = []
                 // Wrappers are skipped with their options and values, so `env -i rm`, `timeout 60 rm`, `nice -n 5 git`
                 // and `xargs -I {} rm` are judged by the program they run (security audit 2026-10-24).
                 while let w = rest.first {
                     if w.contains("=") && !w.hasPrefix("-") && !w.contains("/") { rest = rest.dropFirst(); continue }
                     let name = (unquoted(w) as NSString).lastPathComponent
                     guard wrapperNames.contains(name) else { break }
+                    wrappers.append(name)
                     rest = rest.dropFirst()
                     while let o = rest.first, o.hasPrefix("-") {
                         rest = rest.dropFirst()
@@ -422,7 +426,8 @@ public enum BashRisk {
                 // Quotes and backslashes inside a word are removed by the shell before it looks the program up, so
                 // `cu''rl`, `"cu"rl` and `cu\rl` all run curl and are matched as curl.
                 let program = rest.first.map { (unquoted($0) as NSString).lastPathComponent } ?? ""
-                out.append(Segment(separator: separator, words: words, program: program, args: Array(rest.dropFirst())))
+                out.append(Segment(separator: separator, words: words, program: program, args: Array(rest.dropFirst()),
+                                   wrappers: wrappers))
             }
             current = ""
             separator = next
@@ -456,7 +461,13 @@ public enum BashRisk {
             // `printenv`, or `env` with nothing to run, prints the environment whatever its options or spelling.
             let leading = seg.words.first.map { (unquoted($0) as NSString).lastPathComponent } ?? ""
             let program = p.hasPrefix("2>") || p.hasPrefix(">") ? "" : p
-            if program == "printenv" || (program.isEmpty && leading == "env") {
+            // `env` may itself follow a wrapper (`nice env`, `timeout 5 env`): it is then a skipped wrapper too (audit run 9).
+            if program == "printenv" || (program.isEmpty && (leading == "env" || seg.wrappers.contains("env"))) {
+                found.append((.high, "Reads the environment, which holds your API key."))
+            }
+            // `ps` with the e flag in any word, however it is reached (`ps -ax -E`, `/bin/ps -E`, `nice ps eww`); the rule
+            // above only sees a first argument in command position (audit run 9). Errs high: on macOS `-e` lists all processes.
+            if p == "ps", a.contains(where: { unquoted($0).range(of: #"^-?[A-Za-z]*[eE][A-Za-z]*$"#, options: .regularExpression) != nil }) {
                 found.append((.high, "Reads the environment, which holds your API key."))
             }
             if p == "rm" {

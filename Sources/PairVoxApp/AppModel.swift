@@ -683,7 +683,7 @@ final class AppModel: ObservableObject {
         Task {
             await engine.userStartedSpeaking(typed: true)
             await engine.userStoppedSpeaking()
-            await engine.submit(t)
+            await engine.submit(t, typed: true)
         }
     }
 
@@ -783,8 +783,8 @@ final class AppModel: ObservableObject {
         guard let input else { return }
         if down {
             guard !pushToTalkActive else { return }
-            // Holding the key is the user asking to be heard, so it wakes a sleeping microphone.
-            if micAsleep { setListeningMode(settings.handsFree ? .handsFree : .pushToTalk) }
+            // Holding the key records only while it is held: it does not wake a sleeping microphone into always
+            // listening (audit run 9). Only Wake or the mute toggle does that.
             micSleep.noteActivity()
             pushToTalkActive = true
             if listeningMode == .muted { input.setMode(.pushToTalk) }

@@ -1,0 +1,269 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Strix",
+          "informationUri": "https://strix.ai",
+          "rules": [
+            {
+              "id": "strix-coverage/static-code-analysis-sast-triage",
+              "name": "Static Code Analysis / SAST Triage",
+              "shortDescription": {
+                "text": "Coverage: Static Code Analysis / SAST Triage"
+              },
+              "fullDescription": {
+                "text": "Coverage of Static Code Analysis / SAST Triage across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Static Code Analysis / SAST Triage across the assessed attack surface.",
+                "markdown": "Coverage of Static Code Analysis / SAST Triage across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/dependency-cves-supply-chain",
+              "name": "Dependency CVEs / Supply Chain",
+              "shortDescription": {
+                "text": "Coverage: Dependency CVEs / Supply Chain"
+              },
+              "fullDescription": {
+                "text": "Coverage of Dependency CVEs / Supply Chain across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Dependency CVEs / Supply Chain across the assessed attack surface.",
+                "markdown": "Coverage of Dependency CVEs / Supply Chain across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/network-pairing-wire-protocol-security",
+              "name": "Network Pairing & Wire Protocol Security",
+              "shortDescription": {
+                "text": "Coverage: Network Pairing & Wire Protocol Security"
+              },
+              "fullDescription": {
+                "text": "Coverage of Network Pairing & Wire Protocol Security across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Network Pairing & Wire Protocol Security across the assessed attack surface.",
+                "markdown": "Coverage of Network Pairing & Wire Protocol Security across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/authorization-policy-process-sandboxing",
+              "name": "Authorization Policy & Process Sandboxing",
+              "shortDescription": {
+                "text": "Coverage: Authorization Policy & Process Sandboxing"
+              },
+              "fullDescription": {
+                "text": "Coverage of Authorization Policy & Process Sandboxing across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Authorization Policy & Process Sandboxing across the assessed attack surface.",
+                "markdown": "Coverage of Authorization Policy & Process Sandboxing across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            },
+            {
+              "id": "strix-coverage/secret-storage-diagnostic-information-disclosure",
+              "name": "Secret Storage & Diagnostic Information Disclosure",
+              "shortDescription": {
+                "text": "Coverage: Secret Storage & Diagnostic Information Disclosure"
+              },
+              "fullDescription": {
+                "text": "Coverage of Secret Storage & Diagnostic Information Disclosure across the assessed attack surface."
+              },
+              "defaultConfiguration": {
+                "level": "none"
+              },
+              "help": {
+                "text": "Coverage of Secret Storage & Diagnostic Information Disclosure across the assessed attack surface.",
+                "markdown": "Coverage of Secret Storage & Diagnostic Information Disclosure across the assessed attack surface."
+              },
+              "properties": {
+                "tags": [
+                  "coverage"
+                ]
+              }
+            }
+          ],
+          "version": "1.7.0"
+        }
+      },
+      "results": [
+        {
+          "ruleId": "strix-coverage/static-code-analysis-sast-triage",
+          "ruleIndex": 0,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Static Code Analysis / SAST Triage — No issue identified: PairVox Swift Codebase (/workspace/PairVox-main-a3e5940)\n\nExecuted semgrep, ast-grep, gitleaks, trufflehog, and trivy fs on 295 files (161 Swift source files). Artifacts saved in /workspace/.source-aware/. Verified policy enforcement, process execution filtering, remote link transport cryptography, keychain access, and diagnostic redactor logic."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "PairVox Swift Codebase (/workspace/PairVox-main-a3e5940)"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Static Code Analysis / SAST Triage",
+              "surface": "PairVox Swift Codebase (/workspace/PairVox-main-a3e5940)",
+              "recorded_by": "SAST Triage Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/dependency-cves-supply-chain",
+          "ruleIndex": 1,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Dependency CVEs / Supply Chain — No issue identified: Package.swift and Package.resolved\n\nInspected Package.swift and Package.resolved in /workspace/PairVox-main-a3e5940. Evaluated 8 total direct and transitive dependencies (WhisperKit 1.1.1, kokoro-ios 1.0.11, mlx-swift 0.30.2, MLXUtilsLibrary 0.0.6, MisakiSwift 1.0.6, swift-argument-parser 1.8.2, swift-numerics 1.1.1, ZIPFoundation 0.9.20) using Trivy, OSV API, NVD API, and GitHub Security Advisories. Confirmed ZIPFoundation 0.9.20 contains the fix for CVE-2023-39138 (path escape fixed in v0.9.18), and no pinned dependency versions contain open published CVEs."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Package.swift and Package.resolved"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Dependency CVEs / Supply Chain",
+              "surface": "Package.swift and Package.resolved",
+              "recorded_by": "Dependency SCA Specialist",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/network-pairing-wire-protocol-security",
+          "ruleIndex": 2,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Network Pairing & Wire Protocol Security — No issue identified: PairVoxLink & PairVoxLinkKit\n\nAudited LinkHost.swift, TCPTransport.swift, LinkCrypto.swift, HandshakeWire.swift, PairingWire.swift, and DeviceKeyStore.swift. Verified ChaCha20-Poly1305 frame encryption with strict sequence counters, HMAC-SHA256 constant-time handshake proofs, HKDF key derivation, and process UID verification via getpeereid on control sockets."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "PairVoxLink & PairVoxLinkKit"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Network Pairing & Wire Protocol Security",
+              "surface": "PairVoxLink & PairVoxLinkKit",
+              "recorded_by": "Root Agent",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/authorization-policy-process-sandboxing",
+          "ruleIndex": 3,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Authorization Policy & Process Sandboxing — No issue identified: PairVoxCore Policy & Execution\n\nAudited PermissionPolicy.swift, FolderGrants.swift, ClaudeCLISession.swift, and ChildEnvironment.swift. Verified symlink resolution up to 32 depth in FolderScope, strict prefix matching, shell execution token guards (disallowing $, backticks, redirects), and ChildEnvironment variable filtering (dropping ANTHROPIC_*, CLAUDE_CODE_*, NODE_OPTIONS)."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "PairVoxCore Policy & Execution"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Authorization Policy & Process Sandboxing",
+              "surface": "PairVoxCore Policy & Execution",
+              "recorded_by": "Root Agent",
+              "source": "agent_reported"
+            }
+          }
+        },
+        {
+          "ruleId": "strix-coverage/secret-storage-diagnostic-information-disclosure",
+          "ruleIndex": 4,
+          "kind": "pass",
+          "level": "none",
+          "message": {
+            "text": "Secret Storage & Diagnostic Information Disclosure — No issue identified: Keychain, LogRedactor & Diagnostic Controls\n\nAudited KeychainStore.swift, DeviceKeyStore.swift, LogRedactor.swift, and DiagnosticLog.swift. Verified system Keychain storage with kSecAttrAccessibleWhenUnlocked, regex scrubbing of API keys, tokens, emails, and paths in LogRedactor, and opt-in conversation logging in DiagnosticLog."
+          },
+          "locations": [
+            {
+              "logicalLocations": [
+                {
+                  "fullyQualifiedName": "Keychain, LogRedactor & Diagnostic Controls"
+                }
+              ]
+            }
+          ],
+          "properties": {
+            "strix": {
+              "coverage_outcome": "no_issue_found",
+              "risk_area": "Secret Storage & Diagnostic Information Disclosure",
+              "surface": "Keychain, LogRedactor & Diagnostic Controls",
+              "recorded_by": "Root Agent",
+              "source": "agent_reported"
+            }
+          }
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true
+        }
+      ]
+    }
+  ]
+}

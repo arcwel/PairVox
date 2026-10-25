@@ -76,7 +76,12 @@ public actor ConversationEngine {
     /// When the user last started talking (VAD), and when the waiting request's spoken prompt began. A spoken yes counts
     /// only if it was begun after the prompt started, so a reply to Claude's previous sentence cannot answer a request
     /// nobody has heard yet (security audit 2026-10-24). Typed text and clicks carry no speech start and are unaffected.
-    private var speechStartedAt: Date?
+    /// Utterances still on their way, by when each began, oldest first. The voice layer passes each transcript's own
+    /// start with it; this list is the fallback for a caller that does not, and then a transcript takes the oldest
+    /// start, which can only make the check stricter (audit run 9: one shared slot could be overwritten or cleared by
+    /// another utterance, and a lost start read as typed text skipped the timing and echo checks).
+    private var speechStarts: [Date] = []
+    private static let maxPendingStarts = 8
     private var promptHeardAt: Date?
     private var answerSpokenAt: Date?
     /// The text of the utterance being processed, for `IgnoredAnswer`.
@@ -176,8 +181,12 @@ public actor ConversationEngine {
 
     /// The user started talking (VAD), or started sending typed text (`typed`). Stops our speech immediately
     /// (barge-in). Only real speech is timed against the prompt: typed text is a deliberate answer.
-    public func userStartedSpeaking(typed: Bool = false) {
-        speechStartedAt = typed ? nil : now()
+    public func userStartedSpeaking(typed: Bool = false, at start: Date? = nil) {
+        if !typed {
+            let begun = start ?? now()
+            speechStarts.removeAll { begun.timeIntervalSince($0) > 120 }   // an utterance that never ended
+            if speechStarts.count < Self.maxPendingStarts { speechStarts.append(begun) }
+        }
         output.prepare()
         log.log(.info, .engine, "user.speech.start",
                 ["bargeIn": .bool(snapshot.isSpeaking || !queueOrder.isEmpty), "phase": "\(snapshot.phase)"])
@@ -254,9 +263,11 @@ public actor ConversationEngine {
         recomputePhase()
     }
 
-    /// Speech recognition produced nothing usable.
-    public func transcriptionFailed() {
-        speechStartedAt = nil
+    /// Speech recognition produced nothing usable. `startedAt` is when that utterance began; without it the newest
+    /// start is dropped, so older utterances keep their earlier starts.
+    public func transcriptionFailed(startedAt: Date? = nil) {
+        if let startedAt, let i = speechStarts.firstIndex(of: startedAt) { speechStarts.remove(at: i) }
+        else if startedAt == nil, !speechStarts.isEmpty { speechStarts.removeLast() }
         log.log(.warning, .engine, "user.transcription.empty")
         userIsSpeaking = false
         transcribing = false
@@ -264,14 +275,25 @@ public actor ConversationEngine {
         recomputePhase()
     }
 
-    /// A final transcript (or typed text) from the user.
-    public func submit(_ rawText: String) {
+    /// A final transcript from the user, with `startedAt` the time that utterance began (the voice layer passes it), or
+    /// typed text (`typed`), which is a deliberate answer and is not timed.
+    public func submit(_ rawText: String, startedAt: Date? = nil, typed: Bool = false) {
+        let spokenAt = typed ? nil : takeSpeechStart(startedAt)
         // Words PairVox itself just said ("…Say approve, deny…" from an announcement) are not offered to the
         // cross-project interceptor: heard back, they would answer another project's request (audit run 8).
-        if !isOwnPromptEcho(rawText, spokenAt: speechStartedAt), let intercept = utteranceInterceptor, intercept(rawText) {
+        if !isOwnPromptEcho(rawText, spokenAt: spokenAt), let intercept = utteranceInterceptor, intercept(rawText) {
             userIsSpeaking = false; transcribing = false; recomputePhase(); return
         }
-        process(rawText, allowProjectSwitch: true)
+        process(rawText, allowProjectSwitch: true, spokenAt: spokenAt)
+    }
+
+    /// The start of the utterance this transcript belongs to: its own when given, otherwise the oldest still waiting.
+    private func takeSpeechStart(_ exact: Date?) -> Date? {
+        if let exact {
+            if let i = speechStarts.firstIndex(of: exact) { speechStarts.remove(at: i) }
+            return exact
+        }
+        return speechStarts.isEmpty ? nil : speechStarts.removeFirst()
     }
 
     /// Text from a paired phone. It can be an instruction or a general voice command ("new session"), but never an
@@ -282,11 +304,10 @@ public actor ConversationEngine {
         process(rawText, allowProjectSwitch: false, answersPermissions: false)
     }
 
-    private func process(_ rawText: String, allowProjectSwitch: Bool, answersPermissions: Bool = true) {
+    private func process(_ rawText: String, allowProjectSwitch: Bool, answersPermissions: Bool = true, spokenAt: Date? = nil) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-        answerSpokenAt = answersPermissions ? speechStartedAt : nil
+        answerSpokenAt = answersPermissions ? spokenAt : nil
         answerHeard = text
-        speechStartedAt = nil
         userIsSpeaking = false
         transcribing = false
         guard !text.isEmpty else {
@@ -941,10 +962,15 @@ public actor ConversationEngine {
             }
             if let armed = approveAllArmed {
                 approveAllArmed = nil
-                approveAllWaiting(requestIDs: Array(armed))
+                // Only what was read out and is still fresh: a request that aged past the limit since the readout
+                // is answered on screen (audit run 9).
+                approveAllWaiting(requestIDs: Array(armed.intersection(eligible.map(\.request.requestID))))
             } else {
-                // Read what would be allowed first; a second \"allow all\" does it.
+                // Read what would be allowed first; a second \"allow all\" does it. Only the readout opens the answer
+                // window for that second one, so it must be begun after the readout started (audit run 9).
                 approveAllArmed = Set(eligible.map(\.request.requestID))
+                promptHeardAt = nil
+                pendingPromptIDs = []
                 let items = eligible.map { $0.assessment.spokenPrompt.replacingOccurrences(of: " Allow?", with: "") }
                 let skipped = waiting.count - eligible.count
                 var text = "\(eligible.count) \(eligible.count == 1 ? "request" : "requests") can be allowed together. " + items.joined(separator: ". Then, ") + ". "

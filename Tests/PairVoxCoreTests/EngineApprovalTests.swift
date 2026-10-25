@@ -717,3 +717,119 @@ final class Recorder: @unchecked Sendable {
     var items: [String] { lock.withLock { _items } }
     func add(_ s: String) { lock.withLock { _items.append(s) } }
 }
+
+/// Audit run 9 (2026-10-25): the start of a spoken answer was one shared slot, so a second utterance or a blip could
+/// leave a transcript untimed, and an untimed answer skipped the prompt-timing and echo checks. A second "allow all"
+/// was not tied to the readout, and could allow a request that had gone stale since it was read.
+final class AuditRun9EngineTests: XCTestCase {
+    var backend: FakeBackend!
+    var output: FakeOutput!
+    var engine: ConversationEngine!
+    let clock = EngineApprovalTests.FakeClock()
+
+    override func setUp() async throws {
+        backend = FakeBackend(); output = FakeOutput()
+        let b = backend!
+        engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", speechMode: .skipCode,
+                                                                       acknowledgementDelay: 0.15),
+                                    output: output, backendFactory: { _ in b })
+        let c = clock
+        await engine.setClock { c.now }
+        await engine.start()
+    }
+
+    override func tearDown() async throws { await engine.shutdown() }
+
+    func settle(_ ms: UInt64 = 70) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+
+    func edit(_ id: String, _ f: String) -> SessionEvent {
+        .permissionRequested(PermissionRequest(requestID: id, toolName: "Edit", input: ["file_path": .string("/Users/dev/app/\(f)")]))
+    }
+
+    func testTwoUtterancesBeforeThePromptEachKeepTheirStart() async {
+        await engine.submit("Fix it", typed: true)
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.submit("okay")
+        await engine.submit("yes")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "neither answer began after the prompt started")
+    }
+
+    func testABlipDoesNotLeaveTheNextAnswerUntimed() async {
+        await engine.submit("Fix it", typed: true)
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStartedSpeaking()
+        await engine.transcriptionFailed()
+        await engine.submit("yes")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "the yes still carries a start from before the prompt")
+    }
+
+    func testEachTranscriptIsTimedByItsOwnStart() async {
+        await engine.submit("Fix it", typed: true)
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        let early = clock.now
+        clock.advance(1)
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(prompt.id))
+        output.continuation.yield(.finished(prompt.id))
+        await settle()
+        clock.advance(2)
+        let late = clock.now
+        await engine.submit("yes", startedAt: early)      // transcribed last, but begun before the prompt
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "timed by its own start, not by the utterance that began last")
+        await engine.submit("yes", startedAt: late)
+        await settle()
+        guard case .allow? = backend.responses.first?.1 else { return XCTFail("a yes begun after the prompt approves") }
+    }
+
+    func testTheSecondAllowAllMustFollowTheReadout() async {
+        await engine.submit("Do the work", typed: true)
+        backend.emit(edit("A", "a.swift")); backend.emit(edit("B", "b.swift"))
+        await settle()
+        guard let promptA = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(promptA.id)); output.continuation.yield(.finished(promptA.id))
+        await settle()
+        clock.advance(2)
+        await engine.submit("allow all", startedAt: clock.now)
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "the first one reads the list")
+        guard let readout = output.queue.last(where: { $0.kind == .prompt && $0.text.contains("allowed together") }) else {
+            return XCTFail("readout")
+        }
+        clock.advance(1)
+        await engine.submit("allow all", startedAt: clock.now)    // before the readout has started
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "the readout had not played")
+        output.continuation.yield(.started(readout.id)); output.continuation.yield(.finished(readout.id))
+        await settle()
+        clock.advance(2)
+        await engine.submit("allow all", startedAt: clock.now)
+        await settle()
+        XCTAssertEqual(Set(backend.responses.map(\.0)), ["A", "B"])
+    }
+
+    func testARequestThatWentStaleSinceTheReadoutIsNotAllowed() async {
+        await engine.submit("Do the work", typed: true)
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        clock.advance(200)
+        backend.emit(edit("B", "b.swift"))
+        await settle()
+        clock.advance(50)
+        await engine.submit("allow all", typed: true)
+        clock.advance(100)                                // A is 350 s old now, B 150 s
+        await engine.submit("allow all", typed: true)
+        await settle()
+        XCTAssertEqual(backend.responses.map(\.0), ["B"], "only what is still fresh")
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "A", "the stale one waits for a click")
+    }
+}

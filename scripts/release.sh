@@ -87,12 +87,14 @@ if [[ $DRY -eq 1 ]]; then
   EDKEY="$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" "$PLIST" 2>/dev/null || true)"
   if [[ -n "$FEED" && -n "$EDKEY" ]]; then ok "Sparkle configured (SUFeedURL set, SUPublicEDKey set)"; else echo "  todo  Sparkle is off: SUFeedURL and SUPublicEDKey are empty (fine before the first release)"; fi
 
-  # 3. Entitlements: the known ones and nothing more. Xcode adds get-task-allow (debugger attach) to an ad-hoc
-  #    signature; a real release build is checked for it (and refused) before anything is signed, above.
+  # 3. Entitlements: the known ones and nothing more. The ad-hoc build (published until there is a Developer ID)
+  #    may add only disable-library-validation; get-task-allow (debugger attach) is a failure, as in a real release,
+  #    and so is a missing hardened runtime (audit run 9: the 0.1.0-beta.1 DMG had both problems).
   ENT_ALL="$(entitlement_keys "$APP")"
-  ENT="${ENT_ALL//com.apple.security.get-task-allow /}"
-  if [[ "$ENT" == "$EXPECTED_ENTITLEMENTS" ]]; then ok "entitlements: $ENT"; else problem "unexpected entitlements: ${ENT:-none}"; fi
-  if [[ "$ENT_ALL" == *"com.apple.security.get-task-allow"* ]]; then echo "  info  get-task-allow is present because the signature is ad-hoc; a real release is refused if it carries it"; fi
+  ADHOC_EXPECTED="com.apple.security.automation.apple-events com.apple.security.cs.disable-library-validation com.apple.security.device.audio-input "
+  if [[ "$ENT_ALL" == "$EXPECTED_ENTITLEMENTS" || "$ENT_ALL" == "$ADHOC_EXPECTED" ]]; then ok "entitlements: $ENT_ALL"; else problem "unexpected entitlements: ${ENT_ALL:-none}"; fi
+  if [[ "$ENT_ALL" == *"com.apple.security.get-task-allow"* ]]; then problem "get-task-allow is present: any process of the same user could attach a debugger"; fi
+  if codesign -dv "$APP" 2>&1 | grep -q 'flags=.*runtime'; then ok "hardened runtime"; else problem "no hardened runtime on $APP"; fi
 
   # 4. No Mach-O file in the bundle is unsigned (notarization rejects any), and nothing stray is embedded.
   UNSIGNED=0

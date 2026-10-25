@@ -92,7 +92,7 @@ private struct MicAsleepBadge: View {
             .overlay(RoundedRectangle(cornerRadius: Style.innerRadius).stroke(Style.asleep, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .help("No conversation for \(model.settings.micSleepMinutes) minutes, so the microphone was muted. Click, or press \(Shortcuts.of(.toggleMute).display), to turn it back on.")
+        .help("No conversation for \(model.settings.micSleepMinutes) minutes, so the microphone was muted. Click, or press \(Shortcuts.of(.toggleMute).display), to turn it back on. Push to talk still works while it sleeps.")
         .accessibilityLabel("Microphone asleep. Wake microphone")
     }
 }

@@ -1,0 +1,656 @@
+[
+  {
+    "coverage_id": "Sources%2FPairVoxApp%2FAppModel.swift%23checkMicSleep%20run%209::Sources%2FPairVoxCore%2FConversation%2FMicHibernation.swift%23tick%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxApp/AppModel.swift#checkMicSleep run 9",
+      "boundary": "Sources/PairVoxCore/Conversation/MicHibernation.swift#tick run 9",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Microphone sleep: MicHibernation, AppModel.checkMicSleep/putMicToSleep/wakeMicrophone/setListeningMode/pushToTalk, the PAIRVOX_START_MIC_ASLEEP launch option, the micSleepMinutes setting and the toolbar badge",
+    "boundary": "A sleeping microphone captures and acts on nothing until the owner turns it on with the badge, the mute toggle or push-to-talk; nothing a remote or model-driven input does wakes it; the setting cannot be pushed to a value that disables sleep unexpectedly",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/MicHibernation.swift",
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift",
+      "Sources/PairVoxCore/Config/Settings.swift",
+      "Sources/PairVoxApp/Support/PhoneLinkModel.swift",
+      "Sources/PairVoxApp/Views/ContentView.swift",
+      "Sources/PairVoxApp/Views/ControlBarView.swift",
+      "Tests/PairVoxCoreTests/MicHibernationTests.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md",
+        "reason": "the launch option is an environment variable read by the app's own process; local IPC was covered in run 8"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "covered",
+    "agent_id": "hunter-mic9",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/Support/PhoneLinkModel.swift",
+      "Sources/PairVoxApp/Views/ContentView.swift",
+      "Sources/PairVoxApp/Views/ControlBarView.swift",
+      "Sources/PairVoxApp/Views/SettingsView.swift",
+      "Sources/PairVoxCore/Config/Settings.swift",
+      "Sources/PairVoxCore/Conversation/MicHibernation.swift",
+      "Sources/PairVoxVoice/AudioIO.swift",
+      "Sources/PairVoxVoice/FeedbackCatcher.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift",
+      "Tests/PairVoxCoreTests/MicHibernationTests.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-mic9",
+        "reviewed_paths": [
+          "Sources/PairVoxApp/AppModel.swift",
+          "Sources/PairVoxVoice/VoiceInputController.swift",
+          "Sources/PairVoxApp/Support/PhoneLinkModel.swift",
+          "Sources/PairVoxApp/Views/ContentView.swift",
+          "Sources/PairVoxApp/Views/ControlBarView.swift",
+          "Sources/PairVoxApp/Views/SettingsView.swift"
+        ],
+        "invariant": "Nothing remote or model-driven wakes a sleeping microphone; only the badge (wakeMicrophone), toggleMute (button, menu, hotkey), the Settings mode picker and push-to-talk call setListeningMode with a non-muted mode",
+        "method": "source",
+        "result": "Grepped every setListeningMode, input.setMode, toggleMute, pushToTalk(down:) and wakeMicrophone call site across Sources and ios. All callers are owner UI or the local Carbon hotkey. PhoneLinkModel, LinkHost and the engine expose no mute, wake or pushToTalk path and the phone cannot touch settings.micSleepMinutes. sendTyped only calls noteActivity (restarts the idle clock) and does not wake. micAsleep and listeningMode move together: putMicToSleep sets both, any non-muted setListeningMode clears micAsleep. closeProject and openProject restore input mode from listeningMode, which stays .muted while asleep. With PAIRVOX_START_MIC_ASLEEP=1, putMicToSleep runs synchronously in bootstrap before any project is reopened, so the VoiceInputController is created with .muted and nothing is heard (a push-to-talk-mode launch is not 'asleep' but only captures while the key is held).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-mic9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/MicHibernation.swift",
+          "Sources/PairVoxApp/AppModel.swift",
+          "Tests/PairVoxCoreTests/MicHibernationTests.swift"
+        ],
+        "invariant": "tick/checkMicSleep time logic cannot be driven to sleep late or never by an untrusted principal, and every error leans toward muting",
+        "method": "source",
+        "result": "tick notes activity for any conversation phase, never sleeps while .listening/.transcribing, treats minutes<=0 as never, and compares with >= at the exact boundary (tests cover 179/180 s). noteActivity uses max() so the clock cannot move back. Imbalanced cases all fail toward muting: .awaitingPermission does not count, a stale lastActivity after re-enabling the mic or changing the picker sleeps within one 5 s tick. Staying awake needs conversation phases (Claude working or speaking in any open project, possibly started by the paired phone, which is already trusted to submit prompts) or the owner. Date() is wall-clock so a clock set backwards delays sleep; that is not a lower-trust principal capability.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-mic9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Config/Settings.swift",
+          "Sources/PairVoxApp/Views/SettingsView.swift"
+        ],
+        "invariant": "micSleepMinutes cannot be pushed to a value that disables sleep unexpectedly",
+        "method": "source",
+        "result": "Decoding accepts only values in MicHibernation.minuteChoices [0,3,5,10,30] and falls back to 3 for a missing, mistyped or out-of-set value (tested for 7 and a missing key). 0 (never) is reachable only by an explicit Settings pick or by editing settings.json. Nothing in Link, Core engine or the phone writes it. SettingsStore.load does not zero it when the file is group/world-writable (it zeroes consents only), so a file writable by another account could set 0; that needs write access to the owner's Application Support file, which already allows far more, so hardening only.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-mic9",
+        "reviewed_paths": [
+          "Sources/PairVoxVoice/VoiceInputController.swift",
+          "Sources/PairVoxVoice/AudioIO.swift",
+          "Sources/PairVoxVoice/FeedbackCatcher.swift"
+        ],
+        "invariant": "A sleeping microphone captures nothing",
+        "method": "source",
+        "result": "Sleep is a software mute: putMicToSleep calls input.setMode(.muted) only. AudioIO capture stays running, VoiceInputController.handle still appends frames to preRoll before the mode switch, and AudioIO feeds FeedbackCatcher (10 s mic ring, on by default, may write a 10 s recording to the owner's log folder if a howl is detected while PairVox speaks). The mode switch does block VAD, transcription and any submission, so nothing is acted on; the residue is local, owner-private and equal to a manual mute, so recorded as hardening, not a finding.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [],
+    "unresolved": [],
+    "parent_hardening": [
+      "Sleep keeps the capture engine open (OS mic indicator stays on, Bluetooth stays in call mode, FeedbackCatcher keeps a 10 s mic ring and VoiceInputController.preRoll keeps filling). Consider audio.restart(captureWanted: false) in putMicToSleep, or at least FeedbackCatcher.setEnabled(false)/clear while asleep.",
+      "VoiceInputController.pushToTalkBegan seeds utterance with preRoll (about 0.35 s of audio from before the key press); after sleep or mute that audio was heard while the mic was supposed to be off and is transcribed and sent. Clear preRoll in setMode(.muted) and when entering muted.",
+      "Push-to-talk while asleep calls setListeningMode(handsFree) in AppModel.pushToTalk, so one key press turns the Mac into always-listening hands-free until the next idle sleep. Least privilege is to leave it asleep and capture only while the key is held.",
+      "VoiceInputController.setMode(.muted) does not cancel `speculative` or reset the VAD; a transcription started before a mute can survive and be consumed as carriedOver by a later speechEnded. Cancel and nil it when muting.",
+      "Prompts started from the paired phone or by model output (long-running or hung .working phase) count as conversation and hold the mic awake indefinitely. This matches the documented intent, but a hung .working turn defeats the privacy purpose; consider a ceiling on how long .working alone can keep it awake.",
+      "SettingsStore.load zeroes standing consents when settings.json is not owner-private but leaves micSleepMinutes and handsFree as read; optional to reset micSleepMinutes to the default there.",
+      "MicHibernation uses Date() (wall clock). A monotonic clock (ContinuousClock or uptime) would stop a backwards clock change from delaying sleep."
+    ],
+    "parent_uncovered": []
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23answerGrantOfferBySpeech%20run%209::Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23grantsByVoice%20and%20perform%20approve%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#answerGrantOfferBySpeech run 9",
+      "boundary": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#grantsByVoice and perform approve run 9",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Spoken and typed answers since de91222: run 8's prompt bookkeeping and echo fixes in ConversationEngine, the folder-access offer now click-only (answerGrantOfferBySpeech, finishGrantConfirmation, GrantOffer.askedAt), and the cross-project interceptor ordering",
+    "boundary": "High-risk requests are never approvable by voice; folder access is granted by voice only with spokenHighRiskConfirmation on, and then only by a timed, non-echo, non-stale yes then confirm (plus Touch ID when set); no fix is bypassable by a near variant or a race between an offer, a request and a second confirmation",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxApp/Views/GrantOfferBanner.swift",
+      "Sources/PairVoxApp/Support/CrossProjectController.swift",
+      "Tests/PairVoxCoreTests/FolderGrantTests.swift",
+      "Tests/PairVoxCoreTests/EngineApprovalTests.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Tool and action attack classes",
+      "AI-AND-LLM.md#Output and disclosure attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#Context, retrieval, and memory attack classes",
+        "reason": "no retrieval store"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-gate9",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxApp/Support/CrossProjectController.swift",
+      "Sources/PairVoxApp/Views/GrantOfferBanner.swift",
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/CrossProject.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxVoice/VoiceInputController.swift",
+      "Tests/PairVoxCoreTests/EngineApprovalTests.swift",
+      "Tests/PairVoxCoreTests/FolderGrantTests.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-gate9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Sources/PairVoxCore/Conversation/EngineModels.swift",
+          "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+          "Tests/PairVoxCoreTests/FolderGrantTests.swift"
+        ],
+        "invariant": "A spoken or typed yes to a folder offer grants nothing unless spokenHighRiskConfirmation is on; then it needs a prompt-timed, non-echo, non-stale, deliberate yes and then confirm (plus Touch ID when set), bound to the same offer.",
+        "method": "source",
+        "result": "Held on the direct path. answerGrantOfferBySpeech (ConversationEngine.swift:1320) refuses when grantsByVoice is off, checks answerBeganBeforePrompt, GrantOffer.isStale (askedAt reset per stage in setOffer), and the deliberate word-count/'confirm'/not-'say' rule. finishGrantConfirmation re-checks folder, kind, stage==.confirming, askedAt and pendingPermission==nil after Touch ID, so a replaced, answered or displaced offer is not granted. Phone text cannot reach it (submitFromRemote passes answersPermissions:false so the parser never yields approve). The only weakness is that the timing and echo inputs (answerSpokenAt) can be lost, see the candidate fingerprint.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Sources/PairVoxVoice/VoiceInputController.swift"
+        ],
+        "invariant": "Every spoken approval (yes, always, confirm high risk, allow all, folder yes/confirm) is checked against the time its own speech began, so a reply to earlier speech or PairVox's own prompt heard back is not counted.",
+        "method": "source",
+        "result": "Fails open when speechStartedAt (a single optional Date, ConversationEngine.swift:79, overwritten at :180, consumed at :287-289 and also nilled by transcriptionFailed at :259) no longer pairs with the transcript. Two VAD segments, or a short blip that calls transcriptionFailed, between a segment's start and its transcript make a later spoken transcript arrive with answerSpokenAt == nil, which answerBeganBeforePrompt (:1306-1309) and isOwnPromptEcho (:1284-1286) treat as typed text and so skip both checks. VoiceInputController.finishUtterance (:234) runs one independent Task per segment and calls userStartedSpeaking on every VAD start (:213) with no serialisation. Candidate raised.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Tests/PairVoxCoreTests/EngineApprovalTests.swift"
+        ],
+        "invariant": "Allow-all approves only requests that were read to the owner and are still fresh and voice-approvable; the confirming 'allow all' answers the readout, not an earlier prompt.",
+        "method": "source",
+        "result": "The first 'allow all' arms approveAllArmed (:947) and queues the readout through speakPrompt (:953). The second 'allow all' runs answerPrecedesPrompt(for: head) which compares against the head request's promptHeardAt (already set), not the readout, and approveAllWaiting(requestIDs:) (:736-747) rechecks only id membership and voiceApprovable, not isStale. A second 'allow all' spoken before the readout plays, or minutes later, approves every armed queued request. Candidate raised.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-gate9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Conversation/CrossProject.swift",
+          "Sources/PairVoxApp/Support/CrossProjectController.swift",
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+          "Sources/PairVoxApp/Views/GrantOfferBanner.swift",
+          "Sources/PairVoxApp/AppModel.swift"
+        ],
+        "invariant": "Cross-project interceptor ordering: PairVox's own announcement heard back does not answer another project's request; the interceptor cannot touch a folder offer; the banner buttons cannot skip the confirm step.",
+        "method": "source",
+        "result": "submit() (:271) now echo-checks before the interceptor, and notices are recorded in lastPromptText (:1173) so announcement echoes are caught; the interceptor is skipped while the active project has a pending request or a grant offer (CrossProjectController.swift:52,108), and it never calls answerGrantOffer. Router keeps voiceApprovable, fitsCompactSurface, stale and project-name checks. No separate defect beyond the shared speechStartedAt fragility. The banner calls answerGrantOffer(yes:) with no stage argument, noted under hardening.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "ConversationEngine.swift:speechStartedAt-single-slot-loses-timing-for-spoken-approvals",
+      "ConversationEngine.swift:approveAllWaiting-second-confirmation-unbound-to-readout-and-age"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "GrantOfferBanner and AppModel.answerGrantOffer(yes:) send an unconditioned yes to the engine, which applies it to whatever stage is current. A double-click on the right-aligned prominent button (Allow edits... then Yes, allow edits) can pass both steps within one gesture. Pass the stage the button was drawn for (answerGrantOffer(yes:, expecting:)) and ignore a mismatch.",
+      "Prompts left in the speech queue are dropped only in respondToPermission (dropUnplayedPrompts). permissionCancelled, turnCompleted, processExited and showPermission replacing a grant offer clear the pending request or offer without dropping its unplayed prompt, so the old question can still play before the new one (it cannot open the new answer window, since pendingPromptIDs is reset, but it can mislead the listener). Call dropUnplayedPrompts from those paths and from showPermission/setOffer.",
+      "Utterances recognised as PairVox's own echo in submit() (the cross-project echo guard, :271) still fall through to process() and are sent to Claude as an instruction when they are not a command. Announcement text carries another project's request summary, so drop echo-matched utterances instead of forwarding them.",
+      "lastPromptText now follows any notice (:1173), so the echo reference is replaced by 'That sounded like my own voice...' and similar notices; an earlier prompt's fragment that is transcribed after such a notice starts is no longer matched. Keep a short list of recent prompt texts rather than only the last.",
+      "Cross-project announcements (AnnouncementRouter.resolve) are bound to a 20 s window from creation, not from the announcement starting to play; the active engine's answer-before-prompt rule is not applied. Bind the window to the utterance start event."
+    ],
+    "parent_uncovered": [],
+    "parent_decisions": {
+      "ConversationEngine.swift:approveAllWaiting-second-confirmation-unbound-to-readout-and-age": {
+        "decision": "needs_validation",
+        "verifier": "verify-01"
+      },
+      "ConversationEngine.swift:speechStartedAt-single-slot-loses-timing-for-spoken-approvals": {
+        "decision": "needs_validation",
+        "verifier": "verify-02"
+      }
+    }
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23dropUnplayedPrompts%20run%209::Sources%2FPairVoxCore%2FConversation%2FConversationEngine.swift%23pendingPromptIDs%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#dropUnplayedPrompts run 9",
+      "boundary": "Sources/PairVoxCore/Conversation/ConversationEngine.swift#pendingPromptIDs run 9",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "ConversationEngine prompt-queue bookkeeping added in 34b17fa: pendingPromptIDs, speakPrompt, dropUnplayedPrompts (output.cancelQueued), the promptHeardAt gate moved from 'pendingPermission/grantOffer != nil' to 'pendingPromptIDs.contains(id)', and every path that clears or replaces a pending request or offer",
+    "boundary": "A prompt queued for a decided, cancelled, replaced or session-ended request can never open the answer window (promptHeardAt) for a later request or offer, and cannot be played as if it asked about the next one; every path that clears pendingPermission or grantOffer leaves pendingPromptIDs, promptHeardAt, queued and queueOrder consistent",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Conversation/GatedSpeechOutput.swift",
+      "Sources/PairVoxCore/Conversation/EngineModels.swift",
+      "Tests/PairVoxCoreTests/EngineApprovalTests.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Tool and action attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#Context, retrieval, and memory attack classes",
+        "reason": "no retrieval store"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: hunter-gate9 listed four checks (grant offer, speechStartedAt timing, allow-all confirmation, cross-project interceptor) and none covers the new queue bookkeeping. dropUnplayedPrompts is called only from respondToPermission (ConversationEngine.swift:1246); other paths that nil pendingPermission or the offer do not call it: .permissionCancelled (~1071, then promoteNextPermission resets pendingPromptIDs = [] at ~1392 so the cancelled request's unplayed prompt is orphaned in the queue), the claude-exit path (~1104), turn completion (~1142), stop/reset (~831), grant-offer answer paths (~549-587) and setOffer (~612, resets the set without dropping). repromptWaitingQuestion and the allow-all readout add ids to the set without resetting it. Run 8's fix was exactly this class (a stale prompt opening the window), so the parallel clearing paths are an unchecked sibling of the fixed one."
+    ]
+  },
+  {
+    "coverage_id": "Sources%2FPairVoxCore%2FPolicy%2FPermissionPolicy.swift%23nestedShellBody%20run%209::Sources%2FPairVoxCore%2FPolicy%2FPermissionPolicy.swift%23classify%20depth%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Injection",
+    "canonical_refs": {
+      "surface": "Sources/PairVoxCore/Policy/PermissionPolicy.swift#nestedShellBody run 9",
+      "boundary": "Sources/PairVoxCore/Policy/PermissionPolicy.swift#classify depth run 9",
+      "attack_class": "ATTACK-CLASSES.md#Injection",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "BashRisk nested-shell rating (nestedShellBody, depth limit 3), the ps e rule, and RepoVocabulary.termPattern since de91222",
+    "boundary": "A command that discloses the environment or is otherwise high risk is rated high however it is wrapped; the recursion is bounded; a repository name cannot reach the recognizer vocabulary with a line terminator or answer word",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Injection",
+    "starting_paths": [
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+      "Tests/PairVoxCoreTests/SecurityHardeningTests.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Injection",
+    "selected_companion_blocks": [
+      "AI-AND-LLM.md#Core discipline",
+      "AI-AND-LLM.md#Tool and action attack classes",
+      "AI-AND-LLM.md#Universal moves",
+      "AI-AND-LLM.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "AI-AND-LLM.md#Context, retrieval, and memory attack classes",
+        "reason": "no retrieval store"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-policy9",
+    "reviewed_paths": [
+      "Sources/PairVoxCore/Conversation/ConversationEngine.swift",
+      "Sources/PairVoxCore/Policy/FolderGrants.swift",
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+      "Tests/PairVoxCoreTests/SecurityHardeningTests.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-policy9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift"
+        ],
+        "invariant": "classify(depth:) recursion into nestedShellBody is bounded and every rule applies to the nested text",
+        "method": "source",
+        "result": "Recursion only occurs when depth < 3 and each level classifies a strict substring of its input, so it terminates. Matches are non-overlapping and the whole-command structural pass (quote-agnostic, splits on ; & | newline) still runs at every level, so escaped-quote or deeper nesting still reaches env/printenv in practice. The regex is O(n^2) on a huge command with many 'sh' tokens, similar to existing rm/curl rules (hardening only). No bypass of nestedShellBody itself found.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-policy9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+          "Sources/PairVoxCore/Policy/FolderGrants.swift",
+          "Sources/PairVoxCore/Conversation/ConversationEngine.swift"
+        ],
+        "invariant": "A command that prints the process environment is rated high however it is wrapped, so a folder shell grant never auto-allows it",
+        "method": "source",
+        "result": "Two gaps. (1) The structural env check requires the first word to be 'env' (line 459), but the wrapper skipper (lines 410-421) consumes 'env' itself when a wrapper precedes it, so 'nice env', 'time env', 'command env', 'nohup env', 'timeout 5 env' give an empty program with leading word not 'env': not flagged, and the regex rule needs env right after ; & | (. (2) The run-8 'ps' rule (line 310) is a command-position regex that inspects only the first argument and has no structural counterpart, so 'ps -ax -E', 'ps -A -E', 'ps -p 1 -E', '/bin/ps -E', 'nice ps eww', newline-separated 'ps -E' are rated only medium 'Not a recognized read-only command'. Medium with no disqualifying reason is covered by an allowShell folder grant and answered allow without any prompt (ConversationEngine.swift:1044).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-policy9",
+        "reviewed_paths": [
+          "Sources/PairVoxCore/Support/RepoVocabulary.swift",
+          "Tests/PairVoxCoreTests/SecurityHardeningTests.swift"
+        ],
+        "invariant": "A repository name with a line terminator or answer word cannot reach the recognizer vocabulary",
+        "method": "source",
+        "result": "termPattern now uses \\A...\\z with an ASCII-only class, so trailing \\n, \\r, U+2028 and embedded whitespace are rejected; scan() sends every file, directory and declaration name through admissible(); test covers the cases. No bypass found.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "PermissionPolicy.swift/environment-print-hidden-behind-wrapper-program",
+      "PermissionPolicy.swift/ps-environment-rule-first-arg-and-command-position-only"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "nestedShellBody is O(n^2) on a very long command with many 'sh' tokens (lazy [^;&|]*? from each match start); cap the length classified or anchor the scan, as with existing rm/curl rules.",
+      "The nested-shell depth limit of 3 leaves a 4th level unscanned by nestedShellBody, but the quote-agnostic structural pass over the whole command masks this for env/printenv; a test with '\\'' nesting would lock that in.",
+      "Nested classification appends inner reasons such as 'Touches your home folder.' without de-duplicating, which can duplicate reason lines on the card."
+    ],
+    "parent_uncovered": [],
+    "parent_decisions": {
+      "PermissionPolicy.swift/environment-print-hidden-behind-wrapper-program": {
+        "decision": "needs_validation",
+        "verifier": "verify-03"
+      },
+      "PermissionPolicy.swift/ps-environment-rule-first-arg-and-command-position-only": {
+        "decision": "needs_validation",
+        "verifier": "verify-04"
+      }
+    }
+  },
+  {
+    "coverage_id": "ios%2FPairVoxPhone%2FPhoneModel.swift%23answerFromNotification%20run%209::Sources%2FPairVoxLink%2FLinkHost.swift%23approvalRefusal%20notification%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::DESKTOP-MOBILE-AND-LOCAL-IPC.md%23Application-state%20and%20device-lifecycle%20attack%20classes",
+    "canonical_refs": {
+      "surface": "ios/PairVoxPhone/PhoneModel.swift#answerFromNotification run 9",
+      "boundary": "Sources/PairVoxLink/LinkHost.swift#approvalRefusal notification run 9",
+      "attack_class": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Application-state and device-lifecycle attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "iPhone lock-screen answers since de91222: RequestNotice.allowsLockScreenAnswer, DeviceAuth.notification, LinkHost.approvalRefusal for notification answers, PhoneModel.answerFromNotification and forget()",
+    "boundary": "A lock-screen answer can approve only a request the notification showed whole, that is not high risk and that the Mac allows by voice; the Mac re-checks it and its age; forgetting the Mac leaves no answerable banner",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Mobile app",
+    "starting_paths": [
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "ios/PairVoxPhone/PhoneNotifications.swift",
+      "Sources/PairVoxLinkKit/RequestNotice.swift",
+      "Sources/PairVoxLinkKit/LinkMessages.swift",
+      "Sources/PairVoxLink/LinkHost.swift",
+      "Tests/PairVoxLinkTests/LinkTests.swift"
+    ],
+    "ordinary_attack_class_block": null,
+    "selected_companion_blocks": [
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Core discipline",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Application-state and device-lifecycle attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Universal moves",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#RPC identity and authorization attack classes"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Webview and native-bridge attack classes",
+        "reason": "no webview"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-phone9",
+    "reviewed_paths": [
+      "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+      "Sources/PairVoxLink/EngineLink.swift",
+      "Sources/PairVoxLink/LinkHost.swift",
+      "Sources/PairVoxLinkKit/LinkMessages.swift",
+      "Sources/PairVoxLinkKit/RequestNotice.swift",
+      "Tests/PairVoxLinkTests/LinkTests.swift",
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "ios/PairVoxPhone/PhoneNotifications.swift"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-phone9",
+        "reviewed_paths": [
+          "Sources/PairVoxLink/LinkHost.swift",
+          "Sources/PairVoxLinkKit/LinkMessages.swift",
+          "Sources/PairVoxLinkKit/RequestNotice.swift"
+        ],
+        "invariant": "The Mac re-checks a lock-screen answer (auth == .notification): request must be shown on that connection, not truncated, not high risk, not screen-only, voiceApprovable, and no older than 300 s, whatever the phone sends",
+        "method": "source",
+        "result": "approvalRefusal rejects truncated first, then requires presented[key], then for .notification applies RequestNotice.allowsLockScreenAnswer (risk != high, !truncated, !needsScreen, voiceApprovable, summary.count <= 160) and age <= staleAfter, all evaluated on the Mac's own bounded snapshot, never on phone-supplied fields. The branch is placed before the .tap branch and applies for any method value, so no method/auth combination bypasses it through the notification marker. Deny is checked only for existence, which is correct. A phone that sends auth .passcode/.faceID with .tap instead skips the lock-screen rule, but that is the known phone-asserted auth limitation (backlog 3.3), not a new gap. Sad paths (stale, screen-only, replay of an answered id) are covered by testTheMacHoldsALockScreenAnswerToTheLockScreenRule. The only residual is the 'shown whole' proxy (see candidate).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-phone9",
+        "reviewed_paths": [
+          "ios/PairVoxPhone/PhoneModel.swift",
+          "ios/PairVoxPhone/PhoneNotifications.swift"
+        ],
+        "invariant": "A lock-screen answer is bound to the request, project and age the banner named, and survives no pairing change",
+        "method": "source",
+        "result": "The notification identifier carries requestID and projectID; answerFromNotification waits up to 10 s for a live snapshot that still holds the same requestID, re-evaluates allowsLockScreenAnswer on that current request, and sends approve with the request's own projectID, so a later different request cannot be approved by an old banner (ID mismatch gives 'no longer waiting'). The Mac supplies a second check for age and presentation. Actions use .authenticationRequired (device unlock). forget() clears the Keychain record, drops the client and calls withdrawAll(), and later answers find no snapshot and send nothing (client is nil). Banners are withdrawn on foreground and when a new request replaces the old one in a snapshot. Residuals are hardening only: banners are not withdrawn when the Mac revokes the phone (gaveUp path) or when previews are visible on a locked screen, and handle() does not ignore a straggler snapshot after forget().",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-phone9",
+        "reviewed_paths": [
+          "Sources/PairVoxLinkKit/RequestNotice.swift",
+          "Sources/PairVoxLink/EngineLink.swift",
+          "Sources/PairVoxCore/Policy/PermissionPolicy.swift",
+          "Tests/PairVoxLinkTests/LinkTests.swift"
+        ],
+        "invariant": "The banner shows the whole request that Allow will approve",
+        "method": "source",
+        "result": "Only partly enforced. allowsLockScreenAnswer bounds summary by Character count (160) and the Mac cuts fields at 2048 bytes with a truncated flag, but a Bash summary is 'Run: ' + the raw command and may contain newlines; nothing bounds line count. The project's own compact-surface rule (PermissionAssessment.fitsCompactSurface) requires no newline and 90 characters for exactly this reason, and the lock-screen rule does not use it. Recorded as the needs_validation candidate.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "ios-lockscreen-allow-body-length-not-display-bound"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "Reuse the fitsCompactSurface rule (no newline, a shorter limit) inside RequestNotice.allowsLockScreenAnswer, and reject control and bidirectional-override characters in the summary for the lock-screen path; keep the Mac and phone on the one predicate as now.",
+      "Withdraw delivered banners when the link ends in a permanent refusal (.gaveUp / revoked), not only on forget(); the banner carries command text and Allow stays visible until the app is next foregrounded, though the Mac then refuses the answer.",
+      "PhoneModel.handle(_:) does not check isPaired or the reconnector token, so a snapshot already in flight when forget() runs can re-populate snapshot (and post a banner if the app is backgrounded in that instant); ignore host messages when !isPaired.",
+      "The host decoder will see auth \"notification\" from a new phone as an unknown enum case on an older Mac; confirm that a decode failure there drops only the frame and is tolerated by the phone, since lock-screen answers would otherwise cut the link on a version mismatch.",
+      "The tap path in approvalRefusal has no age limit (only voice and notification do); a phone that sends .tap with a faceID/passcode claim can approve a request older than 300 s. This is the known phone-asserted auth limitation (backlog 3.3), noted here because the lock-screen rule is now stricter than the tap rule."
+    ],
+    "parent_uncovered": [],
+    "parent_decisions": {
+      "ios-lockscreen-allow-body-length-not-display-bound": {
+        "decision": "needs_validation",
+        "verifier": "verify-05"
+      }
+    }
+  },
+  {
+    "coverage_id": "ios%2FPairVoxPhone%2FPhoneModel.swift%23finishedListening%20run%209::Sources%2FPairVoxLink%2FLinkHost.swift%23approvalRefusal%20voice%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::ATTACK-CLASSES.md%23Business%20logic",
+    "canonical_refs": {
+      "surface": "ios/PairVoxPhone/PhoneModel.swift#finishedListening run 9",
+      "boundary": "Sources/PairVoxLink/LinkHost.swift#approvalRefusal voice run 9",
+      "attack_class": "ATTACK-CLASSES.md#Business logic",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Phone spoken-answer path changed in 34b17fa: PhoneModel.noteSaying (now called for .speak, .speakAudio, .refused and request prompts), isOwnEcho/promptEndedAt, finishedListening (echo check, 'confirm high risk' branch, .spokenAnswer send), and the Mac side LinkHost .spokenAnswer case with approvalRefusal's voice branch",
+    "boundary": "Speech the phone itself plays (its own prompt, the Mac's mirrored voice, a refusal) or any audible third party cannot be counted as a spoken yes by the phone or the Mac; the Mac's voice branch (voiceApprovable, voiceHighRisk, phone-asserted auth, age <= staleAfter) is the only check on a phone-voice approval because the Mac cannot see the phone's audio timing",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Business logic",
+    "starting_paths": [
+      "ios/PairVoxPhone/PhoneModel.swift",
+      "ios/PairVoxPhone/PhoneAudio.swift",
+      "Sources/PairVoxLink/LinkHost.swift",
+      "Sources/PairVoxLink/EngineLink.swift",
+      "Sources/PairVoxCore/Conversation/VoiceCommand.swift",
+      "Sources/PairVoxLinkKit/LinkMessages.swift",
+      "Tests/PairVoxLinkTests/LinkTests.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Business logic",
+    "selected_companion_blocks": [
+      "PROTOCOLS-RPC-AND-MESSAGING.md#RPC identity and authorization attack classes",
+      "PROTOCOLS-RPC-AND-MESSAGING.md#Replay, ordering, and transaction attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Application-state and device-lifecycle attack classes",
+      "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "DESKTOP-MOBILE-AND-LOCAL-IPC.md#Webview and native-bridge attack classes",
+        "reason": "no webview"
+      },
+      {
+        "block": "PROTOCOLS-RPC-AND-MESSAGING.md#Broker and queue isolation attack classes",
+        "reason": "no broker; a single point-to-point link"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 2,
+    "status": "deferred",
+    "agent_id": null,
+    "reviewed_paths": [],
+    "local_checks": [],
+    "result_fingerprints": [],
+    "unresolved": [
+      "quick_profile_final_critic: git diff de91222 a3e5940 changes ios/PairVoxPhone/PhoneModel.swift in noteSaying (lastSaidText/sayingPrompt now set for every played text, replacing the prompt-only assignment) and the .refused/.speak/.speakAudio arms, which feed the echo check at finishedListening (line ~608: only while snapshot.request != nil and within 1.2 s of promptEndedAt). hunter-phone9 reviewed PhoneModel.swift but its three checks cover only the lock-screen notification path; no check addresses the phone's microphone path, which sends .spokenAnswer that LinkHost approves through approvalRefusal(.voice, .none) with no echo or prompt-timing check on the Mac. Run 8's critic deferred exactly this unit (phone's spoken answers) and no run 9 unit picks it up."
+    ]
+  },
+  {
+    "coverage_id": "scripts%2Frelease-assets.sh%23main%20run%209::scripts%2Fpv-install.sh%23team_of%20run%209::profile%2Fquick%2Fall-in-scope-subsystems::SUPPLY-CHAIN-AND-RELEASE.md%23Release%20and%20update%20attack%20classes",
+    "canonical_refs": {
+      "surface": "scripts/release-assets.sh#main run 9",
+      "boundary": "scripts/pv-install.sh#team_of run 9",
+      "attack_class": "SUPPLY-CHAIN-AND-RELEASE.md#Release and update attack classes",
+      "subsystem": "profile/quick/all-in-scope-subsystems"
+    },
+    "surface": "Release and install scripts since de91222: scripts/release-assets.sh, the pv-install.sh team-ID check and environment filter, restart-app.sh own-user matching, and pairvox-link-testhost's new reply",
+    "boundary": "Release files are built only from this checkout and only into the chosen folder; nothing from a version argument, an --out path or a report folder can run code, write outside it or ship a secret; installs refuse a downgraded signature",
+    "subsystem": "All in-scope subsystems (quick profile)",
+    "attack_class": "Supply chain",
+    "starting_paths": [
+      "scripts/release-assets.sh",
+      "scripts/release.sh",
+      "scripts/pv-install.sh",
+      "scripts/restart-app.sh",
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxLinkTestHost/main.swift"
+    ],
+    "ordinary_attack_class_block": "ATTACK-CLASSES.md#Injection",
+    "selected_companion_blocks": [
+      "SUPPLY-CHAIN-AND-RELEASE.md#Core discipline",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Release and update attack classes",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Universal moves",
+      "SUPPLY-CHAIN-AND-RELEASE.md#Validation rules"
+    ],
+    "excluded_blocks": [
+      {
+        "block": "SUPPLY-CHAIN-AND-RELEASE.md#CI and automation attack classes",
+        "reason": "CI is unchanged since run 7"
+      }
+    ],
+    "prior_status": "none",
+    "attempts": [],
+    "wave": 1,
+    "status": "candidate",
+    "agent_id": "hunter-release9",
+    "reviewed_paths": [
+      "Sources/PairVoxApp/AppModel.swift",
+      "Sources/PairVoxCore/Session/ChildEnvironment.swift",
+      "Sources/PairVoxLinkTestHost/main.swift",
+      "scripts/build-app.sh",
+      "scripts/pv-install.sh",
+      "scripts/release-assets.sh",
+      "scripts/release.sh",
+      "scripts/restart-app.sh"
+    ],
+    "local_checks": [
+      {
+        "agent_id": "hunter-release9",
+        "reviewed_paths": [
+          "scripts/release-assets.sh"
+        ],
+        "invariant": "VERSION and --out cannot run code, write outside the chosen folder or ship a secret; files come only from this checkout",
+        "method": "source",
+        "result": "VERSION must match ^N.N.N(-[A-Za-z0-9.]+)?$ before any use (no slash, space, quote or newline), so file names, build args and the printf JSON are safe. --out is owner-supplied, created, must be empty, then canonicalised; every copy target is built as $OUT/<fixed name>. Work dir is mktemp -d with an EXIT trap. Nothing uploads. The reports zip holds only files already committed in this public repo; a grep for key, token and PEM patterns found none (run.json and coverage.json carry a local /Users/ path already public). Not a finding. Two gaps recorded as hardening: no clean-tree or HEAD==tag check, and the unsigned DMG path skips the release entitlement check (candidate).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-release9",
+        "reviewed_paths": [
+          "scripts/release.sh",
+          "scripts/build-app.sh"
+        ],
+        "invariant": "the DMG that release-assets ships was checked by the same gate as a real release (no get-task-allow, hardened runtime)",
+        "method": "source",
+        "result": "Unsigned mode calls release.sh --dry-run, which builds with SIGN_IDENTITY=- ; build-app.sh then sets ENABLE_HARDENED_RUNTIME=NO. release.sh refuses get-task-allow and unexpected entitlements only on the non-dry path (lines 55-57); the dry run only prints an info line (lines 93-95) and a hardened-runtime check does not exist. release-assets copies that DMG into the release folder and runs only hdiutil verify. Whether the ad-hoc app really carries get-task-allow needs one codesign run on a built DMG. See candidate.",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-release9",
+        "reviewed_paths": [
+          "scripts/pv-install.sh",
+          "scripts/restart-app.sh",
+          "Sources/PairVoxApp/AppModel.swift",
+          "Sources/PairVoxCore/Session/ChildEnvironment.swift"
+        ],
+        "invariant": "an install never replaces a team-signed app with a build of another or no team; restart/quit matching only touches the owner's own PairVox process",
+        "method": "source",
+        "result": "team_of reads TeamIdentifier from codesign -dv. A team-signed installed app is only replaced by a build with the identical team; a build with 'not set' or an empty team is refused, and codesign failing aborts through the ERR trap (pipefail), so it fails closed. The check is skipped only when the installed app is ad-hoc or absent (nothing to downgrade). The swap itself re-verifies the signature and copies beside the old app before the swap. restart-app.sh pgrep and ps are now limited to -u uid with a literal, escaped, anchored pattern; prune deletes only real directories named PairVox.app under the checkout and skips running or kept ones. Settled, no exploitable gap. Residual gaps are hardening notes (rollback has no team check; the env filter is a deny-list; script rewrite during --pull).",
+        "artifact": null
+      },
+      {
+        "agent_id": "hunter-release9",
+        "reviewed_paths": [
+          "Sources/PairVoxLinkTestHost/main.swift"
+        ],
+        "invariant": "the auto-accepting test host is loopback-only and cannot ship in the app or release",
+        "method": "source",
+        "result": "The listener allow closure admits only 127.*, ::1 and ::ffff:127.* (a scoped '::1%lo0' string fails closed). Pairing still needs the QR secret printed on stdout. The new onDecision reply only publishes a fixed snapshot. The target is a SwiftPM executable only: no reference in project.yml, Makefile, scripts or .github, so it is not in the .app or DMG. Not a finding.",
+        "artifact": null
+      }
+    ],
+    "result_fingerprints": [
+      "release-assets/unsigned-dmg-skips-release-entitlement-and-hardened-runtime-gate"
+    ],
+    "unresolved": [],
+    "parent_hardening": [
+      "release-assets.sh header says it never touches dist/, but --signed runs scripts/release.sh, which runs build-app.sh into dist/ (rm -rf dist/PairVox.app) and writes dist/PairVox-X.dmg; this can replace a running app. Make --signed use DIST_DIR or fix the comment.",
+      "release-assets.sh does not require a clean working tree or HEAD == tag v$VERSION; the DMG and ipa come from the working tree while SHA256SUMS and the printed command name only a short commit and rely on --verify-tag. Add `git diff --quiet HEAD` and a tag/HEAD check (owner-only, source-identity hygiene).",
+      "The Strix and audit report are picked by file mtime and by name sort, not bound to the commit being released. In a fresh clone every strix_runs directory has the same mtime, so ls -td can ship an older run (the shipped one today is for de91222). Select the run recorded for the release commit, or take the run name as an argument.",
+      "pv-install.sh --pull runs `git merge --ff-only` inside the running script; bash reads scripts lazily, so if the pull changes pv-install.sh the rest of the run is read from a rewritten file at old byte offsets. Wrap the body in a main function ending in `exit`, or copy the script to .build before running it.",
+      "pv-install.sh --rollback (and the restore after a failed launch check) has no team comparison; rolling back to an ad-hoc previous.app from a team-signed install would drop the Keychain and microphone grants that the forward check protects. Reuse team_of in swap_in.",
+      "The installer environment filter is the ANTHROPIC_/CLAUDE_CODE_/NODE_*/SSL_* deny-list, not an allow-list, so GITHUB_TOKEN, AWS_*, NPM_TOKEN and similar login-shell exports still reach git, xcodegen, xcodebuild and any pulled build phase. The comment in AppModel.installLatestBuild says tokens are dropped. Not a boundary (the pulled tree runs as the same user and can read ~/.aws anyway), but use an allow-list (PATH, HOME, DEVELOPER_DIR, LANG, TERM, proxy and SSH_AUTH_SOCK) or correct the comment.",
+      "release-assets.sh --dry-run --json and --json print --out and report paths into JSON with printf %s and no escaping; a path containing a quote breaks the JSON (owner-supplied, no security effect)."
+    ],
+    "parent_uncovered": [],
+    "parent_decisions": {
+      "release-assets/unsigned-dmg-skips-release-entitlement-and-hardened-runtime-gate": {
+        "decision": "needs_validation",
+        "verifier": "verify-06"
+      }
+    }
+  }
+]

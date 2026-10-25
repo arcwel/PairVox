@@ -52,8 +52,8 @@ SIGN_ARGS=(CODE_SIGN_IDENTITY="$IDENTITY")
 if [[ -n "$AUTO_TEAM" ]]; then
   SIGN_ARGS=(CODE_SIGN_IDENTITY="Apple Development" CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM")
 elif [[ "$IDENTITY" == "-" ]]; then
-  # Hardened runtime enforces library validation, and ad-hoc signatures have no Team ID,
-  # so dyld refuses the embedded frameworks. Local builds run without it.
+  # Hardened runtime enforces library validation, and ad-hoc signatures have no Team ID, so dyld would refuse the
+  # embedded frameworks. Xcode builds without it; the app itself is re-signed below.
   SIGN_ARGS+=(ENABLE_HARDENED_RUNTIME=NO)
 else
   SIGN_ARGS+=(CODE_SIGN_STYLE=Manual OTHER_CODE_SIGN_FLAGS="--timestamp")
@@ -72,6 +72,13 @@ mkdir -p "$DIST"
 rm -rf "$DIST/PairVox.app"
 cp -R ".build/xcode/Build/Products/$CONFIG/PairVox.app" "$DIST/"
 
+if [[ -z "$AUTO_TEAM" && "$IDENTITY" == "-" ]]; then
+  # Ad-hoc (also the published DMG until there is a Developer ID): the app is re-signed with the hardened runtime,
+  # so no debugger can attach and DYLD_* is ignored, and with explicit entitlements, which drops the get-task-allow
+  # Xcode adds (audit run 9: the 0.1.0-beta.1 DMG carried it). The ad-hoc entitlements add only
+  # disable-library-validation, which the frameworks need without a Team ID.
+  codesign --force --sign - --options runtime --entitlements Sources/PairVoxApp/PairVox-adhoc.entitlements "$DIST/PairVox.app"
+fi
 codesign --verify --deep --strict "$DIST/PairVox.app" && echo "Signature OK"
 if find "$DIST/PairVox.app" -name "*.metallib" | grep -q .; then
   echo "MLX Metal library embedded: Kokoro voice available."

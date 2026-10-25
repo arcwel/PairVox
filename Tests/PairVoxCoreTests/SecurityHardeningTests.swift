@@ -421,6 +421,32 @@ final class AuditRun8PolicyTests: XCTestCase {
     }
 }
 
+/// Audit run 9 (2026-10-25): `env` after a wrapper, and `ps` with the e flag anywhere but its first argument in command
+/// position, were rated medium, so a folder shell grant allowed them without asking.
+final class AuditRun9PolicyTests: XCTestCase {
+    private let printers = ["nice env", "time env", "command env", "nohup env", "timeout 5 env", "sh -c 'nice env'",
+                            "ps -ax -E", "ps -A -E", "ps -p 1 -E", "/bin/ps -E", "nice ps eww", "command ps -E", "echo x\nps -E"]
+
+    func testWrappedEnvAndAnyPsEnvironmentFlagAreHigh() {
+        for c in printers { XCTAssertEqual(BashRisk.classify(c).level, .high, c) }
+        for c in ["ps aux", "ps -p 1", "nice -n 5 swift build", "time swift test", "env FOO=1 swift test"] {
+            XCTAssertLessThan(BashRisk.classify(c).level, .high, c)
+        }
+    }
+
+    func testAShellGrantNeverCoversThem() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("pv-run9-\(UUID().uuidString)").path
+        try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let policy = PermissionPolicy(projectRoot: root, grants: [FolderGrant(path: root, allowShell: true)])
+        for c in printers {
+            let a = policy.assess(PermissionRequest(requestID: "r", toolName: "Bash", input: ["command": .string(c)]))
+            XCTAssertFalse(a.coveredByFolderGrant, c)
+            XCTAssertFalse(a.voiceApprovable, c)
+        }
+    }
+}
+
 /// Audit run 8 (2026-10-25): a name ending in a line terminator got past the vocabulary filter's shape test.
 final class AuditRun8VocabularyTests: XCTestCase {
     func testANameWithATrailingLineTerminatorIsRefused() {

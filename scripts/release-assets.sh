@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Builds every file a GitHub release carries, in one folder: the Mac DMG, the iPhone .ipa, the newest Strix report,
-# a zip of the security reports, and SHA256SUMS. It never touches dist/ (where the app you run lives) and never
-# uploads anything; it prints the `gh release create` line to run next.
+# a zip of the security reports, and SHA256SUMS. The ad-hoc build never touches dist/ (where the app you run lives);
+# --signed goes through scripts/release.sh, which builds into dist/. Nothing is uploaded; it prints the
+# `gh release create` line to run next. It refuses a working tree with uncommitted changes to tracked files, so the
+# files match the commit they are tagged with.
 #
 #   scripts/release-assets.sh 0.1.0-beta.2                 # ad-hoc DMG + unsigned .ipa into .build/release-assets/0.1.0-beta.2
 #   scripts/release-assets.sh 0.1.0-beta.2 --out DIR       # somewhere else (created if missing; must be empty)
@@ -11,6 +13,8 @@
 #                                                          # SIGN_IDENTITY, DEVELOPMENT_TEAM, NOTARY_PROFILE)
 #   scripts/release-assets.sh 0.1.0-beta.2 --dry-run       # list what would be built and from where, build nothing
 #   scripts/release-assets.sh 0.1.0-beta.2 --json          # one JSON object on stdout at the end
+#   scripts/release-assets.sh 0.1.0-beta.2 --strix-run DIR # this Strix run (default: the newest under docs/security/strix/strix_runs)
+#   scripts/release-assets.sh 0.1.0-beta.2 --allow-dirty   # build from a tree with uncommitted changes (testing only)
 #
 # The apps carry the numeric part of the version (0.1.0 for 0.1.0-beta.2) as CFBundleShortVersionString, which Apple
 # requires to be numbers, and the commit count as the build number. The file names carry the full version.
@@ -18,14 +22,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-usage() { echo "usage: scripts/release-assets.sh VERSION [--out DIR] [--signed] [--dry-run] [--json]" >&2; exit 2; }
+usage() { echo "usage: scripts/release-assets.sh VERSION [--out DIR] [--signed] [--strix-run DIR] [--allow-dirty] [--dry-run] [--json]" >&2; exit 2; }
 [[ $# -ge 1 ]] || usage
 VERSION="$1"; shift
-OUT="" SIGNED=0 DRY=0 JSON=0
+OUT="" SIGNED=0 DRY=0 JSON=0 DIRTY_OK=0 STRIX_ARG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out) [[ $# -ge 2 ]] || usage; OUT="$2"; shift 2 ;;
     --signed) SIGNED=1; shift ;;
+    --strix-run) [[ $# -ge 2 ]] || usage; STRIX_ARG="$2"; shift 2 ;;
+    --allow-dirty) DIRTY_OK=1; shift ;;
     --dry-run) DRY=1; shift ;;
     --json) JSON=1; shift ;;
     *) usage ;;
@@ -45,11 +51,17 @@ fail() { echo "release-assets: $*" >&2; exit 1; }
 # The newest Strix run and audit run in the repository are the ones the release carries.
 # Strix names its runs without a date, so the newest is the most recently written; gate notes and audit runs start
 # with their date, so the newest sorts last by name.
-STRIX_RUN="$(ls -td docs/security/strix/strix_runs/*/ 2>/dev/null | head -1 || true)"; STRIX_RUN="${STRIX_RUN%/}"
+STRIX_RUN="${STRIX_ARG:-$(ls -td docs/security/strix/strix_runs/*/ 2>/dev/null | head -1 || true)}"; STRIX_RUN="${STRIX_RUN%/}"
 STRIX_GATE="$(ls -d docs/security/strix/*gate*.md 2>/dev/null | sort | tail -1 || true)"
 AUDIT_RUN="$(ls -d docs/security/*-audit-run-*/ 2>/dev/null | sort | tail -1 || true)"; AUDIT_RUN="${AUDIT_RUN%/}"
 [[ -n "$STRIX_RUN" && -f "$STRIX_RUN/penetration_test_report.md" ]] || fail "no Strix report under docs/security/strix/strix_runs/"
 [[ -n "$AUDIT_RUN" && -f "$AUDIT_RUN/REPORT.md" ]] || fail "no audit report under docs/security/*-audit-run-*/"
+
+DIRTY="$(git status --porcelain --untracked-files=no)"
+if [[ -n "$DIRTY" && $DIRTY_OK -eq 0 && $DRY -eq 0 ]]; then
+  fail "uncommitted changes to tracked files; commit them first (or pass --allow-dirty to test):
+$DIRTY"
+fi
 
 DMG="PairVox-$VERSION.dmg"
 IPA="PairVoxPhone-$VERSION-unsigned.ipa"

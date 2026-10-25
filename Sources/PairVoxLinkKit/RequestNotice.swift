@@ -42,7 +42,16 @@ public struct RequestNotice: Sendable, Equatable {
     /// Mac applies the same rule to an answer marked `.notification`.
     public static func allowsLockScreenAnswer(_ request: LinkRequest) -> Bool {
         request.risk != "high" && !request.truncated && !request.needsScreen && request.voiceApprovable
-            && request.summary.count <= maxBody
+            && request.summary.count <= maxBody && isOneDisplayLine(request.summary)
+    }
+
+    /// A notification shows only a few lines, so a short command spread over several lines can hide its end, and a
+    /// direction override can make the text read as something else. Allow needs one plain line (audit run 9).
+    static func isOneDisplayLine(_ text: String) -> Bool {
+        !text.unicodeScalars.contains { s in
+            s.properties.isBidiControl || s.properties.generalCategory == .control
+                || s.properties.generalCategory == .lineSeparator || s.properties.generalCategory == .paragraphSeparator
+        }
     }
 
     public static func identifier(requestID: String, projectID: String?) -> String {
