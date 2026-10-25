@@ -2,6 +2,20 @@
 
 **Update 2026-10-24.** Check 5 now passes on branch `fix/v0.1-security-gate`, which is not merged or installed yet. HANDOFF is marked historical. What is left is the headset session (checks 2, 3, and the spoken "Allow" for check 4), done on a build installed from that branch.
 
+**Later on 2026-10-24.** Two more branches sit on top of it.
+
+- `feat/stability-a`:
+  - Kokoro warm-up, for the slow first sentence (the likely check 2 failure).
+  - Linear parsing of Claude's output (backlog 4.8).
+  - Audit run 7 on the units run 6 deferred, with its fixes. These include the echo of "Allow" and dangling symlinks.
+  - Lock-screen notifications on the phone.
+- `feat/ease-of-use`:
+  - The card says why a spoken answer did not count.
+  - The health indicator, plus Settings, Health.
+  - One-click update (`scripts/pv-install.sh`, and PairVox, Install Latest Build…).
+
+Install a build of `feat/ease-of-use` before the headset session: it has all three. Still open from the audits are the areas run 7's critic deferred (docs/security/2026-10-24-audit-run-7/REPORT.md §5), and backlog 3.3 for a modified phone.
+
 This is the open work as of 2026-10-18, after PRs #1 to #5 were merged. The repository has one branch, `main` (98a3726), with no open PRs, other branches or worktrees. The installed app, `dist/PairVox.app`, is built from that commit. The previous build is kept as `dist/PairVox.previous.app`.
 
 The rule from 2026-10-17 still holds: v0.1 is done when the five checks in [2026-10-17-v0.1-checks.md](2026-10-17-v0.1-checks.md) pass on the installed app. Code changes only when a check fails, and the check is measured again after the change.
