@@ -315,3 +315,92 @@ final class HardeningP1ApprovalGateTests: XCTestCase {
         }
     }
 }
+
+/// Regression tests for security audit run 6 (2026-10-24, docs/security/2026-10-24-audit-run-6/REPORT.md).
+final class AuditRun6PolicyTests: XCTestCase {
+    private let root = FileManager.default.temporaryDirectory.appendingPathComponent("pv-run6-\(UUID().uuidString)").path
+
+    override func setUp() { try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true) }
+    override func tearDown() { try? FileManager.default.removeItem(atPath: root) }
+
+    private func assess(_ c: String, policy: PermissionPolicy? = nil) -> PermissionAssessment {
+        (policy ?? PermissionPolicy(projectRoot: root)).assess(PermissionRequest(requestID: "r", toolName: "Bash", input: ["command": .string(c)]))
+    }
+
+    func testWrappedAndPipedDeletesAndPushesAreHighRisk() {
+        for c in ["ls build | xargs rm -rf", "timeout 60 rm --recursive --force build", "env -i rm --recursive --force build",
+                  "sh -c 'rm --recursive --force build'", "env -i g\"i\"t push origin main", "nice -n 5 git push",
+                  "xargs -I {} rm -r {}", "gtimeout -s KILL 5 sudo ls", "find . -name '*.o' | xargs rm -f"] {
+            XCTAssertEqual(BashRisk.classify(c, projectRoot: root).level, .high, c)
+            XCTAssertFalse(assess(c).voiceApprovable, c)
+        }
+        // Ordinary wrapped commands are not raised.
+        for c in ["timeout 60 swift test", "env FOO=1 make", "rm notes.txt", "nice -n 5 swift build"] {
+            XCTAssertLessThan(BashRisk.classify(c, projectRoot: root).level, .high, c)
+        }
+    }
+
+    func testPrintingTheEnvironmentIsHighAndNeverCoveredByAShellGrant() {
+        let granted = PermissionPolicy(projectRoot: root, grants: [FolderGrant(path: root, allowShell: true)])
+        for c in ["printenv", "env", "printenv ANTHROPIC_API_KEY", "env | grep ANTHROPIC", "export -p", "set",
+                  "cat /proc/self/environ", "echo $ANTHROPIC_API_KEY"] {
+            let a = assess(c, policy: granted)
+            XCTAssertEqual(a.risk, .high, c)
+            XCTAssertFalse(a.coveredByFolderGrant, c)
+            XCTAssertFalse(a.voiceApprovable, c)
+        }
+        XCTAssertTrue(assess("swift test", policy: granted).coveredByFolderGrant, "an ordinary command is still covered")
+        XCTAssertLessThan(BashRisk.classify("set -e; make", projectRoot: root).level, .high)
+    }
+
+    func testProtectedFoldersMatchWhateverTheCase() {
+        let home = NSHomeDirectory()
+        for c in ["cp a.json ~/.CLAUDE/settings.json", "cat ~/.Claude/settings.json",
+                  "cp a.json '\(home)/Library/Application Support/pairvox/settings.json'"] {
+            XCTAssertEqual(BashRisk.classify(c, projectRoot: root).level, .high, c)
+        }
+        XCTAssertTrue(PermissionPolicy.isSensitivePath(home + "/.CLAUDE/settings.json"))
+        XCTAssertTrue(BashRisk.patternCanReachProtectedFolder(home + "/.CL*/settings.json"))
+    }
+
+    func testMCPToolsShowTheirArgumentsAndAreApprovedOnScreen() {
+        let policy = PermissionPolicy(projectRoot: root)
+        let a = policy.assess(PermissionRequest(requestID: "r", toolName: "mcp__mail__send_message",
+                                                input: ["to": .string("x@example.invalid"), "body": .string("dummy text")]))
+        XCTAssertTrue(a.summary.contains("x@example.invalid") && a.summary.contains("dummy text"), a.summary)
+        XCTAssertFalse(a.voiceApprovable)
+        XCTAssertTrue(a.spokenPrompt.contains("confirm on screen"), a.spokenPrompt)
+        // Other unrecognized tools keep the voice path but show their arguments too.
+        let task = policy.assess(PermissionRequest(requestID: "r", toolName: "Task", input: ["description": .string("Find the parser")]))
+        XCTAssertTrue(task.summary.contains("Find the parser"), task.summary)
+        let long = PermissionPolicy.argumentPreview(.object(["body": .string(String(repeating: "x", count: 1000))]))
+        XCTAssertLessThan(long.count, 120)
+        // A long body or many fields cannot push the recipient off the card.
+        let crowded = PermissionPolicy.argumentPreview(.object(["attachments": .string(String(repeating: "a", count: 500)),
+                                                               "body": .string(String(repeating: "b", count: 500)), "cc": .string(String(repeating: "c", count: 500)),
+                                                               "subject": .string(String(repeating: "s", count: 500)), "to": .string("x@example.invalid")]))
+        XCTAssertTrue(crowded.contains("to: x@example.invalid"), crowded)
+        var many: [String: JSONValue] = [:]
+        for i in 0..<20 { many["k\(i)"] = .string("v") }
+        XCTAssertTrue(PermissionPolicy.argumentPreview(.object(many)).contains("+8 more fields"))
+    }
+
+    // Review of the run 6 fixes: `{}` hid the program after `xargs -I`, and the environment rule both overreached and
+    // missed respellings.
+    func testXargsPlaceholderDoesNotHideTheProgram() {
+        for c in ["xargs -I {} /usr/bin/sudo id {}", "xargs -I {} su root -c id", "find . | xargs -I {} git push origin {}"] {
+            XCTAssertEqual(BashRisk.classify(c, projectRoot: root).level, .high, c)
+        }
+        XCTAssertEqual(BashRisk.classify("{ rm -rf build; }", projectRoot: root).level, .high, "a group's brace is still dropped")
+    }
+
+    func testEnvironmentRuleIsAnchoredAndCatchesRespellings() {
+        for c in ["python3 -m venv env", "make env", "cd env", "ls env", "grep -rn ANTHROPIC_API_KEY Sources", "set -e; make"] {
+            XCTAssertLessThan(BashRisk.classify(c, projectRoot: root).level, .high, c)
+        }
+        for c in ["/usr/bin/env", "env -0", "env 2>&1", "'env'", "e''nv", "pr''intenv HOME", "\\env", "export", "declare -p",
+                  "typeset -x", "compgen -e", "echo ${ANTHROPIC_API_KEY}", "ls && env"] {
+            XCTAssertEqual(BashRisk.classify(c, projectRoot: root).level, .high, c)
+        }
+    }
+}

@@ -811,6 +811,19 @@ final class PhoneHostRuleTests: XCTestCase {
         }
         XCTAssertNil(PairingPayload.parse("pairvox://pair?h=8.8.8.8&p=47821&s=AAAAAAAAAAAAAAAAAAAAAA"))
     }
+
+    // Security audit 2026-10-24: the IPv6 rule was a prefix test, so a DNS name that starts like a Tailscale address
+    // passed, and leading-zero octets passed a decimal check that a resolver may read as octal.
+    func testNamesShapedLikeTailnetAddressesAreRefused() {
+        for ok in ["fd7a:115c:a1e0::1", "fd7a:115c:a1e0:ab12:4843:cd96:6258:b240", "FD7A:115C:A1E0::53", "::1", "100.64.0.1", "100.100.0.10"] {
+            XCTAssertTrue(PairingPayload.isAllowedHost(ok), ok)
+        }
+        for bad in ["fd7a:115c:a1e0:x.attacker.example", "fd7a:115c:a1e0:evil", "fd7a:115c:a1e0::1::2", "fd7a:115c:a1e0:1:2:3:4:5:6", "fd7a:115c:a1e1::1",
+                    "fd7a:115c:a1e0::12345", "100.070.0.1", "100.64.0.01", "0100.64.0.1", "100.64.1", "127.1"] {
+            XCTAssertFalse(PairingPayload.isAllowedHost(bad), bad)
+        }
+        XCTAssertNil(PairingPayload.parse("pairvox://pair?h=fd7a:115c:a1e0:x.attacker.example&p=47821&s=AAAAAAAAAAAAAAAAAAAAAA"))
+    }
 }
 
 final class DeviceKeyStoreTests: XCTestCase {

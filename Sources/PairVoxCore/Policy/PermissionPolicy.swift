@@ -148,8 +148,17 @@ public struct PermissionPolicy: Sendable {
         default:
             risk = .medium
             let name = r.displayName ?? r.toolName
-            summary = "Use \(name)"
+            // The card shows what the tool will be sent, not only its name (security audit 2026-10-24: an MCP call
+            // was approved without anyone seeing its recipient or body).
+            let preview = PermissionPolicy.argumentPreview(r.input)
+            summary = preview.isEmpty ? "Use \(name)" : "Use \(name): \(preview)"
             spoken = "Claude wants to use \(Pronunciation.splitIdentifier(name)). Allow?"
+            // An MCP tool can send, post or delete anything outside the Mac, and its arguments cannot be read out
+            // reliably, so it is approved on screen (backlog 1.8).
+            if r.toolName.hasPrefix("mcp__") {
+                screenOnly = true
+                screenReason = "This tool comes from an MCP server. Check what it sends on screen."
+            }
         }
 
         // Signals from Claude Code itself always win.
@@ -207,6 +216,25 @@ public struct PermissionPolicy: Sendable {
         return out
     }
 
+    /// A short `key: value` list of a tool's arguments for the permission card, longest values cut.
+    static func argumentPreview(_ input: JSONValue, perValue: Int = 80, total: Int = 400) -> String {
+        guard let object = input.objectValue else { return input.isNull ? "" : String(input.serializedString().prefix(total)) }
+        // Every key gets an equal share of the space, so a long body cannot push the recipient off the card.
+        let keys = object.keys.sorted()
+        let shown = Array(keys.prefix(12))
+        let share = max(24, min(perValue, total / max(shown.count, 1)))
+        var parts: [String] = []
+        for key in shown {
+            guard let value = object[key] else { continue }
+            var text = value.stringValue ?? value.serializedString()
+            text = text.replacingOccurrences(of: "\n", with: " ")
+            if text.count > share { text = String(text.prefix(share)) + "…" }
+            parts.append("\(key): \(text)")
+        }
+        if keys.count > shown.count { parts.append("+\(keys.count - shown.count) more fields") }
+        return parts.joined(separator: ", ")
+    }
+
     /// PairVox's own settings (the consent store) and the Claude Code configuration folder.
     static var protectedFolders: [String] {
         // The macOS location is listed as well as wherever this platform keeps Application Support (Linux:
@@ -226,8 +254,14 @@ public struct PermissionPolicy: Sendable {
                        "/library/launchagents/", "/etc/"]
         if needles.contains(where: { p.contains($0) }) { return true }
         guard path.hasPrefix("/") || path.hasPrefix("~") else { return false }
-        let resolved = FolderScope.resolved(path)
-        return protectedFolders.contains { resolved == $0 || resolved.hasPrefix($0 + "/") }
+        return isInProtectedFolder(FolderScope.resolved(path))
+    }
+
+    /// Compared without case: the default macOS volume is case-insensitive, so `~/.CLAUDE` is `~/.claude` (security
+    /// audit 2026-10-24). On a case-sensitive volume this only errs toward asking.
+    static func isInProtectedFolder(_ resolved: String) -> Bool {
+        let r = resolved.lowercased()
+        return protectedFolders.contains { let f = $0.lowercased(); return r == f || r.hasPrefix(f + "/") }
     }
 }
 
@@ -246,7 +280,13 @@ public enum BashRisk {
 
     static let rules: [Rule] = [
         Rule(pattern: #"(^|[\s;&|(])sudo\s"#, level: .high, reason: "Runs as administrator (sudo)."),
-        Rule(pattern: #"\brm\s+(-[a-zA-Z]*[rRfF][a-zA-Z]*\s+)+"#, level: .high, reason: "Deletes files recursively or forcefully."),
+        // Any recursive or forced flag after rm, long or short, last word or not, also inside `sh -c '...'` and after
+        // `xargs` (security audit 2026-10-24: `ls | xargs rm -rf` and `timeout 60 rm --recursive` rated medium).
+        Rule(pattern: #"\brm\s+([^;&|]*\s)?(-[a-zA-Z]*[rRfF][a-zA-Z]*|--recursive|--force|--no-preserve-root)(\s|$|['"])"#, level: .high, reason: "Deletes files recursively or forcefully."),
+        // Printing the environment shows the API key Claude Code was started with (security audit 2026-10-24).
+        // Only in command position, so `python3 -m venv env` or `grep ANTHROPIC_API_KEY Sources` is not caught; the
+        // structural pass catches the respellings (`/usr/bin/env`, `pr''intenv`, `env -0`).
+        Rule(pattern: #"(^|[;&|(]\s*)(printenv|env|export|set|declare\s+-[a-zA-Z]*[xp][a-zA-Z]*|typeset\s+-[a-zA-Z]*[xp][a-zA-Z]*|compgen\s+-e)\s*($|\d?[>;&|)])|\bexport\s+-p\b|/proc/[^/\s]+/environ|\$\{?ANTHROPIC_(API_KEY|AUTH_TOKEN)"#, level: .high, reason: "Reads the environment, which holds your API key."),
         Rule(pattern: #"\brm\s"#, level: .medium, reason: "Deletes files."),
         Rule(pattern: #"\bgit\s+push\b.*(--force|-f\b|--force-with-lease)"#, level: .high, reason: "Force-pushes to a remote."),
         Rule(pattern: #"\bgit\s+push\b"#, level: .high, reason: "Pushes to a remote."),
@@ -301,7 +341,14 @@ public enum BashRisk {
 
     static let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "fish", "csh", "tcsh", "python", "python3",
                                           "node", "deno", "bun", "ruby", "perl", "php", "lua"]
-    static let wrapperNames: Set<String> = ["env", "command", "nohup", "time", "nice", "exec", "builtin", "caffeinate", "stdbuf"]
+    static let wrapperNames: Set<String> = ["env", "command", "nohup", "time", "nice", "exec", "builtin", "caffeinate", "stdbuf",
+                                            "timeout", "gtimeout", "xargs", "setsid"]
+    /// Wrapper options that take the next word as their value (`env -u NAME`, `nice -n 5`, `xargs -I {}`).
+    static let wrapperValueOptions: [String: Set<String>] = [
+        "env": ["-u", "-C", "-S", "-P", "--unset", "--chdir", "--split-string"], "nice": ["-n", "--adjustment"],
+        "timeout": ["-s", "-k", "--signal", "--kill-after"], "gtimeout": ["-s", "-k", "--signal", "--kill-after"],
+        "xargs": ["-I", "-L", "-n", "-P", "-s", "-E", "-d", "-a", "-J", "-R"], "caffeinate": ["-t", "-w"],
+    ]
 
     struct Segment {
         var separator: String
@@ -328,12 +375,25 @@ public enum BashRisk {
                 var t = String(w)
                 while let f = t.first, f == "'" || f == "\"" || f == "\\" || f == "(" || f == "{" { t.removeFirst() }
                 while let l = t.last, l == "'" || l == "\"" || l == ")" || l == "}" { t.removeLast() }
-                return t
+                // `{}` (as in `xargs -I {}`) stays, so it still fills the option's value and the next word is read as
+                // the program. A lone `{` or `(` opening a group is still dropped.
+                return t.isEmpty && w == "{}" ? "{}" : t
             }.filter { !$0.isEmpty }
             if !words.isEmpty {
                 var rest = words[...]
-                while let w = rest.first, (w.contains("=") && !w.hasPrefix("-") && !w.contains("/") ) || wrapperNames.contains((w as NSString).lastPathComponent) {
+                // Wrappers are skipped with their options and values, so `env -i rm`, `timeout 60 rm`, `nice -n 5 git`
+                // and `xargs -I {} rm` are judged by the program they run (security audit 2026-10-24).
+                while let w = rest.first {
+                    if w.contains("=") && !w.hasPrefix("-") && !w.contains("/") { rest = rest.dropFirst(); continue }
+                    let name = (unquoted(w) as NSString).lastPathComponent
+                    guard wrapperNames.contains(name) else { break }
                     rest = rest.dropFirst()
+                    while let o = rest.first, o.hasPrefix("-") {
+                        rest = rest.dropFirst()
+                        if o == "--" { break }
+                        if wrapperValueOptions[name]?.contains(o) == true { rest = rest.dropFirst() }
+                    }
+                    if name == "timeout" || name == "gtimeout", let d = rest.first, d.first?.isNumber == true { rest = rest.dropFirst() }
                 }
                 // Quotes and backslashes inside a word are removed by the shell before it looks the program up, so
                 // `cu''rl`, `"cu"rl` and `cu\rl` all run curl and are matched as curl.
@@ -369,6 +429,12 @@ public enum BashRisk {
                 flags.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains(where: { letters.contains($0) }) }
             }
             if ["sudo", "doas", "su", "pkexec"].contains(p) { found.append((.high, "Runs as administrator (sudo).")) }
+            // `printenv`, or `env` with nothing to run, prints the environment whatever its options or spelling.
+            let leading = seg.words.first.map { (unquoted($0) as NSString).lastPathComponent } ?? ""
+            let program = p.hasPrefix("2>") || p.hasPrefix(">") ? "" : p
+            if program == "printenv" || (program.isEmpty && leading == "env") {
+                found.append((.high, "Reads the environment, which holds your API key."))
+            }
             if p == "rm" {
                 if shortHas("rRf") || flags.contains(where: { ["--recursive", "--force", "--no-preserve-root"].contains($0) }) {
                     found.append((.high, "Deletes files recursively or forcefully."))
@@ -526,7 +592,7 @@ public enum BashRisk {
         for folder in Set(candidates) {
             let parts = folder.split(separator: "/").map(String.init)
             guard pattern.count >= parts.count else { continue }
-            let all = zip(pattern, parts).allSatisfy { p, name in fnmatch(p, name, FNM_PERIOD) == 0 }
+            let all = zip(pattern, parts).allSatisfy { p, name in fnmatch(p.lowercased(), name.lowercased(), FNM_PERIOD) == 0 }
             if all { return true }
         }
         return false
@@ -536,11 +602,7 @@ public enum BashRisk {
     /// that holds the consent store (PairVox's settings) or Claude Code's configuration.
     static func touchesProtectedFolder(_ command: String, projectRoot: String? = nil, depth: Int = 0) -> Bool {
         let home = NSHomeDirectory()
-        let folders = PermissionPolicy.protectedFolders
-        func isProtected(_ path: String) -> Bool {
-            let resolved = FolderScope.resolved(path)
-            return folders.contains { resolved == $0 || resolved.hasPrefix($0 + "/") }
-        }
+        func isProtected(_ path: String) -> Bool { PermissionPolicy.isInProtectedFolder(FolderScope.resolved(path)) }
         // `cd`, `pushd` or a bare `cd` change what a relative word means, so later words are read from there.
         var base = projectRoot
         var words = shellWords(command)

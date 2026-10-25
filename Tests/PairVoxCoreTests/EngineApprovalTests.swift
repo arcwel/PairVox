@@ -28,6 +28,61 @@ final class EngineApprovalTests: XCTestCase {
         .permissionRequested(PermissionRequest(requestID: id, toolName: "Edit", input: ["file_path": .string("/Users/dev/app/\(file)")]))
     }
 
+    // Security audit 2026-10-24: a spoken "sounds good" begun before the request's prompt played (a reply to Claude's
+    // previous sentence) approved a request nobody had heard.
+    func testASpokenYesBegunBeforeThePromptPlayedDoesNotCount() async {
+        await engine.submit("Fix it")
+        backend.emit(.textDelta("I will update the config. "))
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("sounds good")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "the prompt had not started, so the reply was to something else")
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("the prompt is still to be played") }
+        output.continuation.yield(.started(prompt.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        guard case .allow? = backend.responses.first?.1 else { return XCTFail("a yes begun after the prompt started approves") }
+    }
+
+    func testTypedAnswersAreNotHeldBackByThePrompt() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        // The app and the CLI announce typed text the way they announce speech (it barges in), but marked as typed.
+        await engine.userStartedSpeaking(typed: true)
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        guard case .allow? = backend.responses.first?.1 else { return XCTFail("typed text has no speech start to compare") }
+    }
+
+    func testThePromptOfTheFirstRequestDoesNotCountForTheNext() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        backend.emit(edit("B", "b.swift"))
+        await settle()
+        guard let promptA = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt for A") }
+        output.continuation.yield(.started(promptA.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        XCTAssertEqual(backend.responses.map(\.0), ["A"], "A was heard, so its yes counts")
+        // B is shown now; a yes begun before B's own prompt starts is not an answer to B.
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        XCTAssertEqual(backend.responses.map(\.0), ["A"], "B's prompt had not started")
+    }
+
     func testTextFromAPairedPhoneNeverAnswersAWaitingRequest() async {
         await engine.submit("Fix it")
         backend.emit(edit("A", "a.swift"))

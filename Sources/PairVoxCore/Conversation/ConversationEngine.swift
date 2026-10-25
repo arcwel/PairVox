@@ -73,6 +73,12 @@ public actor ConversationEngine {
     private var pausedBargeIn = false
     /// Utterances the speaker has begun playing, so a courtesy line that is still waiting can be told from one already out loud.
     private var startedIDs: Set<Int> = []
+    /// When the user last started talking (VAD), and when the waiting request's spoken prompt began. A spoken yes counts
+    /// only if it was begun after the prompt started, so a reply to Claude's previous sentence cannot answer a request
+    /// nobody has heard yet (security audit 2026-10-24). Typed text and clicks carry no speech start and are unaffected.
+    private var speechStartedAt: Date?
+    private var promptHeardAt: Date?
+    private var answerSpokenAt: Date?
     private var pausedRemaining: [Utterance] = []
     private var pauseToken = 0
     /// If no transcript arrives (a stuck decode), speech carries on after this long.
@@ -157,8 +163,10 @@ public actor ConversationEngine {
 
     // MARK: - Input from the voice layer
 
-    /// The user started talking (VAD). Stops our speech immediately (barge-in).
-    public func userStartedSpeaking() {
+    /// The user started talking (VAD), or started sending typed text (`typed`). Stops our speech immediately
+    /// (barge-in). Only real speech is timed against the prompt: typed text is a deliberate answer.
+    public func userStartedSpeaking(typed: Bool = false) {
+        speechStartedAt = typed ? nil : now()
         log.log(.info, .engine, "user.speech.start",
                 ["bargeIn": .bool(snapshot.isSpeaking || !queueOrder.isEmpty), "phase": "\(snapshot.phase)"])
         if (snapshot.isSpeaking || !queueOrder.isEmpty), output.supportsPause {
@@ -236,6 +244,7 @@ public actor ConversationEngine {
 
     /// Speech recognition produced nothing usable.
     public func transcriptionFailed() {
+        speechStartedAt = nil
         log.log(.warning, .engine, "user.transcription.empty")
         userIsSpeaking = false
         transcribing = false
@@ -258,6 +267,8 @@ public actor ConversationEngine {
 
     private func process(_ rawText: String, allowProjectSwitch: Bool, answersPermissions: Bool = true) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        answerSpokenAt = answersPermissions ? speechStartedAt : nil
+        speechStartedAt = nil
         userIsSpeaking = false
         transcribing = false
         guard !text.isEmpty else {
@@ -310,7 +321,7 @@ public actor ConversationEngine {
         // Anything else said while a folder offer is open is not an answer: drop the offer without recording a no.
         if snapshot.grantOffer != nil, snapshot.pendingPermission == nil { snapshot.grantOffer = nil }
         // A question about the request on screen is asked of the advisor, never taken as a refusal.
-        if snapshot.pendingPermission != nil, advisor != nil, text.hasSuffix("?") {
+        if snapshot.pendingPermission != nil, advisor != nil, VoiceCommand.isQuestion(text) {
             appendEntry(.user, text, status: .done)
             askAboutPending(text, spoken: true)
             return
@@ -563,6 +574,7 @@ public actor ConversationEngine {
             o.text = "To confirm: Claude will be able to run commands inside \(spokenPath) with no further questions, until you turn this off in Settings. Say confirm to allow it, or no."
         }
         snapshot.grantOffer = o
+        promptHeardAt = nil
         speak([make(o.text, .prompt)], record: false, force: true)
         publish()
     }
@@ -855,6 +867,11 @@ public actor ConversationEngine {
         case .approve, .approveAlways:
             guard !catchUpOpen else { break }   // never approve what has not been announced yet
             if snapshot.pendingPermission == nil, let offer = snapshot.grantOffer {
+                // The offer's own question must have started playing before a spoken yes counts for it.
+                if let spoken = answerSpokenAt, promptHeardAt.map({ spoken < $0 }) ?? true {
+                    log.log(.info, .policy, "grantOffer.answerBeforePrompt", [:])
+                    break
+                }
                 // Standing access takes a deliberate answer: one word to open it, the word "confirm" to finish it.
                 // A longer sentence, or one that begins "say", could be PairVox's own prompt heard back.
                 let w = lastUtteranceWords
@@ -869,6 +886,7 @@ public actor ConversationEngine {
             // Spoken approvals only count for requests the policy rates as voice-approvable, and only while the
             // request is fresh: one left waiting takes no stray yes from the room.
             guard let pending = snapshot.pendingPermission else { break }
+            if answerPrecedesPrompt(for: pending) { break }
             if pending.isStale(now: now()) {
                 log.log(.info, .policy, "permission.staleVoiceApproval", ["tool": .string(pending.request.toolName)])
                 speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
@@ -886,6 +904,7 @@ public actor ConversationEngine {
             break   // handled in submit, where the open projects are known
         case .approveAllWaiting:
             guard let head = snapshot.pendingPermission else { break }
+            if answerPrecedesPrompt(for: head) { break }
             let waiting = [head] + permissionQueue
             let clock = now()
             let eligible = waiting.filter { $0.assessment.voiceApprovable && !$0.isStale(now: clock) }
@@ -915,6 +934,7 @@ public actor ConversationEngine {
             }
         case .confirmHighRisk:
             guard !catchUpOpen, let pending = snapshot.pendingPermission, canConfirmHighRiskByVoice(pending) else { break }
+            if answerPrecedesPrompt(for: pending) { break }
             if pending.isStale(now: now()) {
                 log.log(.info, .policy, "permission.staleVoiceApproval", ["tool": .string(pending.request.toolName)])
                 speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
@@ -1120,6 +1140,9 @@ public actor ConversationEngine {
         case .started(let id):
             log.log(.debug, .tts, "utterance.started", ["id": .int(id)])
             startedIDs.insert(id)
+            if queued[id]?.kind == .prompt, snapshot.pendingPermission != nil || snapshot.grantOffer != nil, promptHeardAt == nil {
+                promptHeardAt = now()
+            }
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
             if latency.firstSound == nil, let start = sendTimes.first { latency.firstSound = Date().timeIntervalSince(start) }
@@ -1218,9 +1241,21 @@ public actor ConversationEngine {
         }(), status: .done)
     }
 
+    /// True (and handled) when a spoken answer was begun before the waiting request's prompt started playing: it was
+    /// a reply to something else. The prompt is played if it is not still on its way, and the answer is not counted.
+    private func answerPrecedesPrompt(for pending: PendingPermission) -> Bool {
+        guard let spoken = answerSpokenAt else { return false }
+        if let heard = promptHeardAt, spoken >= heard { return false }
+        log.log(.info, .policy, "permission.answerBeforePrompt", ["tool": .string(pending.request.toolName)])
+        let promptOnItsWay = queueOrder.contains { queued[$0]?.kind == .prompt && !startedIDs.contains($0) }
+        if !promptOnItsWay { speak([make(permissionPrompt(for: pending), .prompt)], record: false, force: true) }
+        return true
+    }
+
     private func showPermission(_ pending: PendingPermission) {
         snapshot.grantOffer = nil   // a real request outranks the standing-access question
         snapshot.pendingPermission = pending
+        promptHeardAt = nil
         ackTask?.cancel()
         speak([make(permissionPrompt(for: pending), .prompt)], record: false, force: true)
         startExplanation(pending)

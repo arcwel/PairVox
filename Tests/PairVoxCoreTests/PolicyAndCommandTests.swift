@@ -359,6 +359,32 @@ final class SpokenAnswerTests: XCTestCase {
         XCTAssertEqual(VoiceCommand.spokenAnswer(""), .unclear)
         XCTAssertEqual(VoiceCommand.spokenAnswer("Edit the other file instead please"), .notAnAnswer)
     }
+
+    // Security audit 2026-10-24: questions containing an approving word were taken as a yes, on the Mac and the phone.
+    func testQuestionsAreNeverApprovals() {
+        let waiting = VoiceCommand.Context(awaitingPermission: true, awaitingHighRiskConfirmation: true, hasQueuedRequests: true)
+        for q in ["Is that okay?", "Should I allow it", "Is it fine", "sure, what does that do?", "Can I approve all?",
+                  "Should I confirm high risk", "What if I say yes", "Okay, is that safe", "always?"] {
+            let parsed = VoiceCommand.parse(q, context: waiting)
+            XCTAssertNotEqual(parsed, .approve, q)
+            XCTAssertNotEqual(parsed, .approveAlways, q)
+            XCTAssertNotEqual(parsed, .confirmHighRisk, q)
+            XCTAssertNotEqual(parsed, .approveAllWaiting, q)
+            XCTAssertNotEqual(VoiceCommand.spokenAnswer(q), .approve, q)
+            XCTAssertNotEqual(VoiceCommand.spokenAnswer(q), .approveAlways, q)
+        }
+        for answer in ["Yes.", "Okay", "Sure, go ahead", "Do it", "Allow", "Will do, yes", "Confirm high risk", "Approve all"] {
+            XCTAssertFalse(VoiceCommand.isQuestion(answer), answer)
+        }
+        XCTAssertEqual(VoiceCommand.parse("Okay, go ahead.", context: waiting), .approve)
+        for q in ["do you think that's okay", "well is that okay", "wait is that fine", "tell me is it okay", "so should I allow it"] {
+            XCTAssertNotEqual(VoiceCommand.parse(q, context: waiting), .approve, q)
+            XCTAssertNotEqual(VoiceCommand.spokenAnswer(q), .approve, q)
+        }
+        for answer in ["so do it", "well okay", "yes it is fine", "say yes"] {
+            XCTAssertFalse(VoiceCommand.isQuestion(answer), answer)
+        }
+    }
 }
 
 final class VoiceActivityEarlyEndTests: XCTestCase {

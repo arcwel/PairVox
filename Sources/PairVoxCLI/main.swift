@@ -251,7 +251,7 @@ for await line in stdinLines() {
         break
     }
     // Typing is treated like speaking: it barges in on any speech in progress.
-    await engine.userStartedSpeaking()
+    await engine.userStartedSpeaking(typed: true)
     await engine.userStoppedSpeaking()
     await engine.submit(trimmed)
 }

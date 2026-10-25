@@ -667,7 +667,7 @@ final class AppModel: ObservableObject {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, let engine else { return }
         Task {
-            await engine.userStartedSpeaking()
+            await engine.userStartedSpeaking(typed: true)
             await engine.userStoppedSpeaking()
             await engine.submit(t)
         }

@@ -75,6 +75,9 @@ public enum VoiceCommand: Sendable, Equatable {
         // Allow a polite prefix/suffix.
         let core = strip(phrase, prefixes: ["hey pairvox ", "pairvox ", "okay ", "ok ", "please ", "um ", "uh "],
                          suffixes: [" please", " thanks", " thank you"])
+        // A question about the request is never an answer to it: "Is that okay?" and "Should I allow it" contain an
+        // approving word but ask rather than approve (security audit 2026-10-24). The engine sends them to the advisor.
+        let answering = context.awaitingPermission && !isQuestion(transcript)
 
         if context.awaitingCatchUpChoice {
             if ["catch me up", "play from the first", "play from the start", "play from the beginning", "play them all", "play all",
@@ -85,19 +88,19 @@ public enum VoiceCommand: Sendable, Equatable {
                 return .catchUp(.skip)
             }
         }
-        if context.awaitingPermission, context.hasQueuedRequests,
+        if answering, context.hasQueuedRequests,
            ["allow all", "approve all", "allow them all", "approve them all", "allow everything", "yes to all", "allow all of them",
             "approve all of them", "yes allow all", "yes approve all"].contains(core) {
             return .approveAllWaiting
         }
-        if context.awaitingPermission, context.awaitingHighRiskConfirmation, isHighRiskConfirmation(core) {
+        if answering, context.awaitingHighRiskConfirmation, isHighRiskConfirmation(core) {
             return .confirmHighRisk
         }
         if context.awaitingPermission, ["explain", "explain that", "explain it", "explain this", "what does that do",
                                         "what does it do", "what does this do", "what is that", "what is it"].contains(core) {
             return .explain
         }
-        if context.awaitingPermission, let answer = permissionAnswer(core) {
+        if answering, let answer = permissionAnswer(core) {
             return answer
         }
         if context.claudeIsWorking, !context.awaitingPermission, backchannels.contains(core) {
@@ -181,12 +184,31 @@ public enum VoiceCommand: Sendable, Equatable {
         guard !words.isEmpty else { return .unclear }
         let core = strip(words.joined(separator: " "), prefixes: ["hey pairvox ", "pairvox ", "please ", "um ", "uh "],
                          suffixes: [" please", " thanks", " thank you"])
+        if isQuestion(transcript) { return words.count <= 2 ? .unclear : .notAnAnswer }
         switch permissionAnswer(core) {
         case .approve?: return .approve
         case .approveAlways?: return .approveAlways
         case .deny?: return .deny
         default: return words.count <= 2 ? .unclear : .notAnAnswer
         }
+    }
+
+    static let questionStarts: Set<String> = ["is", "isn't", "are", "aren't", "should", "shouldn't", "can", "could", "would",
+                                              "will", "what", "what's", "whats", "why", "how", "does", "doesn't", "did",
+                                              "shall", "who", "where", "when", "which", "am"]
+
+    /// A question rather than an answer: it ends with a question mark, or it opens the way questions do. "Do" is left
+    /// out because "do it" is an answer, and "will do" is one too.
+    static let questionFillers: Set<String> = ["hey", "pairvox", "okay", "ok", "um", "uh", "so", "and", "but", "well", "wait",
+                                               "hmm", "now", "tell", "me", "say", "like"]
+
+    public static func isQuestion(_ transcript: String) -> Bool {
+        if transcript.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?") { return true }
+        // "well is that okay", "wait, is it fine", "tell me is it okay": the question starts after the fillers.
+        let opening = Array(normalize(transcript).drop(while: questionFillers.contains).prefix(2))
+        guard let first = opening.first, opening != ["will", "do"] else { return false }
+        if first == "do", opening.count == 2, ["you", "we", "i", "they"].contains(opening[1]) { return true }
+        return questionStarts.contains(first)
     }
 
     /// Short yes/no answers to a permission prompt. Longer replies go to Claude as feedback.

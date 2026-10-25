@@ -132,6 +132,24 @@ final class AdvisorEngineTests: XCTestCase {
         XCTAssertEqual(snap.pendingPermission?.request.requestID, "A")
     }
 
+    // Security audit 2026-10-24: a question that contains an approving word ("okay", "allow", "sure") was parsed as a
+    // yes before the question branch ever saw it.
+    func testAQuestionWithAnApprovingWordIsAskedNotApproved() async {
+        await makeEngine(advisor: FakeAdvisor())
+        await engine.submit("Fix it")
+        backend.emit(edit("A"))
+        await settle()
+        for (i, question) in ["Is that okay?", "Should I allow it", "sure, what does that change?"].enumerated() {
+            await engine.submit(question)
+            await settle()
+            XCTAssertTrue(backend.responses.isEmpty, question)
+            XCTAssertEqual(advisor.questions.count, i + 1, question)
+        }
+        await engine.submit("yes")
+        await settle()
+        guard case .allow? = backend.responses.first?.1 else { return XCTFail("a plain yes still approves") }
+    }
+
     func testWithoutAnAdvisorAQuestionStillCountsAsFeedback() async {
         await makeEngine(advisor: nil)
         await engine.submit("Fix it")
