@@ -141,6 +141,41 @@ public struct PendingPermission: Sendable, Equatable {
     public func isStale(now: Date) -> Bool { now.timeIntervalSince(receivedAt) > Announcer.staleAfter }
 }
 
+/// A spoken answer that was heard but not taken, so the card can say why instead of seeming to ignore it.
+public struct IgnoredAnswer: Sendable, Equatable {
+    public enum Reason: String, Sendable, Equatable {
+        /// Begun before the request's question started playing: a reply to something else.
+        case beforePrompt
+        /// Words of PairVox's own prompt, heard back through the microphone.
+        case ownEcho
+        /// The request has waited longer than a spoken yes is trusted for.
+        case stale
+        /// High risk: only the phrase "confirm high risk" (if switched on) or a click.
+        case highRisk
+        /// Screen-only: a click is the only way.
+        case needsClick
+    }
+
+    public var requestID: String
+    public var heard: String
+    public var reason: Reason
+
+    public init(requestID: String, heard: String, reason: Reason) {
+        self.requestID = requestID; self.heard = heard; self.reason = reason
+    }
+
+    /// One line for the card: what happened and what to do instead.
+    public var explanation: String {
+        switch reason {
+        case .beforePrompt: return "You started speaking before the question played, so it was not taken as an answer. Answer after it."
+        case .ownEcho: return "It sounded like PairVox's own voice coming back. Say yes, or click Allow."
+        case .stale: return "The request has waited over five minutes, so a spoken answer no longer counts. Click Allow."
+        case .highRisk: return "High-risk requests need the words \"confirm high risk\", or a click."
+        case .needsClick: return "This request can only be allowed with a click."
+        }
+    }
+}
+
 public struct UsageSnapshot: Sendable, Equatable {
     public var turns = 0
     /// Only meaningful with an API key; subscription usage is shown as utilization.
@@ -188,6 +223,8 @@ public struct EngineSnapshot: Sendable, Equatable {
     public var isSpeaking = false
     public var hasHeldBack = false
     public var authProblem: String?
+    /// A spoken answer to the request on screen that was heard but not counted, and why. Shown on the card.
+    public var ignoredAnswer: IgnoredAnswer?
     public var lastNotice: String?
     public var lastLatency: TurnLatency?
     public var speechRate: Double = 1.0

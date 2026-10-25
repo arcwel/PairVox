@@ -24,6 +24,12 @@ struct PairVoxApp: App {
         }
         .defaultSize(width: 860, height: 760)
         .commands {
+            CommandGroup(after: .appInfo) {
+                if model.checkoutRoot != nil {
+                    Button(model.updateRunning ? "Installing Latest Build…" : "Install Latest Build…") { model.installLatestBuild() }
+                        .disabled(model.updateRunning)
+                }
+            }
             CommandGroup(after: .newItem) {
                 Button(Shortcuts.of(.openProject).title) { model.chooseProject() }.shortcut(.openProject)
                 Button(Shortcuts.of(.newSession).title) { model.newSession() }.shortcut(.newSession)

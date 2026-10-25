@@ -25,7 +25,7 @@ done
 # next to a restart it is one more step after the restart.
 [[ $PRUNE -eq 1 && $BUILD -eq 0 && "$*" =~ ^(--prune|--json|--dry-run| )+$ && ! "$*" =~ --build ]] && RESTART=0
 
-SRC=".build/xcode/Build/Products/Release/PairVox.app"
+SRC="${SRC_OVERRIDE:-.build/xcode/Build/Products/Release/PairVox.app}"   # SRC_OVERRIDE: scripts/pv-install.sh
 BIN="$ROOT/dist/PairVox.app/Contents/MacOS/PairVox"
 # Only the copy in this checkout's dist/ counts: an anchored, literal match (pgrep -f is a regular expression).
 running() { pgrep -f "^$(printf '%s' "$BIN" | sed 's/[][\.*^$+?(){}|/]/\\&/g')\$" >/dev/null; }

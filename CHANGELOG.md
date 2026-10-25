@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Easier to use.
+  - When a spoken answer does not count, the request card says so and why: you started before the question played, it sounded like PairVox's own voice, the request waited too long, or it needs "confirm high risk" or a click. When you spoke before the question, PairVox says "I heard that before I asked" and asks again.
+  - A health indicator at the end of the toolbar reads Ready (green), Limited (orange) or Not working (red), with a different shape for each. Click it for every part: microphone, audio, Claude Code, speech recognition, voice, echo cancellation and the phone link (counted only when it is on). Each part that needs attention says what is wrong and has one fix button: Allow…, Open Privacy Settings, Restart Audio, Sign In in Terminal, Try Again, Download, Turn On, Pair a Phone… The same list is in Settings, Health.
+  - One-click update for a build from this checkout. PairVox, Install Latest Build… brings the branch up to date, builds it while you keep working, keeps the current app as `dist/PairVox.previous.app`, then quits and reopens with the new one. `scripts/pv-install.sh` does the same from the command line (`--pull`, `--dry-run`, `--json`, `--rollback`), and the menu run's output is in `~/Library/Logs/PairVox/update.log`.
 - Stability and audit run 7 (docs/security/2026-10-24-audit-run-7/).
   - The voice warms up when you start talking after a quiet spell, so the first sentence of the reply is not slow (on 2026-10-18 it took 5.0 s). Kokoro renders one throwaway word on the voice queue if it has been idle for 20 s, and `kokoro.warmUp` in the log gives its time.
   - Claude's output is read in time proportional to its size. The line reader scans each byte once and drops an over-long line whole, including its tail. JSON nested deeper than 100 levels is refused before decoding. The speech parser no longer copies an undecided line for every character.

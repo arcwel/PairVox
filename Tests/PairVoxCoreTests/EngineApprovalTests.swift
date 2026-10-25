@@ -102,6 +102,29 @@ final class EngineApprovalTests: XCTestCase {
         XCTAssertEqual(backend.responses.first?.1, .allow, "a mode change is never applied, so this is an allow for this request")
     }
 
+    // A spoken answer that does not count says why on the card.
+    func testAnIgnoredAnswerSaysWhy() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("sounds good")
+        await settle()
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.ignoredAnswer, IgnoredAnswer(requestID: "A", heard: "sounds good", reason: .beforePrompt))
+        XCTAssertTrue(output.allTexts.contains("I heard that before I asked."))
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(prompt.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        snap = await engine.snapshot
+        XCTAssertNil(snap.ignoredAnswer, "an answered request leaves nothing behind")
+    }
+
     func testTypedAnswersAreNotHeldBackByThePrompt() async {
         await engine.submit("Fix it")
         backend.emit(edit("A", "a.swift"))

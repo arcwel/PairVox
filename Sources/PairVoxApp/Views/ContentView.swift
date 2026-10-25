@@ -53,6 +53,7 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: model.snapshot.pendingPermission?.request.requestID)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) { MainToolbarItems() }
+            ToolbarItem(placement: .primaryAction) { HealthIndicator() }
         }
         .navigationTitle(model.project?.lastPathComponent ?? "PairVox")
         .navigationSubtitle(model.snapshot.session.map { "\($0.model) · \(model.statusLine)" } ?? model.statusLine)

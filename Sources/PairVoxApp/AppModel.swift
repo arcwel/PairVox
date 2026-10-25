@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     /// Bumped by the "Type Instead of Talking" shortcut; the control bar focuses its text field.
     @Published private(set) var focusInputTick = 0
     @Published var errorMessage: String?
+    /// An "Install Latest Build" run is in progress (from this app).
+    @Published private(set) var updateRunning = false
 
     let voice: VoiceStack
     private let store = SettingsStore()
@@ -436,7 +438,7 @@ final class AppModel: ObservableObject {
     /// Starts audio. Playback always starts so replies are spoken; capture starts only with microphone
     /// permission and a microphone. Without permission the engine's own error (a bare CoreAudio code)
     /// says nothing useful, so ask or explain first.
-    private func startAudio() {
+    func startAudio() {
         switch VoicePermissions.microphone {
         case .denied:
             let msg = "Microphone access is off for PairVox. Turn it on in System Settings → Privacy & Security → Microphone, then reopen the project."
@@ -809,6 +811,69 @@ final class AppModel: ObservableObject {
         KeychainStore.deleteAPIKey()
         hasAPIKey = false
         if settings.authKind == .apiKey { settings.authKind = .subscription }
+    }
+
+    /// The checkout this app was installed from, when it runs as `<checkout>/dist/PairVox.app` and the checkout has the
+    /// installer. Nil for any other copy (a release build in /Applications updates another way).
+    var checkoutRoot: URL? { Self.installedCheckout }
+
+    /// Worked out once: the menu is rebuilt on every redraw, and the answer cannot change while the app runs.
+    static let installedCheckout: URL? = {
+        let bundle = Bundle.main.bundleURL.standardizedFileURL
+        guard bundle.lastPathComponent == "PairVox.app", bundle.deletingLastPathComponent().lastPathComponent == "dist" else { return nil }
+        let root = bundle.deletingLastPathComponent().deletingLastPathComponent()
+        return FileManager.default.isExecutableFile(atPath: root.appendingPathComponent("scripts/pv-install.sh").path) ? root : nil
+    }()
+
+    /// One-click update for a build from a checkout: `scripts/pv-install.sh --pull` brings the branch up to date, builds
+    /// beside this app (it keeps running), keeps it as dist/PairVox.previous.app, swaps the new build in and reopens
+    /// it. It runs detached, because the swap quits this app; its output goes to ~/Library/Logs/PairVox/update.log.
+    func installLatestBuild() {
+        guard let root = checkoutRoot, !updateRunning else { return }
+        let alert = NSAlert()
+        alert.messageText = "Install the latest build?"
+        alert.informativeText = "PairVox brings this checkout's branch up to date, builds it (a few minutes, you can keep working), then quits and reopens with the new build. The current one is kept, and `scripts/pv-install.sh --rollback` puts it back."
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        try? FileManager.default.createDirectory(at: DiagnosticsExporter.logDirectory, withIntermediateDirectories: true)
+        let logFile = DiagnosticsExporter.logDirectory.appendingPathComponent("update.log").path
+        if !FileManager.default.fileExists(atPath: logFile) { FileManager.default.createFile(atPath: logFile, contents: nil) }
+        guard let out = FileHandle(forWritingAtPath: logFile) else { errorMessage = "Could not open \(logFile)."; return }
+        out.seekToEndOfFile()
+        let p = Process()
+        // nohup: the installer outlives this app, which it quits partway through. If it ends while this app is still
+        // running, it stopped before the swap (or put the old app back), and its last line says why.
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+        p.arguments = [root.appendingPathComponent("scripts/pv-install.sh").path, "--pull", "--json"]
+        p.currentDirectoryURL = root
+        p.environment = loginEnvironment
+        p.standardOutput = out
+        p.standardError = out
+        p.terminationHandler = { [weak self] process in
+            let status = process.terminationStatus
+            let detail = Self.lastUpdateDetail(logFile)
+            Task { @MainActor in
+                self?.updateRunning = false
+                if status != 0 { self?.errorMessage = "The update did not finish: \(detail ?? "see \(logFile)")" }
+            }
+        }
+        do {
+            try p.run()
+            updateRunning = true
+            log.log(.info, .app, "update.started", ["root": .string(root.lastPathComponent)])
+            errorMessage = "Building the latest version. You can keep working; PairVox will quit and reopen by itself when it is ready."
+        } catch {
+            errorMessage = "Could not start the update: \(error.localizedDescription)"
+        }
+    }
+
+    /// The `detail` of the installer's last JSON line.
+    nonisolated static func lastUpdateDetail(_ logFile: String) -> String? {
+        guard let text = try? String(contentsOfFile: logFile, encoding: .utf8),
+              let line = text.split(separator: "\n").last(where: { $0.hasPrefix("{") }),
+              let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return nil }
+        return json["detail"] as? String
     }
 
     /// Opens Terminal running `claude` so the user can sign in through Anthropic's own flow.

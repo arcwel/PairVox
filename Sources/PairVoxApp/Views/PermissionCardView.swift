@@ -47,6 +47,17 @@ struct PermissionCardView: View {
             ForEach(pending.assessment.reasons, id: \.self) { reason in
                 Label(reason, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.secondary)
             }
+            // A spoken answer that was heard but not taken says so here, instead of the request seeming to ignore it.
+            if let ignored = model.snapshot.ignoredAnswer, ignored.requestID == pending.request.requestID {
+                Label {
+                    Text("“\(ignored.heard)” didn’t count. \(ignored.explanation)")
+                } icon: {
+                    Image(systemName: "ear.trianglebadge.exclamationmark")
+                }
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .accessibilityLabel("Your answer \(ignored.heard) did not count. \(ignored.explanation)")
+            }
             HStack {
                 Text(pending.assessment.voiceApprovable ? "Say “yes”, “no”, or tell Claude what to do instead."
                                                        : "This one needs a click.")

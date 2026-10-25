@@ -79,6 +79,8 @@ public actor ConversationEngine {
     private var speechStartedAt: Date?
     private var promptHeardAt: Date?
     private var answerSpokenAt: Date?
+    /// The text of the utterance being processed, for `IgnoredAnswer`.
+    private var answerHeard = ""
     /// The last permission prompt spoken, and when it finished (nil while it plays). A spoken approval that is a piece
     /// of it, begun while it played or just after, is PairVox hearing itself (audit run 7: the end of "…Allow?").
     private var lastPromptText: String?
@@ -276,6 +278,7 @@ public actor ConversationEngine {
     private func process(_ rawText: String, allowProjectSwitch: Bool, answersPermissions: Bool = true) {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         answerSpokenAt = answersPermissions ? speechStartedAt : nil
+        answerHeard = text
         speechStartedAt = nil
         userIsSpeaking = false
         transcribing = false
@@ -323,6 +326,7 @@ public actor ConversationEngine {
         // saying them back is the answer, and PairVox's own copy of them is caught by the echo canceller and VAD.
         if let command = parsed, [.approve, .approveAlways].contains(command), isOwnPromptEcho(text) {
             log.log(.info, .policy, "voice.ownEcho", ["words": .int(VoiceCommand.normalize(text).count)])
+            noteIgnored(.ownEcho)
             speak([make("If that was you, say yes.", .notice)], record: false, force: true)
             return
         }
@@ -906,13 +910,16 @@ public actor ConversationEngine {
             if answerPrecedesPrompt(for: pending) { break }
             if pending.isStale(now: now()) {
                 log.log(.info, .policy, "permission.staleVoiceApproval", ["tool": .string(pending.request.toolName)])
+                noteIgnored(.stale)
                 speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
             } else if pending.assessment.voiceApprovable {
                 approvePending(always: command == .approveAlways)
             } else if canConfirmHighRiskByVoice(pending) {
+                noteIgnored(.highRisk)
                 speak([make("That one is high risk. Say confirm high risk to allow it, or use the button.", .notice)],
                       record: false, force: true)
             } else {
+                noteIgnored(.needsClick)   // "confirm high risk" is not available here, so a click is the only way
                 speak([make("That one needs a click. Please confirm it on screen.", .notice)], record: false, force: true)
             }
         case .catchUp(let choice):
@@ -926,6 +933,7 @@ public actor ConversationEngine {
             let clock = now()
             let eligible = waiting.filter { $0.assessment.voiceApprovable && !$0.isStale(now: clock) }
             guard !eligible.isEmpty else {
+                noteIgnored(.needsClick)
                 speak([make("None of these can be allowed by voice. Please use the buttons.", .notice)], record: false, force: true)
                 break
             }
@@ -954,6 +962,7 @@ public actor ConversationEngine {
             if answerPrecedesPrompt(for: pending) { break }
             if pending.isStale(now: now()) {
                 log.log(.info, .policy, "permission.staleVoiceApproval", ["tool": .string(pending.request.toolName)])
+                noteIgnored(.stale)
                 speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
                 break
             }
@@ -1234,6 +1243,7 @@ public actor ConversationEngine {
         cancelAdvisorWork(for: request.requestID)
         sendDecision(request, decision)
         snapshot.pendingPermission = nil
+        snapshot.ignoredAnswer = nil
         promoteNextPermission()
         recomputePhase()
     }
@@ -1287,14 +1297,25 @@ public actor ConversationEngine {
         guard let spoken = answerSpokenAt else { return false }
         if let heard = promptHeardAt, spoken >= heard { return false }
         log.log(.info, .policy, "permission.answerBeforePrompt", ["tool": .string(pending.request.toolName)])
+        noteIgnored(.beforePrompt)
         let promptOnItsWay = queueOrder.contains { queued[$0]?.kind == .prompt && !startedIDs.contains($0) }
-        if !promptOnItsWay { speak([make(permissionPrompt(for: pending), .prompt)], record: false, force: true) }
+        if !promptOnItsWay {
+            speak([make("I heard that before I asked.", .notice), make(permissionPrompt(for: pending), .prompt)], record: false, force: true)
+        }
         return true
+    }
+
+    /// Records, for the card, a spoken answer to the request on screen that was not counted.
+    private func noteIgnored(_ reason: IgnoredAnswer.Reason) {
+        guard let pending = snapshot.pendingPermission else { return }
+        snapshot.ignoredAnswer = IgnoredAnswer(requestID: pending.request.requestID, heard: answerHeard, reason: reason)
+        publish()
     }
 
     private func showPermission(_ pending: PendingPermission) {
         snapshot.grantOffer = nil   // a real request outranks the standing-access question
         snapshot.pendingPermission = pending
+        snapshot.ignoredAnswer = nil
         promptHeardAt = nil
         ackTask?.cancel()
         speak([make(permissionPrompt(for: pending), .prompt)], record: false, force: true)

@@ -6,17 +6,21 @@ import PairVoxVoice
 import SwiftUI
 
 struct SettingsView: View {
+    /// The health popover opens a tab by setting this.
+    @AppStorage("settingsTab") private var tab = SettingsTab.general.rawValue
+
     var body: some View {
-        TabView {
-            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
-            PhoneSettings().tabItem { Label("Phone", systemImage: "iphone") }
-            ProjectSettings().tabItem { Label("Project", systemImage: "folder") }
-            VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }
-            AccountSettings().tabItem { Label("Account", systemImage: "person.badge.key") }
-            PronunciationSettings().tabItem { Label("Pronunciation", systemImage: "character.bubble") }
-            ShortcutSettings().tabItem { Label("Shortcuts", systemImage: "keyboard") }
-            DiagnosticsSettings().tabItem { Label("Diagnostics", systemImage: "stethoscope") }
-            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }
+        TabView(selection: $tab) {
+            GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general.rawValue)
+            HealthSettings().tabItem { Label("Health", systemImage: "heart.text.square") }.tag(SettingsTab.health.rawValue)
+            PhoneSettings().tabItem { Label("Phone", systemImage: "iphone") }.tag(SettingsTab.phone.rawValue)
+            ProjectSettings().tabItem { Label("Project", systemImage: "folder") }.tag(SettingsTab.project.rawValue)
+            VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }.tag(SettingsTab.voice.rawValue)
+            AccountSettings().tabItem { Label("Account", systemImage: "person.badge.key") }.tag(SettingsTab.account.rawValue)
+            PronunciationSettings().tabItem { Label("Pronunciation", systemImage: "character.bubble") }.tag(SettingsTab.pronunciation.rawValue)
+            ShortcutSettings().tabItem { Label("Shortcuts", systemImage: "keyboard") }.tag(SettingsTab.shortcuts.rawValue)
+            DiagnosticsSettings().tabItem { Label("Diagnostics", systemImage: "stethoscope") }.tag(SettingsTab.diagnostics.rawValue)
+            AboutSettings().tabItem { Label("About", systemImage: "info.circle") }.tag(SettingsTab.about.rawValue)
         }
         .frame(width: 560, height: 470)
     }
