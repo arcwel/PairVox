@@ -2,6 +2,7 @@
 
 import AVFoundation
 import Speech
+import PairVoxLinkKit
 
 /// Says things on the phone, one at a time, in the order they arrive: the Mac's own voice as audio clips (the
 /// same sound as on the Mac, owner 2026-10-18: the phone's text-to-speech sounded robotic), and plain text with the
@@ -60,8 +61,9 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDe
         setSpeaking(false)
     }
 
-    /// The audio session is switched on only when there is something to say, so the app is not kept alive for nothing.
-    private func activateSession() {
+    /// The audio session is switched on only when there is something to say or hear, so the app is not kept alive
+    /// for nothing. The recognizer uses the same setup.
+    static func activateSession() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
         try? session.setActive(true)
@@ -71,7 +73,7 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDe
         guard !busy else { return }
         guard !queue.isEmpty else { setSpeaking(false); return }
         busy = true
-        activateSession()
+        Self.activateSession()
         setSpeaking(true)
         switch queue.removeFirst() {
         case .text(let text):
@@ -128,11 +130,17 @@ final class PhoneRecognizer {
     var onLevel: ((Double) -> Void)?
 
     private let recognizer = SFSpeechRecognizer()
-    private let engine = AVAudioEngine()
+    /// A new engine for every listen: one kept for the app's life keeps the input format it first saw, and a tap in
+    /// that format after the route changed (a headset in call mode) crashed the app (2026-10-25).
+    private var engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var last = ""
     private var delivered = false
+    private var startedAt = Date()
+    /// How the listen that just ended went, read by the model in `onFinal`.
+    private(set) var lastError: Error?
+    var lastListenSeconds: TimeInterval { Date().timeIntervalSince(startedAt) }
     /// Hands-free: the utterance ends after this long without new words (push-to-talk ends on release instead).
     var endAfterSilence: TimeInterval?
     private var silenceTimer: Timer?
@@ -152,9 +160,21 @@ final class PhoneRecognizer {
         req.requiresOnDeviceRecognition = true
         req.shouldReportPartialResults = true
         request = req
+        // Before the first prompt has played the session is still the default, which cannot record: the input then
+        // reads 0 Hz and a tap on it is the same crash.
+        PhoneSpeaker.activateSession()
+        engine = AVAudioEngine()
         let input = engine.inputNode
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { [weak req, weak self] buffer, _ in
+        // The tap takes the format the input hardware runs at now. The node's output format can still say 48 kHz
+        // while a headset in call mode delivers 16 kHz, and a tap in that format is the crash.
+        let format = input.inputFormat(forBus: 0)
+        guard CaptureFormat.isUsable(sampleRate: format.sampleRate, channels: format.channelCount,
+                                     hardwareSampleRate: format.sampleRate) else {
+            request = nil
+            throw NSError(domain: "PairVox", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "The microphone is not ready (the audio device just changed). Tap the microphone to try again."])
+        }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req, weak self] buffer, _ in
             req?.append(buffer)
             if let onLevel = self?.onLevel { onLevel(Self.level(of: buffer)) }
         }
@@ -162,6 +182,8 @@ final class PhoneRecognizer {
         try engine.start()
         last = ""
         delivered = false
+        lastError = nil
+        startedAt = Date()
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self else { return }
             if let result {
@@ -170,7 +192,7 @@ final class PhoneRecognizer {
                 if result.isFinal { self.finish(); return }
                 self.armSilenceTimer()
             }
-            if error != nil { self.finish() }
+            if let error { self.lastError = error; self.finish() }
         }
     }
 

@@ -1532,3 +1532,36 @@ final class RequestNoticeTests: XCTestCase {
         XCTAssertNil(RequestNotice.request(from: "something else"))
     }
 }
+
+/// 2026-10-25: the phone app crashed when its microphone tap used a 48 kHz format the engine still reported after a
+/// headset had switched the input to 16 kHz (an Objective-C exception Swift cannot catch). The phone now checks first.
+final class CaptureFormatTests: XCTestCase {
+    func testATapFormatMustMatchTheHardwareAndBeReal() {
+        XCTAssertTrue(CaptureFormat.isUsable(sampleRate: 48_000, channels: 1, hardwareSampleRate: 48_000))
+        XCTAssertTrue(CaptureFormat.isUsable(sampleRate: 16_000, channels: 1, hardwareSampleRate: 16_000))
+        XCTAssertFalse(CaptureFormat.isUsable(sampleRate: 48_000, channels: 1, hardwareSampleRate: 16_000), "the crash")
+        XCTAssertFalse(CaptureFormat.isUsable(sampleRate: 0, channels: 0, hardwareSampleRate: 0), "no input device")
+        XCTAssertFalse(CaptureFormat.isUsable(sampleRate: 48_000, channels: 0, hardwareSampleRate: 48_000))
+    }
+}
+
+/// 2026-10-25: a recognizer that failed as soon as it started made hands-free listening restart four times a second.
+final class ListenFailureGuardTests: XCTestCase {
+    func testThreeQuickFailuresInARowStopRetrying() {
+        var g = ListenFailureGuard()
+        XCTAssertFalse(g.ended(afterSeconds: 0.05, heardSomething: false, failed: true))
+        XCTAssertFalse(g.ended(afterSeconds: 0.05, heardSomething: false, failed: true))
+        XCTAssertTrue(g.ended(afterSeconds: 0.05, heardSomething: false, failed: true))
+    }
+
+    func testOrdinaryEndingsResetTheCount() {
+        var g = ListenFailureGuard()
+        _ = g.ended(afterSeconds: 0.05, heardSomething: false, failed: true)
+        _ = g.ended(afterSeconds: 0.05, heardSomething: false, failed: true)
+        XCTAssertFalse(g.ended(afterSeconds: 6, heardSomething: false, failed: true), "no speech heard after a while is normal")
+        XCTAssertEqual(g.streak, 0)
+        _ = g.ended(afterSeconds: 0.05, heardSomething: false, failed: true)
+        XCTAssertFalse(g.ended(afterSeconds: 2, heardSomething: true, failed: false), "something was said")
+        XCTAssertEqual(g.streak, 0)
+    }
+}

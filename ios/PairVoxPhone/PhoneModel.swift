@@ -69,6 +69,7 @@ final class PhoneModel: ObservableObject {
     private var pathInterfaces: [String] = []
     private let speaker = PhoneSpeaker()
     private let recognizer = PhoneRecognizer()
+    private var listenFailures = ListenFailureGuard()
     private let notifications = PhoneNotifications()
     /// Keeps the link for the grace iOS allows after the app leaves the screen, so a request that arrives then can be
     /// shown on the lock screen.
@@ -592,6 +593,14 @@ final class PhoneModel: ObservableObject {
         inputLevel = 0
         let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
         heard = ""
+        if listenFailures.ended(afterSeconds: recognizer.lastListenSeconds, heardSomething: !spoken.isEmpty,
+                                failed: recognizer.lastError != nil) {
+            listenFailures.reset()
+            muted = true   // the person unmutes to try again
+            notice = "Speech recognition is not working on this phone right now"
+                + (recognizer.lastError.map { " (\($0.localizedDescription))" } ?? "") + ". Tap the microphone to try again."
+            return
+        }
         defer { resumeHandsFree(after: 0.2) }   // keep listening for the next thing said
         guard !spoken.isEmpty else { lastHeard = nil; return }
         // Keep what was understood on screen long enough to read, then let it go.

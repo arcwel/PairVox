@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The iPhone app no longer crashes when it starts listening after the audio device changed. A Bluetooth headset switching to its 16 kHz call mode left the microphone engine reporting 48 kHz, and a tap in that format raised an exception the app could not catch (seen in the Simulator on 2026-10-25). The same crash happened when listening started before anything had played, because the audio session could not record yet. The phone now sets the session up for recording first, uses a new engine for every listen, taps in the format the hardware runs at, and reports a microphone that is not ready instead of crashing.
+- When speech recognition fails as soon as it starts (the Simulator, or a phone without its on-device speech model), hands-free listening no longer restarts four times a second. After three quick failures in a row the phone mutes and says recognition is not working. Tap the microphone to try again.
+
 ## 0.1.0-beta.2 (2026-10-25)
 
 Release notes: docs/release-notes/v0.1.0-beta.2.md. Security: docs/security/2026-10-25-audit-run-9/ and docs/security/strix/2026-10-25-beta2-gate.md.
