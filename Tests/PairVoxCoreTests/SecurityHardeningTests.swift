@@ -15,7 +15,7 @@ final class SecurityHardeningTests: XCTestCase {
         let v = try JSONValue.parse(OutboundMessage.permissionResponse(for: req, decision: .allowAlways))
         let updated = try XCTUnwrap(v["response"]?["response"]?["updatedPermissions"])
         guard case .array(let items) = updated else { return XCTFail("expected an array") }
-        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items.count, 1, "an added folder is dropped (audit run 7)")
         for item in items { XCTAssertEqual(item["destination"], "session", "nothing may outlive the session") }
         XCTAssertEqual(items[0]["rules"]?[0]?["ruleContent"], "echo pairvox-test *", "the rule itself is kept")
     }
@@ -402,5 +402,108 @@ final class AuditRun6PolicyTests: XCTestCase {
                   "typeset -x", "compgen -e", "echo ${ANTHROPIC_API_KEY}", "ls && env"] {
             XCTAssertEqual(BashRisk.classify(c, projectRoot: root).level, .high, c)
         }
+    }
+}
+
+/// Audit run 7 (2026-10-24): the Terminal login script escaped only double quotes.
+final class TerminalLoginTests: XCTestCase {
+    func testTheClaudePathIsOneShellWordInsideTheAppleScriptString() {
+        XCTAssertEqual(TerminalLogin.shellQuoted("/Users/a b/claude"), "'/Users/a b/claude'")
+        XCTAssertEqual(TerminalLogin.shellQuoted("/x/it's"), "'/x/it'\\''s'")
+        let script = TerminalLogin.appleScript(claudePath: "/Users/dev/My Tools/claude")
+        XCTAssertTrue(script.contains("do script \"'/Users/dev/My Tools/claude'\""), script)
+        let tricky = TerminalLogin.appleScript(claudePath: "/x/a\"b\\c$(id)")
+        XCTAssertTrue(tricky.contains("do script \"'/x/a\\\"b\\\\c$(id)'\""), tricky)
+        XCTAssertTrue(TerminalLogin.appleScript(claudePath: nil).contains("do script \"claude\""))
+    }
+}
+
+/// Audit run 7 (2026-10-24): deferred units from run 6.
+final class AuditRun7Tests: XCTestCase {
+    private var base: URL!
+    override func setUpWithError() throws {
+        base = FileManager.default.temporaryDirectory.appendingPathComponent("pv-run7-\(UUID().uuidString)")
+        for sub in ["project", "elsewhere"] {
+            try FileManager.default.createDirectory(at: base.appendingPathComponent(sub), withIntermediateDirectories: true)
+        }
+    }
+    override func tearDown() { try? FileManager.default.removeItem(at: base) }
+    private var project: String { FolderScope.resolved(base.appendingPathComponent("project").path) }
+    private var elsewhere: String { FolderScope.resolved(base.appendingPathComponent("elsewhere").path) }
+
+    func testADanglingLinkIsJudgedWhereItWouldWrite() throws {
+        let link = project + "/notes"
+        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: elsewhere + "/not-yet-created.txt")
+        XCTAssertEqual(FolderScope.resolved(link), elsewhere + "/not-yet-created.txt")
+        XCTAssertFalse(FolderScope.contains(folder: project, path: link))
+        let policy = PermissionPolicy(projectRoot: project, grants: [FolderGrant(path: project)])
+        let a = policy.assess(PermissionRequest(requestID: "r", toolName: "Write", input: ["file_path": .string(link)]))
+        XCTAssertEqual(a.risk, .high)
+        XCTAssertFalse(a.coveredByFolderGrant)
+        XCTAssertFalse(a.voiceApprovable)
+        // A relative link, and a loop of links, are both judged outside.
+        try FileManager.default.createSymbolicLink(atPath: project + "/rel", withDestinationPath: "../elsewhere/x.txt")
+        XCTAssertFalse(FolderScope.contains(folder: project, path: project + "/rel"))
+        try FileManager.default.createSymbolicLink(atPath: project + "/a", withDestinationPath: project + "/b")
+        try FileManager.default.createSymbolicLink(atPath: project + "/b", withDestinationPath: project + "/a")
+        XCTAssertFalse(FolderScope.contains(folder: project, path: project + "/a"))
+        // A relative dangling link inside a linked folder starts from the real folder, not the link's path.
+        try FileManager.default.createDirectory(atPath: elsewhere + "/real", withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: project + "/linked", withDestinationPath: elsewhere + "/real")
+        try FileManager.default.createSymbolicLink(atPath: elsewhere + "/real/up", withDestinationPath: "../outside.txt")
+        XCTAssertEqual(FolderScope.resolved(project + "/linked/up"), elsewhere + "/outside.txt")
+        XCTAssertFalse(FolderScope.contains(folder: project, path: project + "/linked/up"))
+        // An ordinary new file inside the project is still inside.
+        XCTAssertTrue(FolderScope.contains(folder: project, path: project + "/new.swift"))
+    }
+
+    func testNotebookEditIsJudgedByEveryPathItNames() {
+        let policy = PermissionPolicy(projectRoot: project, grants: [FolderGrant(path: project)])
+        let a = policy.assess(PermissionRequest(requestID: "r", toolName: "NotebookEdit",
+                                                input: ["file_path": .string(project + "/a.ipynb"), "notebook_path": .string(elsewhere + "/b.ipynb")]))
+        XCTAssertEqual(a.risk, .high)
+        XCTAssertFalse(a.coveredByFolderGrant)
+        XCTAssertTrue(a.summary.contains("b.ipynb"), "the card names the notebook the tool writes")
+        let inside = policy.assess(PermissionRequest(requestID: "r", toolName: "NotebookEdit", input: ["notebook_path": .string(project + "/a.ipynb")]))
+        XCTAssertTrue(inside.coveredByFolderGrant)
+    }
+
+    func testAWebFetchAddressThatCanHideItsHostIsApprovedOnScreen() {
+        let policy = PermissionPolicy(projectRoot: project)
+        func assess(_ url: String) -> PermissionAssessment {
+            policy.assess(PermissionRequest(requestID: "r", toolName: "WebFetch", input: ["url": .string(url)]))
+        }
+        for url in ["https://attacker.invalid\\@docs.invalid/x", "https://user@docs.invalid/x", "file:///etc/passwd",
+                    "https://docs.invalid/a b", "not a url"] {
+            XCTAssertFalse(assess(url).voiceApprovable, url)
+        }
+        for ok in ["https://docs.invalid/guide?x=1", "https://medium.invalid/@user/post", "https://unpkg.invalid/react@18/umd/react.js",
+                   "https://npm.invalid/package/@types/node", "https://a.invalid/?email=a@b.invalid"] {
+            XCTAssertTrue(assess(ok).voiceApprovable, ok)
+        }
+    }
+
+    func testAlwaysAllowNeverChangesTheModeOrAddsFolders() {
+        let req = PermissionRequest(requestID: "r", toolName: "Edit", input: ["file_path": "a.txt"],
+                                    suggestions: [["type": "setMode", "mode": "acceptEdits", "destination": "session"],
+                                                  ["type": "addDirectories", "directories": ["/tmp"], "destination": "session"],
+                                                  ["type": "replaceRules", "behavior": "allow", "rules": [], "destination": "session"],
+                                                  ["type": "addRules", "behavior": "deny", "rules": [], "destination": "session"],
+                                                  ["type": "addRules", "behavior": "allow", "rules": [["toolName": "Edit"]], "destination": "userSettings"]])
+        XCTAssertEqual(req.sessionSuggestions.count, 1)
+        XCTAssertEqual(req.sessionSuggestions.first?["destination"], "session")
+    }
+
+    func testRepositoryNamesThatAnswerRequestsStayOutOfTheRecognizer() throws {
+        let dir = base.appendingPathComponent("project")
+        for (i, name) in ["allow it", "confirm high risk", "AllowAll", "yes_please", "GoAhead", "ParserCore", "ForEach", "NotFound",
+                          "WaitGroup", "CancelToken", "ConfirmHighRisk", "_privateHelper"].enumerated() {
+            let sub = dir.appendingPathComponent("d\(i)")
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            try "let x = 1".write(to: sub.appendingPathComponent(name + ".swift"), atomically: true, encoding: .utf8)
+        }
+        let words = RepoVocabulary.scan(root: dir)
+        for bad in ["allow it", "confirm high risk", "AllowAll", "yes_please", "GoAhead", "ConfirmHighRisk"] { XCTAssertFalse(words.contains(bad), bad) }
+        for good in ["ParserCore", "ForEach", "NotFound", "WaitGroup", "CancelToken", "_privateHelper"] { XCTAssertTrue(words.contains(good), good) }
     }
 }

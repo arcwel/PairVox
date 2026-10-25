@@ -105,6 +105,8 @@ public final class VoiceSpeechOutput: SpeechOutput, @unchecked Sendable {
         return ids
     }
 
+    public func prepare() { synthesizer.warmUpIfIdle() }
+
     public func setRate(_ rate: Double) {
         lock.lock(); self.rate = rate; lock.unlock()
     }

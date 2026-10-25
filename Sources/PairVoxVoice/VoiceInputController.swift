@@ -84,12 +84,29 @@ public final class VoiceInputController: @unchecked Sendable {
         lock.lock(); bargeInEnabled = enabled; lock.unlock()
     }
 
+    /// The room keeps sounding for a moment after the last buffer has played, and that echo used to be judged as if
+    /// nothing were playing, so the end of "…Allow?" could start an utterance (audit run 7). The echo handling stays on
+    /// for `echoHangover` after playback ends; playback starting again cancels the wait.
     public func setPlaybackActive(_ active: Bool) {
         lock.lock()
+        playbackGeneration += 1
+        let generation = playbackGeneration
+        // The half-duplex skip follows playback exactly, so a reply right after "Allow?" is still heard; only the
+        // detector's echo allowance waits out the room.
         playbackActive = active
-        vad.playbackActive = active
+        if active { vad.playbackActive = true }
         lock.unlock()
+        guard !active else { return }
+        DispatchQueue.global().asyncAfter(deadline: .now() + Self.echoHangover) { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            if self.playbackGeneration == generation { self.vad.playbackActive = false }
+            self.lock.unlock()
+        }
     }
+
+    static let echoHangover: TimeInterval = 0.5
+    private var playbackGeneration = 0
 
     public func setVocabulary(_ words: [String]) {
         lock.lock(); vocabulary = words; lock.unlock()

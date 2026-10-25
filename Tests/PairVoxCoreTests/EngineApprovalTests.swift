@@ -50,6 +50,58 @@ final class EngineApprovalTests: XCTestCase {
         guard case .allow? = backend.responses.first?.1 else { return XCTFail("a yes begun after the prompt started approves") }
     }
 
+    // Audit run 7: the end of "…Allow?" heard back through the microphone is PairVox's own voice, not an answer.
+    func testTheTailOfThePromptHeardBackIsNotAnApproval() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(prompt.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("Allow")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "\"allow\" while the prompt plays is its own last word")
+        output.continuation.yield(.finished(prompt.id))
+        await settle()
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("yes")
+        await settle()
+        guard case .allow? = backend.responses.first?.1 else { return XCTFail("\"yes\" is never in a prompt, so it counts") }
+    }
+
+    // Review of run 7: a prompt that was cut off is not an echo source, and "confirm high risk" is never one.
+    func testAnAllowAfterACutOffPromptCounts() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(prompt.id))
+        await settle()
+        // A noise barges in on the prompt and cuts it off (which counts as its end), then nothing is said.
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.transcriptionFailed()
+        await settle(700)             // past the echo window
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit("Allow")
+        await settle()
+        guard case .allow? = backend.responses.first?.1 else { return XCTFail("the prompt was no longer sounding") }
+    }
+
+    func testAlwaysAllowWithNoNarrowRuleIsAPlainAllow() async {
+        await engine.submit("Fix it")
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "A", toolName: "Edit", input: ["file_path": .string("/Users/dev/app/a.swift")],
+                                                            suggestions: [["type": "setMode", "mode": "acceptEdits", "destination": "session"]])))
+        await settle()
+        await engine.approvePending(always: true)
+        await settle()
+        XCTAssertEqual(backend.responses.first?.1, .allow, "a mode change is never applied, so this is an allow for this request")
+    }
+
     func testTypedAnswersAreNotHeldBackByThePrompt() async {
         await engine.submit("Fix it")
         backend.emit(edit("A", "a.swift"))
@@ -81,6 +133,17 @@ final class EngineApprovalTests: XCTestCase {
         await engine.submit("yes")
         await settle()
         XCTAssertEqual(backend.responses.map(\.0), ["A"], "B's prompt had not started")
+    }
+
+    // The voice goes cold between replies (first sentence 5.0 s on 2026-10-18), so it is told to get ready as soon as
+    // a reply becomes likely: speech starts, typed text is sent, or a phone sends text.
+    func testTheVoiceIsToldToGetReadyWhenAReplyIsLikely() async {
+        await engine.userStartedSpeaking()
+        XCTAssertEqual(output.prepares, 1)
+        await engine.userStartedSpeaking(typed: true)
+        XCTAssertEqual(output.prepares, 2)
+        await engine.submitFromRemote("what changed")
+        XCTAssertEqual(output.prepares, 3)
     }
 
     func testTextFromAPairedPhoneNeverAnswersAWaitingRequest() async {

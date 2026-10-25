@@ -79,6 +79,12 @@ public actor ConversationEngine {
     private var speechStartedAt: Date?
     private var promptHeardAt: Date?
     private var answerSpokenAt: Date?
+    /// The last permission prompt spoken, and when it finished (nil while it plays). A spoken approval that is a piece
+    /// of it, begun while it played or just after, is PairVox hearing itself (audit run 7: the end of "…Allow?").
+    private var lastPromptText: String?
+    private var lastPromptID: Int?
+    private var lastPromptEndedAt: Date?
+    static let ownEchoWindow: TimeInterval = 0.6
     private var pausedRemaining: [Utterance] = []
     private var pauseToken = 0
     /// If no transcript arrives (a stuck decode), speech carries on after this long.
@@ -167,6 +173,7 @@ public actor ConversationEngine {
     /// (barge-in). Only real speech is timed against the prompt: typed text is a deliberate answer.
     public func userStartedSpeaking(typed: Bool = false) {
         speechStartedAt = typed ? nil : now()
+        output.prepare()
         log.log(.info, .engine, "user.speech.start",
                 ["bargeIn": .bool(snapshot.isSpeaking || !queueOrder.isEmpty), "phase": "\(snapshot.phase)"])
         if (snapshot.isSpeaking || !queueOrder.isEmpty), output.supportsPause {
@@ -186,7 +193,7 @@ public actor ConversationEngine {
         } else if snapshot.isSpeaking || !queueOrder.isEmpty {
             let remaining = queueOrder.compactMap { queued[$0] }
             output.stopAll()
-            queued.removeAll()
+            clearQueued()
             queueOrder.removeAll()
             interruptedRemainder = remaining
             snapshot.isSpeaking = false
@@ -226,7 +233,7 @@ public actor ConversationEngine {
         pausedBargeIn = false
         let remaining = queueOrder.compactMap { queued[$0] }
         output.stopAll()
-        queued.removeAll()
+        clearQueued()
         queueOrder.removeAll()
         interruptedRemainder = remaining + interruptedRemainder
         pausedRemaining = []
@@ -262,6 +269,7 @@ public actor ConversationEngine {
     /// answer to a waiting request: approvals from the phone arrive as explicit, ID-bound commands that the host
     /// checks first. Text said while a request waits is, as for speech, an instruction instead of it.
     public func submitFromRemote(_ rawText: String) {
+        output.prepare()
         process(rawText, allowProjectSwitch: false, answersPermissions: false)
     }
 
@@ -311,6 +319,13 @@ public actor ConversationEngine {
                 ["text": log.content(text), "command": parsed.map { "\($0)" } ?? "none",
                  "awaitingPermission": .bool(context.awaitingPermission), "claudeWorking": .bool(context.claudeIsWorking)])
         if parsed != .approveAllWaiting { approveAllArmed = nil }
+        // Only a plain yes is checked: "confirm high risk" and "allow all" are the phrases those prompts ask for, so
+        // saying them back is the answer, and PairVox's own copy of them is caught by the echo canceller and VAD.
+        if let command = parsed, [.approve, .approveAlways].contains(command), isOwnPromptEcho(text) {
+            log.log(.info, .policy, "voice.ownEcho", ["words": .int(VoiceCommand.normalize(text).count)])
+            speak([make("If that was you, say yes.", .notice)], record: false, force: true)
+            return
+        }
         if let command = parsed {
             appendEntry(.user, text, status: .done)
             perform(command)
@@ -356,7 +371,9 @@ public actor ConversationEngine {
     /// since changed, nothing is approved.
     public func approvePending(always: Bool = false, requestID: String? = nil) {
         guard let p = snapshot.pendingPermission, requestID == nil || requestID == p.request.requestID else { return }
-        respondToPermission(p.request, decision: always ? .allowAlways : .allow)
+        // "Always" applies only narrow allow rules (`sessionSuggestions`). With none left (an edit, whose suggestion
+        // is a mode change) it is an allow for this request, and is reported as one.
+        respondToPermission(p.request, decision: always && !p.request.sessionSuggestions.isEmpty ? .allowAlways : .allow)
     }
 
     public func denyPending(message: String = "The user denied this action.", requestID: String? = nil) {
@@ -787,7 +804,7 @@ public actor ConversationEngine {
         pausedBargeIn = false
         pausedRemaining = []
         output.stopAll()
-        queued.removeAll()
+        clearQueued()
         queueOrder.removeAll()
         backend?.stop()
         resetTurnState()
@@ -811,12 +828,12 @@ public actor ConversationEngine {
         switch command {
         case .stopSpeaking:
             output.stopAll()
-            queued.removeAll(); queueOrder.removeAll()
+            clearQueued(); queueOrder.removeAll()
             dropRemainder()
             turnMuted = !sendTimes.isEmpty
         case .interruptClaude:
             output.stopAll()
-            queued.removeAll(); queueOrder.removeAll()
+            clearQueued(); queueOrder.removeAll()
             dropRemainder()
             if !sendTimes.isEmpty {
                 turnMuted = true
@@ -851,7 +868,7 @@ public actor ConversationEngine {
             // Skip the current utterance, keep the rest.
             let rest = Array((interruptedRemainder.isEmpty ? queueOrder.compactMap { queued[$0] } : interruptedRemainder).dropFirst())
             output.stopAll()
-            queued.removeAll(); queueOrder.removeAll()
+            clearQueued(); queueOrder.removeAll()
             interruptedRemainder = []
             holdSpeech = false
             speak(rest.map { make($0.text, $0.kind) }, record: false)
@@ -1143,6 +1160,7 @@ public actor ConversationEngine {
             if queued[id]?.kind == .prompt, snapshot.pendingPermission != nil || snapshot.grantOffer != nil, promptHeardAt == nil {
                 promptHeardAt = now()
             }
+            if let u = queued[id], u.kind == .prompt { lastPromptText = u.text; lastPromptID = id; lastPromptEndedAt = nil }
             guard queued[id] != nil else { return }
             snapshot.isSpeaking = true
             if latency.firstSound == nil, let start = sendTimes.first { latency.firstSound = Date().timeIntervalSince(start) }
@@ -1155,6 +1173,7 @@ public actor ConversationEngine {
             }
         case .finished(let id), .failed(let id, _):
             startedIDs.remove(id)
+            if id == lastPromptID, lastPromptEndedAt == nil { lastPromptEndedAt = now() }
             if case .failed(_, let why) = event {
                 log.log(.error, .tts, "utterance.failed", ["id": .int(id), "reason": .string(why)])
             } else {
@@ -1239,6 +1258,27 @@ public actor ConversationEngine {
             case .deny: return "Denied."
             }
         }(), status: .done)
+    }
+
+    /// Empties the speech queue. A prompt cut off here (a barge-in, which its own echo can cause, or a stop) ends now,
+    /// for the echo check: its sound stops at this moment.
+    private func clearQueued() {
+        if let id = lastPromptID, lastPromptEndedAt == nil, queued[id] != nil { lastPromptEndedAt = now() }
+        queued.removeAll()
+    }
+
+    /// A spoken utterance whose words are a run of the last prompt's words, begun while that prompt played or within
+    /// `ownEchoWindow` of its end. "Yes" is never one: no prompt says it.
+    private func isOwnPromptEcho(_ text: String) -> Bool {
+        guard let spoken = answerSpokenAt, let prompt = lastPromptText, let promptID = lastPromptID else { return false }
+        if let ended = lastPromptEndedAt {
+            if spoken.timeIntervalSince(ended) > Self.ownEchoWindow { return false }
+        } else if queued[promptID] == nil {
+            return false   // no longer queued and never reported ending: nothing is sounding
+        }
+        let words = VoiceCommand.normalize(text), said = VoiceCommand.normalize(prompt)
+        guard !words.isEmpty, words.count <= said.count else { return false }
+        return (0...(said.count - words.count)).contains { Array(said[$0..<($0 + words.count)]) == words }
     }
 
     /// True (and handled) when a spoken answer was begun before the waiting request's prompt started playing: it was

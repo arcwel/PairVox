@@ -15,10 +15,13 @@ public protocol SpeechSynthesizing: AnyObject, Sendable {
     /// The plain system voice, when this synthesizer has one to fall back on (used when a neural voice keeps
     /// producing corrupt audio for a sentence). Nil if there is none.
     func synthesizeWithSystemVoice(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer?
+    /// Renders a throwaway word if the voice has been idle long enough to have gone cold. No-op by default.
+    func warmUpIfIdle()
 }
 
 public extension SpeechSynthesizing {
     func synthesizeWithSystemVoice(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer? { nil }
+    func warmUpIfIdle() {}
 }
 
 /// Recovery for a sentence the voice renders as noise: two shorter pieces, joined.
@@ -86,6 +89,13 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
     private var tts: KokoroTTS?
     private var voices: [String: MLXArray] = [:]
     private var loadError: String?
+    /// When the voice last rendered anything, and whether a warm-up is queued. On 2026-10-18 the first sentence after a
+    /// quiet spell took 5.0 s for 12 characters while later ones ran at 0.1 to 0.5 times real time: the model goes
+    /// cold between replies. A one-word render queued when the user starts talking is done before the reply arrives.
+    private var lastRender = Date()
+    private var warming = false
+    /// Idle time after which the next reply is expected to be slow.
+    public var coldAfter: TimeInterval = 20
 
     public init(voice: String) {
         self._voice = voice
@@ -131,6 +141,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
                 self.tts = engine
                 self.voices = loaded
                 self.loadError = nil
+                self.lastRender = Date()
                 self.lock.unlock()
                 cont.resume()
             }
@@ -139,6 +150,25 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
 
     public func synthesize(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer {
         try await synthesize(text, voice: voice, rate: rate)
+    }
+
+    public func warmUpIfIdle() {
+        let job: (KokoroTTS, MLXArray, Double)? = lock.withLock {
+            guard !warming, let tts, let style = voices[_voice + ".npy"] ?? voices.values.first else { return nil }
+            let idle = Date().timeIntervalSince(lastRender)
+            guard idle >= coldAfter else { return nil }
+            warming = true
+            return (tts, style, idle)
+        }
+        guard let (engine, style, idle) = job else { return }
+        let language: Language = voice.hasPrefix("b") ? .enGB : .enUS
+        queue.async {
+            let start = Date()
+            _ = try? engine.generateAudio(voice: style, language: language, text: "Okay.")
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            self.lock.withLock { self.warming = false; self.lastRender = Date() }
+            DiagnosticLog.shared.log(.info, .tts, "kokoro.warmUp", ["ms": .int(ms), "idleS": .int(Int(idle))])
+        }
     }
 
     /// Speaks with a specific voicepack without changing the selected voice (used by previews).
@@ -152,6 +182,7 @@ public final class KokoroSynthesizer: SpeechSynthesizing, @unchecked Sendable {
                 do {
                     let (audio, _) = try engine.generateAudio(voice: style, language: language, text: text,
                                                               speed: Float(rate))
+                    self.lock.withLock { self.lastRender = Date() }
                     cont.resume(returning: audio)
                 } catch {
                     cont.resume(throwing: error)
@@ -320,6 +351,10 @@ public final class FallbackSynthesizer: SpeechSynthesizing, @unchecked Sendable 
 
     public func synthesizeWithSystemVoice(_ text: String, rate: Double) async throws -> AVAudioPCMBuffer? {
         try await system.synthesize(text, rate: rate)
+    }
+
+    public func warmUpIfIdle() {
+        if choice != .system, kokoro.isReady { kokoro.warmUpIfIdle() }
     }
 }
 

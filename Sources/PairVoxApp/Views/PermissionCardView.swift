@@ -16,11 +16,7 @@ struct PermissionCardView: View {
         }
     }
 
-    private var offersAlwaysAllow: Bool {
-        if pending.request.suppressAlwaysAllow { return false }
-        if case .array(let items)? = pending.request.suggestions { return !items.isEmpty }
-        return false
-    }
+    private var offersAlwaysAllow: Bool { !pending.request.sessionSuggestions.isEmpty }
 
     var body: some View {
         let _ = UITrace.tick("PermissionCard.body")

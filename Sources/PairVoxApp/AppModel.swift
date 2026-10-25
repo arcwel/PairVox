@@ -813,8 +813,7 @@ final class AppModel: ObservableObject {
 
     /// Opens Terminal running `claude` so the user can sign in through Anthropic's own flow.
     func openTerminalForLogin() {
-        let command = (setup.claudePath ?? "claude").replacingOccurrences(of: "\"", with: "\\\"")
-        let script = "tell application \"Terminal\" to do script \"\(command)\"\ntell application \"Terminal\" to activate"
+        let script = TerminalLogin.appleScript(claudePath: setup.claudePath)
         var error: NSDictionary?
         NSAppleScript(source: script)?.executeAndReturnError(&error)
         if error != nil, let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {

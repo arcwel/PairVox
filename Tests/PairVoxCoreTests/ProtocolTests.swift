@@ -128,8 +128,11 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(allow["response"]?["response"]?["updatedInput"]?["file_path"], "a.txt")
         XCTAssertNil(allow["response"]?["response"]?["updatedPermissions"])
 
+        // A mode change would let every later edit skip PairVox's risk check, so "always" is a plain allow here.
         let always = try JSONValue.parse(OutboundMessage.permissionResponse(for: req, decision: .allowAlways))
-        XCTAssertEqual(always["response"]?["response"]?["updatedPermissions"]?[0]?["mode"], "acceptEdits")
+        XCTAssertEqual(always["response"]?["response"]?["behavior"], "allow")
+        XCTAssertNil(always["response"]?["response"]?["updatedPermissions"])
+        XCTAssertTrue(req.sessionSuggestions.isEmpty)
 
         let deny = try JSONValue.parse(OutboundMessage.permissionResponse(for: req, decision: .deny(message: "no", interrupt: true)))
         XCTAssertEqual(deny["response"]?["response"]?["behavior"], "deny")
@@ -151,6 +154,57 @@ final class ProtocolTests: XCTestCase {
         let lines = b.append(Data("1}\r\n{\"b\":2}\n{\"c\"".utf8))
         XCTAssertEqual(lines.map { String(decoding: $0, as: UTF8.self) }, ["{\"a\":1}", "{\"b\":2}"])
         XCTAssertEqual(b.flush().map { String(decoding: $0, as: UTF8.self) }, "{\"c\"")
+    }
+
+    // Backlog 4.8, audit run 7: each byte scanned once, an oversized line dropped through to its newline, deep JSON refused.
+    func testLineBufferIsLinearAndDropsOversizedLinesWhole() {
+        var b = LineBuffer(maxLineBytes: 16)
+        let many = String(repeating: "{\"k\":1}\n", count: 50_000)
+        let started = Date()
+        XCTAssertEqual(b.append(Data(many.utf8)).count, 50_000)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2, "50,000 short lines in one chunk")
+
+        // Oversized in one chunk.
+        XCTAssertEqual(b.append(Data("\(String(repeating: "x", count: 40))\n{\"ok\":1}\n".utf8)).map { String(decoding: $0, as: UTF8.self) }, ["{\"ok\":1}"])
+        // Oversized across chunks: its tail is not read as a new line.
+        XCTAssertEqual(b.append(Data(String(repeating: "y", count: 20).utf8)), [])
+        XCTAssertEqual(b.append(Data(String(repeating: "y", count: 20).utf8)), [])
+        XCTAssertEqual(b.append(Data("yy\"}\n{\"next\":2}\n".utf8)).map { String(decoding: $0, as: UTF8.self) }, ["{\"next\":2}"])
+        XCTAssertEqual(b.droppedLines, 2)
+        XCTAssertNil(b.flush())
+    }
+
+    func testLineBufferKeepsACRLFSplitAcrossChunksAndALineAfterAnOversizedOne() {
+        var b = LineBuffer(maxLineBytes: 16)
+        XCTAssertEqual(b.append(Data("{\"a\":1}\r".utf8)), [])
+        XCTAssertEqual(b.append(Data("\n".utf8)).map { String(decoding: $0, as: UTF8.self) }, ["{\"a\":1}"])
+        let mixed = String(repeating: "z", count: 30) + "\n{\"b\":2}\n"
+        XCTAssertEqual(b.append(Data(mixed.utf8)).map { String(decoding: $0, as: UTF8.self) }, ["{\"b\":2}"])
+    }
+
+    func testTheSpeechParserGivesTheSameResultForLongLines() {
+        // A line longer than the undecided limit is classified at its newline, with the same result as before.
+        let row = "| " + String(repeating: "cell ", count: 40) + "|\n"
+        var p = MarkdownSpeechParser()
+        let started = Date()
+        _ = p.feed("| " + String(repeating: "x", count: 200_000))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3, "a 200,000-character table row")
+        var a = MarkdownSpeechParser(), whole = MarkdownSpeechParser()
+        func flat(_ pieces: [SpeechPiece]) -> String {
+            pieces.map { if case .text(let t) = $0 { return t } else { return "|\($0)|" } }.joined()
+        }
+        let streamed = flat(row.map { a.feed(String($0)) }.flatMap { $0 } + a.finish())
+        let once = flat(whole.feed(row) + whole.finish())
+        XCTAssertEqual(streamed, once)
+    }
+
+    func testDeeplyNestedJSONIsRefusedAndStringsDoNotCount() throws {
+        let deep = String(repeating: "[", count: 5_000) + String(repeating: "]", count: 5_000)
+        XCTAssertThrowsError(try JSONValue.parse(deep))
+        let ok = String(repeating: "[", count: JSONValue.maxDepth) + String(repeating: "]", count: JSONValue.maxDepth)
+        XCTAssertNoThrow(try JSONValue.parse(ok))
+        let text = try JSONValue.parse("{\"s\":\"" + String(repeating: "[{", count: 500) + "\\\"\"}")
+        XCTAssertEqual(text["s"]?.stringValue?.count, 1001)
     }
 
     func testJSONValueRoundTripKeepsIntegers() throws {

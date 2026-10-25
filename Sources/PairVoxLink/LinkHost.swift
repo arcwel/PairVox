@@ -446,7 +446,13 @@ public actor LinkHost {
         let key = key(projectID, requestID)
         guard let shown = c.presented[key] else { return "That request has not been shown on this phone yet." }
         let age = clock().timeIntervalSince(firstSeen[key] ?? shown)
-        if method == .tap { return nil }   // a deliberate tap is the click: the phone asked for Face ID, Touch ID or the passcode first
+        if method == .tap {
+            // A deliberate tap is the click: the phone asked for Face ID, Touch ID or the passcode first. A phone with
+            // none of those set up says so, and a high-risk request then waits for the Mac (audit run 7). The claim is
+            // the phone's own; this keeps an ordinary phone honest, not a modified one (backlog 3.3).
+            if request.risk == "high", auth == .none { return "This phone has no passcode, so a high-risk request is approved on the Mac." }
+            return nil
+        }
         // Voice from here on.
         if !request.voiceApprovable {
             // High risk, or too long to read out: only the spoken phrase, only if the Mac has that switched on, and

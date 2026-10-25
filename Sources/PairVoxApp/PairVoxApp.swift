@@ -68,7 +68,7 @@ struct PairVoxApp: App {
                 // Active only while Claude is asking. High-risk requests need a click on the card.
                 Button("Allow") { model.approve() }.shortcut(.allow).disabled(!model.canApproveWithKeyboard)
                 Button("Always Allow This Session") { model.approve(always: true) }.shortcut(.allowAlways)
-                    .disabled(!model.canApproveWithKeyboard)
+                    .disabled(!model.canApproveWithKeyboard || (model.snapshot.pendingPermission?.request.sessionSuggestions.isEmpty ?? true))
                 Button("Deny") { model.deny() }.shortcut(.deny).disabled(model.snapshot.pendingPermission == nil)
             }
             CommandGroup(after: .windowArrangement) {

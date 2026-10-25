@@ -22,9 +22,13 @@ public protocol SpeechOutput: AnyObject, Sendable {
     /// Removes utterances that are queued but have not started playing. Returns the ids that were removed; one that is
     /// already playing stays. An output that cannot do this returns nothing and the engine leaves the queue alone.
     @discardableResult func cancelQueued(_ ids: [Int]) -> [Int]
+    /// A reply is probably on its way (the user started talking, or a phone sent text): get the voice ready so the
+    /// first sentence is not slow. Cheap when nothing needs doing.
+    func prepare()
 }
 
 public extension SpeechOutput {
+    func prepare() {}
     var supportsPause: Bool { false }
     func pause() {}
     func resume() {}

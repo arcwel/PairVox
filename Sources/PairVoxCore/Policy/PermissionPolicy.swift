@@ -95,21 +95,36 @@ public struct PermissionPolicy: Sendable {
             risk = .medium
             let url = r.input["url"]?.stringValue ?? ""
             summary = "Fetch \(url)"
-            let host = URL(string: url)?.host ?? url
+            let parsed = URL(string: url)
+            let host = parsed?.host ?? url
             spoken = "Claude wants to fetch a page from \(pronunciation.speak(host)). Allow?"
+            // URL parsers disagree on a backslash, an "@" or spaces (Foundation can read the host after the "@", a
+            // browser-style parser the one before it), so the spoken host may not be where it goes (audit run 7).
+            // The "@" test looks only at the authority: "/@user/post" and "react@18" in a path are ordinary.
+            let afterScheme = url.range(of: "//").map { url[$0.upperBound...] } ?? Substring(url)
+            let authority = afterScheme.prefix { !"/?#".contains($0) }
+            let plain = ["http", "https"].contains(parsed?.scheme?.lowercased() ?? "") && parsed?.host != nil
+                && parsed?.user == nil && !url.contains("\\") && !authority.contains("@") && !url.contains(where: \.isWhitespace)
+            if !plain {
+                screenOnly = true
+                screenReason = "The address has a part that can hide where it goes. Check it on screen."
+            }
 
         case let t where PermissionPolicy.fileWriteTools.contains(t):
-            let path = r.input["file_path"]?.stringValue ?? r.input["notebook_path"]?.stringValue ?? r.blockedPath ?? ""
+            // Every path the request names is judged, the tool's own field first: NotebookEdit writes notebook_path,
+            // and a file_path beside it must not stand in for it (audit run 7).
+            let targets = PermissionPolicy.writeTargets(r)
+            let path = targets.first ?? r.blockedPath ?? ""
             let verb = t == "Write" ? "write" : "edit"
             summary = "\(verb.capitalized) \(path)"
             spoken = "Claude wants to \(verb) \(spokenFile(path)). Allow?"
-            if isInsideProject(path) {
+            if !targets.isEmpty ? targets.allSatisfy(isInsideProject) : isInsideProject(path) {
                 risk = .medium
             } else {
                 risk = .high
                 reasons.append("The file is outside the project folder.")
             }
-            if PermissionPolicy.isSensitivePath(path) {
+            if PermissionPolicy.isSensitivePath(path) || targets.contains(where: PermissionPolicy.isSensitivePath) {
                 risk = .high
                 reasons.append("The file looks sensitive (credentials, keys, shell or git config).")
             }
@@ -214,6 +229,13 @@ public struct PermissionPolicy: Sendable {
             out.append(String(pattern[..<cut]))
         }
         return out
+    }
+
+    /// The paths a file-write tool names, the one the tool writes first: `notebook_path` for NotebookEdit, else
+    /// `file_path`. Both are returned when both are present.
+    static func writeTargets(_ r: PermissionRequest) -> [String] {
+        let keys = r.toolName == "NotebookEdit" ? ["notebook_path", "file_path"] : ["file_path", "notebook_path"]
+        return keys.compactMap { r.input[$0]?.stringValue }.filter { !$0.isEmpty }
     }
 
     /// A short `key: value` list of a tool's arguments for the permission card, longest values cut.

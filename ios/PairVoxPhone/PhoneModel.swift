@@ -69,6 +69,16 @@ final class PhoneModel: ObservableObject {
     private var pathInterfaces: [String] = []
     private let speaker = PhoneSpeaker()
     private let recognizer = PhoneRecognizer()
+    private let notifications = PhoneNotifications()
+    /// Keeps the link for the grace iOS allows after the app leaves the screen, so a request that arrives then can be
+    /// shown on the lock screen.
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    /// What the phone last said aloud and when it stopped. The phone has no echo canceller, so a short utterance heard
+    /// just after it spoke that is a piece of what it said is its own voice, not an answer (audit run 7).
+    private var lastSaidText = ""
+    /// Set while the phone is saying a request prompt; when it stops, `promptEndedAt` is when.
+    private var sayingPrompt = false
+    private var promptEndedAt = Date.distantPast
     private var lastSpokenRequest: String?
 
     /// How long the Mac may be quiet before a link is taken as dead when the app comes back to the front. A healthy
@@ -86,11 +96,17 @@ final class PhoneModel: ObservableObject {
                 guard let self else { return }
                 self.phoneSpeaking = speaking
                 if speaking { if self.listening { self.recognizer.cancel(); self.listening = false } }
-                else { self.resumeHandsFree(after: 0.3) }
+                else {
+                    if self.sayingPrompt { self.sayingPrompt = false; self.promptEndedAt = Date() }
+                    self.resumeHandsFree(after: 0.6)
+                }
             }
         }
         watchNetwork()
         refreshPaired()
+        notifications.onAnswer = { [weak self] requestID, projectID, allow in
+            await self?.answerFromNotification(requestID: requestID, projectID: projectID, allow: allow)
+        }
     }
 
     var credentials: PhoneCredentials? { store.load() }
@@ -137,6 +153,7 @@ final class PhoneModel: ObservableObject {
             }
             failureDetail = nil
             isPaired = true
+            notifications.requestPermissionIfNeeded()
             connect()
         } catch {
             await transport.close()
@@ -318,6 +335,9 @@ final class PhoneModel: ObservableObject {
     func becameActive() {
         refreshPaired()      // a launch while locked could not read the key; the phone is unlocked now
         appActive = true
+        endBackgroundGrace()
+        notifications.withdrawAll()   // the card is on screen now
+        if isPaired { notifications.requestPermissionIfNeeded() }
         nudge()
         resumeHandsFree(after: 0.5)
     }
@@ -326,6 +346,56 @@ final class PhoneModel: ObservableObject {
     func wentToBackground() {
         appActive = false
         recognizer.cancel(); listening = false
+        // The link stays up for as long as iOS lets the app run, so a request in that time reaches the lock screen.
+        if backgroundTask == .invalid {
+            backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "app.pairvox.link") { [weak self] in
+                Task { @MainActor in self?.endBackgroundGrace() }
+            }
+        }
+    }
+
+    private func endBackgroundGrace() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+    }
+
+    /// Allow or Deny pressed on a lock-screen notification (the phone was unlocked to do it). The link may have
+    /// dropped meanwhile, so reconnect and wait up to ten seconds for the Mac to confirm the request still waits.
+    func answerFromNotification(requestID: String, projectID: String?, allow: Bool) async {
+        var task = UIBackgroundTaskIdentifier.invalid
+        task = UIApplication.shared.beginBackgroundTask(withName: "app.pairvox.answer") {
+            UIApplication.shared.endBackgroundTask(task); task = .invalid
+        }
+        defer { if task != .invalid { UIApplication.shared.endBackgroundTask(task) } }
+        nudge()
+        let deadline = Date().addingTimeInterval(10)
+        var waiting: LinkRequest?
+        while Date() < deadline {
+            if isLive, let s = snapshot {
+                waiting = ([s.request].compactMap { $0 } + s.others).first {
+                    $0.requestID == requestID && ($0.projectID == projectID || projectID == nil)
+                }
+                if waiting != nil { break }
+                if s.request?.requestID != requestID, !s.others.contains(where: { $0.requestID == requestID }) { break }
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        guard let request = waiting, stillWaiting(request) else {
+            notice = "That request is no longer waiting."
+            return
+        }
+        if allow {
+            // The notification only offers Allow for a request that is not high risk; the Mac checks again.
+            guard request.risk != "high", !request.truncated, !request.needsScreen else {
+                notice = "This one needs a look first. Open it in PairVox to approve."
+                return
+            }
+            send(.approve(requestID: request.requestID, method: .tap, auth: .passcode, projectID: request.projectID))
+        } else {
+            send(.deny(requestID: request.requestID, projectID: request.projectID))
+        }
+        try? await Task.sleep(nanoseconds: 1_000_000_000)   // let the frame go out before iOS suspends the app
     }
 
     private func nudge() {
@@ -357,6 +427,8 @@ final class PhoneModel: ObservableObject {
         switch message {
         case .snapshot(let s):
             let isNew = s.request?.requestID != snapshot?.request?.requestID
+            if isNew, let old = snapshot?.request { notifications.withdraw(requestID: old.requestID, projectID: old.projectID) }
+            if let r = s.request, isNew, !appActive { notifications.post(RequestNotice.make(for: r, project: s.project)) }
             snapshot = s
             let firstState = !hasFreshSnapshot
             hasFreshSnapshot = true
@@ -367,7 +439,10 @@ final class PhoneModel: ObservableObject {
                 if r.risk == "high" { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
                 else { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
                 // Spoken even while listening: listening pauses while the phone talks, then resumes for the answer.
-                speaker.say(r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen.")
+                let prompt = r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen."
+                lastSaidText = prompt
+                sayingPrompt = true
+                speaker.say(prompt)
             }
         case .speak(let text): speaker.say(text)
         case .speakAudio(let format, let data, let text):
@@ -401,6 +476,8 @@ final class PhoneModel: ObservableObject {
         Task {
             let auth = await Self.authenticate(reason: request.risk == "high" ? "Allow a high-risk action" : "Allow this action")
             guard let auth else { return }
+            // Without a passcode there is nothing to check, so a high-risk request is left for the Mac (audit run 7).
+            if auth == .none, request.risk == "high" { notice = "This phone has no passcode. Approve high-risk requests on the Mac."; return }
             // Face ID takes seconds: the link may have dropped or the request been answered on the Mac meanwhile.
             guard stillWaiting(request) else { notice = "That request is no longer waiting."; return }
             send(.approve(requestID: request.requestID, method: .tap, auth: auth, projectID: request.projectID))
@@ -439,6 +516,16 @@ final class PhoneModel: ObservableObject {
             default: return .passcode
             }
         } catch { return nil }
+    }
+
+    /// True when every word of `heard` appears, in order and together, in `said` ("allow" after "…Allow?").
+    static func isOwnEcho(_ heard: String, of said: String) -> Bool {
+        func words(_ s: String) -> [String] {
+            s.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" }).map(String.init)
+        }
+        let h = words(heard), w = words(said)
+        guard !h.isEmpty, h.count <= w.count else { return false }
+        return (0...(w.count - h.count)).contains { Array(w[$0..<($0 + h.count)]) == h }
     }
 
     // MARK: Voice
@@ -506,6 +593,13 @@ final class PhoneModel: ObservableObject {
             self?.lastHeard = nil
         }
         let words = spoken.lowercased().split(separator: " ").map(String.init)
+        // Measured when the transcript arrives: an echo is transcribed within about a second of the prompt ending, a
+        // reply said after listening resumed (0.6 s) arrives later.
+        if snapshot?.request != nil, Self.isOwnEcho(spoken, of: lastSaidText), Date().timeIntervalSince(promptEndedAt) < 1.2 {
+            // Could be the phone hearing itself; "yes" never is, since no prompt says it.
+            notice = "Say yes, or tap Allow."
+            return
+        }
         // The deliberate phrase for a request a plain yes may not approve. The Mac must have the switch on, and the
         // phone asks for Face ID, Touch ID or the passcode as the second confirmation.
         if let request = snapshot?.request, !request.voiceApprovable, spoken.lowercased().contains("confirm high risk") {

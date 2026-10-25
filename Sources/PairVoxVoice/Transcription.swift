@@ -79,7 +79,8 @@ public final class WhisperKitTranscriber: UtteranceTranscriber, @unchecked Senda
             let prompt = " " + vocabulary.prefix(40).joined(separator: ", ")
             let limit = tokenizer.specialTokens.specialTokenBegin
             let tokens = tokenizer.encode(text: prompt).filter { $0 < limit }
-            if !tokens.isEmpty { options.promptTokens = Array(tokens.suffix(120)) }
+            // The terms are in rank order, so keep the start: `suffix` kept the least frequent ones (audit run 7).
+            if !tokens.isEmpty { options.promptTokens = Array(tokens.prefix(120)) }
         }
         await gate.enter()
         do {

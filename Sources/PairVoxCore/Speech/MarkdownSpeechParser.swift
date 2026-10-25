@@ -128,8 +128,14 @@ public struct MarkdownSpeechParser: Sendable {
             return
         }
         lineStartBuffer.append(ch)
+        // Every construct is told apart within its first few characters. A line still undecided after that (a table
+        // row, a long run of dashes, a number) is decided at its newline, as a short line is: deciding again on every
+        // character copied the whole line each time, quadratic in its length, on the engine actor (audit run 7).
+        guard lineStartBuffer.utf8.count <= Self.maxUndecided else { return }   // utf8.count is O(1); count is not
         decide(final: false, line: lineStartBuffer)
     }
+
+    static let maxUndecided = 64
 
     /// Classifies the current line from its first characters.
     private mutating func decide(final: Bool, line: String) {

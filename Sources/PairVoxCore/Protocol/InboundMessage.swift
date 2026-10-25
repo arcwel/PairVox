@@ -393,3 +393,17 @@ public struct RateLimitInfo: Sendable, Equatable {
         sevenDayUtilization = j["unifiedWindows"]?["seven_day"]?["utilization"]?.doubleValue
     }
 }
+
+extension PermissionRequest {
+    /// Claude Code's "don't ask again" suggestions that "Always allow" may apply: allow rules only, each scoped to the
+    /// session. Mode changes, added folders and rule replacements or removals are dropped, since each would widen what
+    /// runs without PairVox seeing it. Empty when nothing narrow is left, and then "Always allow" is not offered.
+    public var sessionSuggestions: [JSONValue] {
+        guard !suppressAlwaysAllow, case .array(let items)? = suggestions else { return [] }
+        return items.compactMap {
+            guard case .object(var o) = $0, o["type"]?.stringValue == "addRules", o["behavior"]?.stringValue == "allow" else { return nil }
+            o["destination"] = "session"
+            return .object(o)
+        }
+    }
+}

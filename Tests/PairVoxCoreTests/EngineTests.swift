@@ -74,6 +74,9 @@ final class FakeOutput: SpeechOutput, @unchecked Sendable {
     var queue: [Utterance] { lock.lock(); defer { lock.unlock() }; return _queue }
     var played: [Utterance] { lock.lock(); defer { lock.unlock() }; return _played }
     var stops: Int { lock.lock(); defer { lock.unlock() }; return _stops }
+    private var _prepares = 0
+    var prepares: Int { lock.lock(); defer { lock.unlock() }; return _prepares }
+    func prepare() { lock.lock(); _prepares += 1; lock.unlock() }
     var rate: Double { lock.lock(); defer { lock.unlock() }; return _rate }
     var allTexts: [String] { (played + queue).map(\.text) }
 

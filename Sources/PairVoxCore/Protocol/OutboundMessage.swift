@@ -38,16 +38,12 @@ public enum OutboundMessage {
             payload = ["behavior": "allow", "updatedInput": request.input]
         case .allowAlways:
             var p: [String: JSONValue] = ["behavior": "allow", "updatedInput": request.input]
-            if let s = request.suggestions, case .array(let items) = s, !items.isEmpty, !request.suppressAlwaysAllow {
-                // "Don't ask again" is promised for this session only, so every suggestion is applied to the
-                // session. A suggestion that targets a settings file would otherwise outlive it unseen.
-                let scoped: [JSONValue] = items.compactMap {
-                    guard case .object(var o) = $0 else { return nil }
-                    o["destination"] = "session"
-                    return .object(o)
-                }
-                if !scoped.isEmpty { p["updatedPermissions"] = .array(scoped) }
-            }
+            // "Don't ask again" is promised for this session only, so every suggestion is applied to the session (one
+            // that targets a settings file would otherwise outlive it unseen), and only rules for this kind of request
+            // are kept: a mode change (`acceptEdits`) or an added folder would stop later requests reaching PairVox's
+            // risk check at all (audit run 7).
+            let scoped = request.sessionSuggestions
+            if !scoped.isEmpty { p["updatedPermissions"] = .array(scoped) }
             payload = .object(p)
         case .deny(let message, let interrupt):
             payload = ["behavior": "deny", "message": .string(message), "interrupt": .bool(interrupt)]

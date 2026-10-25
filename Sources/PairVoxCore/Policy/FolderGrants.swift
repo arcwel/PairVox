@@ -24,8 +24,17 @@ public struct FolderGrant: Codable, Sendable, Equatable, Identifiable {
 /// the folder that points elsewhere does not carry the grant with it.
 public enum FolderScope {
     /// `path` made absolute against `base`, `..` removed, and every existing part of it symlink-resolved.
-    /// Works for files that do not exist yet (a new file in an existing folder).
+    /// Works for files that do not exist yet (a new file in an existing folder). A symlink whose target does not exist
+    /// yet is followed too: a write through it creates the target, so that is where the path is judged (audit run 7: a
+    /// dangling link committed in a repository was rated as a new file inside the project).
     public static func resolved(_ path: String, relativeTo base: String? = nil) -> String {
+        resolved(path, relativeTo: base, links: 0)
+    }
+
+    /// Where a chain of links too long to follow is judged: inside no folder, so nothing covers it.
+    static let unresolvable = "/dev/null/pairvox-unresolvable-link"
+
+    private static func resolved(_ path: String, relativeTo base: String?, links: Int) -> String {
         let expanded = (path as NSString).expandingTildeInPath
         let absolute = expanded.hasPrefix("/") ? expanded : ((base ?? "/") as NSString).appendingPathComponent(expanded)
         let standard = (absolute as NSString).standardizingPath
@@ -33,6 +42,15 @@ public enum FolderScope {
         var existing = standard
         var tail: [String] = []
         while existing != "/", !fm.fileExists(atPath: existing) {
+            // fileExists follows links, so a dangling link looks missing; destinationOfSymbolicLink does not.
+            if let destination = try? fm.destinationOfSymbolicLink(atPath: existing) {
+                guard links < 32 else { return unresolvable }
+                // The link's own folder may itself be reached through a link: a relative target starts from the real one.
+                let parent = resolved((existing as NSString).deletingLastPathComponent, relativeTo: nil, links: links + 1)
+                var target = destination.hasPrefix("/") ? destination : (parent as NSString).appendingPathComponent(destination)
+                for part in tail { target = (target as NSString).appendingPathComponent(part) }
+                return resolved(target, relativeTo: nil, links: links + 1)
+            }
             tail.insert((existing as NSString).lastPathComponent, at: 0)
             existing = (existing as NSString).deletingLastPathComponent
         }
@@ -50,9 +68,9 @@ public enum FolderScope {
     /// The grant that covers a file edit, if any.
     public static func editGrant(for request: PermissionRequest, in grants: [FolderGrant], projectRoot: String?) -> FolderGrant? {
         guard PermissionPolicy.fileWriteTools.contains(request.toolName) else { return nil }
-        let path = request.input["file_path"]?.stringValue ?? request.input["notebook_path"]?.stringValue ?? ""
-        guard !path.isEmpty else { return nil }
-        return grants.first { contains(folder: $0.path, path: path, relativeTo: projectRoot) }
+        let paths = PermissionPolicy.writeTargets(request)
+        guard !paths.isEmpty else { return nil }
+        return grants.first { grant in paths.allSatisfy { contains(folder: grant.path, path: $0, relativeTo: projectRoot) } }
     }
 
     /// Reasons (from `BashRisk`) that mean a command reaches beyond its own folder or runs code PairVox cannot read.

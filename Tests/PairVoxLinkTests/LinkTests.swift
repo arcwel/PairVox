@@ -238,13 +238,15 @@ final class LinkTests: XCTestCase {
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1"])
 
-        // High risk needs a deliberate tap: Face ID, Touch ID, the passcode or a plain tap all count, a spoken yes never does.
+        // High risk needs a deliberate tap with the phone's own check (Face ID, Touch ID or the passcode); a spoken yes
+        // never counts, and since audit run 7 neither does a tap from a phone with no passcode set.
         await host.publish(snapshot(risk: "high", voice: false, id: "R3"))
         _ = try await nextSnapshot(client)
         try await client.send(.approve(requestID: "R3", method: .voice, auth: .faceID))
+        try await client.send(.approve(requestID: "R3", method: .tap, auth: .none))
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1"])
-        try await client.send(.approve(requestID: "R3", method: .tap, auth: .none))
+        try await client.send(.approve(requestID: "R3", method: .tap, auth: .passcode))
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1", "approve:R3"])
 
@@ -1110,11 +1112,12 @@ final class CrossProjectPhoneTests: XCTestCase {
     func testHighRiskByVoiceNeedsTheMacSwitchAndASecondConfirmationOnThePhone() async throws {
         let h = LinkTests()
         var snap = h.snapshot(); snap.request = high()
-        // Switch off on the Mac: voice never works, a tap does.
+        // Switch off on the Mac: voice never works, a tap does, but only from a phone with a passcode (audit run 7).
         var (host, engine, client) = try await connected(h, snap)
         try await client.send(.approve(requestID: "H", method: .voice, auth: .faceID))
-        await settle(); XCTAssertTrue(engine.calls.isEmpty)
         try await client.send(.approve(requestID: "H", method: .tap, auth: .none))
+        await settle(); XCTAssertTrue(engine.calls.isEmpty)
+        try await client.send(.approve(requestID: "H", method: .tap, auth: .faceID))
         await settle(until: ["approve:H"], engine); XCTAssertEqual(engine.calls, ["approve:H"])
         // Switch on: voice needs Face ID, Touch ID or the passcode as well.
         snap.voiceHighRisk = true
@@ -1429,5 +1432,33 @@ final class FileDeviceKeyStoreTests: XCTestCase {
         XCTAssertFalse(store.legacyImportClosed)
         store.closeLegacyImport()
         XCTAssertTrue(store.legacyImportClosed)
+    }
+}
+
+/// Audit run 7: what the lock-screen notification offers for a request that arrives while the phone app is not on screen.
+final class RequestNoticeTests: XCTestCase {
+    func testOnlyOrdinaryRequestsGetButtonsOnTheLockScreen() {
+        let edit = LinkRequest(requestID: "R1", summary: "Edit a.swift", spokenPrompt: "", risk: "medium", reasons: [], voiceApprovable: true)
+        let n = RequestNotice.make(for: edit, project: "app")
+        XCTAssertTrue(n.offersButtons)
+        XCTAssertEqual(n.title, "Claude needs your OK in app")
+        XCTAssertEqual(n.body, "Edit a.swift")
+        var high = edit; high.risk = "high"
+        XCTAssertFalse(RequestNotice.make(for: high, project: nil).offersButtons)
+        XCTAssertTrue(RequestNotice.make(for: high, project: nil).body.contains("High risk"))
+        var cut = edit; cut.truncated = true
+        XCTAssertFalse(RequestNotice.make(for: cut, project: nil).offersButtons)
+        var screen = edit; screen.needsScreen = true
+        XCTAssertFalse(RequestNotice.make(for: screen, project: nil).offersButtons)
+        var long = edit; long.summary = String(repeating: "x", count: 400)
+        XCTAssertLessThan(RequestNotice.make(for: long, project: nil).body.count, 170)
+    }
+
+    func testTheIdentifierCarriesTheRequestAndItsProject() {
+        let id = RequestNotice.identifier(requestID: "abc:1", projectID: "p2")
+        XCTAssertEqual(RequestNotice.request(from: id)?.requestID, "abc:1")
+        XCTAssertEqual(RequestNotice.request(from: id)?.projectID, "p2")
+        XCTAssertNil(RequestNotice.request(from: RequestNotice.identifier(requestID: "x", projectID: nil))?.projectID)
+        XCTAssertNil(RequestNotice.request(from: "something else"))
     }
 }

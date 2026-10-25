@@ -62,8 +62,33 @@ public enum JSONValue: Sendable, Equatable, Hashable {
 
     // MARK: Parsing / serialisation
 
+    /// Deeper nesting than this is refused before decoding. A stream-json message nests about ten levels; the decoder
+    /// recurses once per level, so a hostile tool result nested thousands deep could exhaust the stack (backlog 4.8).
+    public static let maxDepth = 100
+
     public static func parse(_ data: Data) throws -> JSONValue {
-        try JSONDecoder().decode(JSONValue.self, from: data)
+        guard nestingDepth(data) <= maxDepth else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "JSON nested deeper than \(maxDepth) levels"))
+        }
+        return try JSONDecoder().decode(JSONValue.self, from: data)
+    }
+
+    /// The deepest nesting of arrays and objects, ignoring brackets inside strings. One pass, no allocation.
+    static func nestingDepth(_ data: Data) -> Int {
+        var depth = 0, deepest = 0, inString = false, escaped = false
+        for byte in data {
+            if inString {
+                if escaped { escaped = false } else if byte == 0x5C { escaped = true } else if byte == 0x22 { inString = false }
+                continue
+            }
+            switch byte {
+            case 0x22: inString = true
+            case 0x5B, 0x7B: depth += 1; deepest = max(deepest, depth)
+            case 0x5D, 0x7D: depth -= 1
+            default: break
+            }
+        }
+        return deepest
     }
 
     public static func parse(_ string: String) throws -> JSONValue {

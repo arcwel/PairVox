@@ -162,6 +162,9 @@ public enum VoiceCommand: Sendable, Equatable {
                                          "cancel", "stop", "never", "cannot", "decline", "declined", "refuse", "negative",
                                          "wait", "hold"]
 
+    /// Every word that can answer a request, for keeping them out of the recognizer's repository vocabulary.
+    static var answerVocabulary: Set<String> { approveWords.union(denyWords).union(["always"]) }
+
     /// A refusal word, including any negating contraction ("can't", "wouldn't", "won't").
     static func isRefusal(_ word: String) -> Bool {
         denyWords.contains(word) || word.hasSuffix("n't") || word == "won't" || word == "cant" || word == "wont"

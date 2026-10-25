@@ -71,6 +71,7 @@ public final class GatedSpeechOutput: SpeechOutput, @unchecked Sendable {
     }
 
     public func setRate(_ rate: Double) { inner.setRate(rate) }
+    public func prepare() { inner.prepare() }
 
     public var supportsPause: Bool { inner.supportsPause }
     public func pause() { if isActive { inner.pause() } }
