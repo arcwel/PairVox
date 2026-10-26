@@ -162,3 +162,13 @@ final class EarlyTranscriptionReplayTests: XCTestCase {
         XCTAssertEqual(early, normal, accuracy: 0.12, "with an instant decode both must send when the end is confirmed, not sooner")
     }
 }
+
+/// 2026-10-25: an early transcription that came back empty was taken as the answer, so "yes" was lost four times.
+final class EarlyTranscriptionResultTests: XCTestCase {
+    func testAnEmptyEarlyResultFallsBackToTheFullTranscription() {
+        XCTAssertNil(VoiceInputController.usableEarlyResult(""))
+        XCTAssertNil(VoiceInputController.usableEarlyResult("  \n"))
+        XCTAssertNil(VoiceInputController.usableEarlyResult(nil))
+        XCTAssertEqual(VoiceInputController.usableEarlyResult("yes"), "yes")
+    }
+}

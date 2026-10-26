@@ -274,7 +274,7 @@ final class AppModel: ObservableObject {
             let input = VoiceInputController(audio: voice.audio, transcriber: voice.transcriber, engine: engine,
                                              endSilence: settings.endOfTurnSilence)
             input.setBargeInEnabled(settings.bargeInEnabled)
-            input.setEarlyTranscription(seconds: settings.earlyTranscription ? 0.3 : 0)
+            input.setEarlyTranscription(seconds: settings.earlyTranscription ? Self.earlyTranscriptionStart(endSilence: settings.endOfTurnSilence) : 0)
             input.setMode(listeningMode)
             input.onLevel = { [weak self] level in Task { @MainActor in self?.inputLevel = level } }
             input.onError = { [weak self] msg in Task { @MainActor in self?.errorMessage = msg } }
@@ -810,6 +810,10 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// When the early transcription starts: about 0.6 s before the end of the turn, so it still saves that time,
+    /// without starting one at every short pause in a sentence now that the turn ends after 1.5 s.
+    static func earlyTranscriptionStart(endSilence: Double) -> Double { max(0.3, endSilence - 0.6) }
+
     // MARK: Microphone sleep
 
     /// Checks every few seconds whether the hands-free microphone has heard no conversation for the chosen time.
@@ -1102,7 +1106,7 @@ final class AppModel: ObservableObject {
         }
         input?.setBargeInEnabled(settings.bargeInEnabled)
         input?.setEndSilence(settings.endOfTurnSilence)
-        input?.setEarlyTranscription(seconds: settings.earlyTranscription ? 0.3 : 0)
+        input?.setEarlyTranscription(seconds: settings.earlyTranscription ? Self.earlyTranscriptionStart(endSilence: settings.endOfTurnSilence) : 0)
         if old.spokenReplyLimit != settings.spokenReplyLimit {
             let limit = settings.spokenReplyLimit
             broadcast { await $0.setSpokenReplyLimit(limit) }

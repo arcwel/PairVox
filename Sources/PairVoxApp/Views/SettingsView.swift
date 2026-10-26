@@ -76,7 +76,7 @@ private struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("End of turn after") {
                     HStack {
-                        Slider(value: $model.settings.endOfTurnSilence, in: 0.4...2.0, step: 0.05)
+                        Slider(value: $model.settings.endOfTurnSilence, in: AppSettings.endOfTurnSilenceRange, step: 0.05)
                         Text(String(format: "%.2fs", model.settings.endOfTurnSilence)).monospacedDigit().frame(width: 48)
                     }
                 }

@@ -255,6 +255,14 @@ public final class VoiceInputController: @unchecked Sendable {
         log.log(.info, .stt, "stt.speculative.started", ["audioSeconds": .double(Double(samples.count) / AudioIO.captureSampleRate)])
     }
 
+    /// An early transcription that came back empty (it was cut short, or covered too little of the speech) is not
+    /// the answer: the whole utterance is transcribed instead. Taking the empty one dropped spoken answers such as
+    /// "yes" four times in a row on 2026-10-25.
+    static func usableEarlyResult(_ text: String?) -> String? {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return text
+    }
+
     private func finishUtterance(_ samples: [Float], speculative: Task<String, Error>? = nil, startedAt: Date?) {
         lock.lock()
         let words = vocabulary
@@ -273,10 +281,11 @@ public final class VoiceInputController: @unchecked Sendable {
                 // The early transcription covers the same speech (only the trailing silence is missing), so its result
                 // is the answer, and any of its decoding time has already passed.
                 var text: String
-                if let speculative, let early = try? await speculative.value {
+                if let speculative, let early = Self.usableEarlyResult(try? await speculative.value) {
                     text = early
                     self.log.log(.info, .stt, "stt.speculative.used", [:])
                 } else {
+                    if speculative != nil { self.log.log(.info, .stt, "stt.speculative.discarded", ["reason": "empty"]) }
                     text = try await transcriber.transcribe(samples, vocabulary: words)
                 }
                 let ms = Double(DispatchTime.now().uptimeNanoseconds - began.uptimeNanoseconds) / 1_000_000

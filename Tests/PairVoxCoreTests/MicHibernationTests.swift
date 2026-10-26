@@ -106,4 +106,13 @@ final class MicHibernationTests: XCTestCase {
         let odd = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"micSleepMinutes": 7}"#.utf8))
         XCTAssertEqual(odd.micSleepMinutes, 3, "a value Settings does not offer falls back to the default")
     }
+
+    // 2026-10-25: a 0.65 s pause ended the turn mid-sentence. Old short values move to 1.5 s; longer ones are kept.
+    func testTheEndOfTurnSilenceIsAtLeastOneSecond() throws {
+        XCTAssertEqual(AppSettings().endOfTurnSilence, 1.5)
+        let old = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"endOfTurnSilence": 0.65}"#.utf8))
+        XCTAssertEqual(old.endOfTurnSilence, 1.5)
+        let chosen = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"endOfTurnSilence": 2.0}"#.utf8))
+        XCTAssertEqual(chosen.endOfTurnSilence, 2.0)
+    }
 }
