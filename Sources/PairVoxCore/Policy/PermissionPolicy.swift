@@ -23,6 +23,17 @@ public struct PermissionAssessment: Sendable, Equatable {
     public var autoApprovable: Bool = false
     /// A folder grant the user gave covers this request, so it is allowed without asking.
     public var coveredByFolderGrant: Bool = false
+    /// The owner's gate for a request a spoken answer may approve: one yes (Skip) or two (Auto).
+    public var voiceGate: ApprovalGate = .skip
+    /// Not approvable by voice only because the owner set this kind of command to Manual. False for everything that
+    /// is Manual for safety, and for any assessment not built by the policy, so those keep the stricter old rules.
+    public var ownerManual: Bool = false
+
+    /// How a spoken answer may approve it (Settings, Approval gates). `.manual` whenever `voiceApprovable` is false.
+    public var gate: ApprovalGate { voiceApprovable ? voiceGate : .manual }
+    /// True when the gate is Manual for safety (high risk, a command that cannot be read out, Claude Code's own flag)
+    /// rather than by the owner's choice. Only then may the opt-in "confirm high risk" phrase stand in for a click.
+    public var gateLocked: Bool { !voiceApprovable && !ownerManual }
 
     /// Whether a small surface (menu bar, mini window, "allow together" list) shows enough to approve from:
     /// one short line and at most one reason. Anything longer is reviewed on the full card.
@@ -43,13 +54,33 @@ public struct PermissionPolicy: Sendable {
     /// click. The owner's choice (Settings, Permissions); on by default since a 250-character path read aloud
     /// tells a listener nothing.
     public var voiceFromSummary: Bool
+    /// The owner's approval gates: which kinds of command take one spoken yes, two, or a tap.
+    public var gates: ApprovalGates
 
     public init(projectRoot: String?, pronunciation: Pronunciation = Pronunciation(), grants: [FolderGrant] = [],
-                voiceFromSummary: Bool = true) {
+                voiceFromSummary: Bool = true, gates: ApprovalGates = ApprovalGates()) {
         self.projectRoot = projectRoot.map { ($0 as NSString).standardizingPath }
         self.pronunciation = pronunciation
         self.grants = grants
         self.voiceFromSummary = voiceFromSummary
+        self.gates = gates
+    }
+
+    /// The owner's gate for one step of a shell command. A rule for the step's program decides it, else the step's
+    /// category. A named command anywhere else in the step (`sh -c 'make deploy'`, `eval gh …`, `then gh …`,
+    /// `find -exec aws …`) can only make it stricter: a rule that loosens counts only where the program is
+    /// (security review 2026-10-26).
+    func gate(for segment: BashRisk.Segment) -> (gate: ApprovalGate, rule: CommandGateRule?, category: CommandCategory) {
+        let reasons = BashRisk.classify(segment.words.joined(separator: " "), projectRoot: projectRoot).reasons
+        let category: CommandCategory = reasons.contains(where: BashRisk.installReasons.contains) ? .install
+            : (reasons.contains(where: BashRisk.networkReasons.contains) ? .network : .otherCommands)
+        let atProgram = gates.rule(program: segment.program, args: segment.args)
+        var result: (gate: ApprovalGate, rule: CommandGateRule?, category: CommandCategory) = (atProgram?.gate ?? gates.gate(for: category), atProgram, category)
+        let words = segment.words.map(BashRisk.unquoted)
+        for start in words.indices {
+            if let r = gates.rule(at: Array(words[start...])), r.gate > result.gate { result = (r.gate, r, category) }
+        }
+        return result
     }
 
     /// How a path is spoken: its file name, and whether it is in the project. A listener gets nothing from the
@@ -73,6 +104,9 @@ public struct PermissionPolicy: Sendable {
         var summary: String
         var screenOnly = false
         var screenReason = "Check it on screen."
+        // The owner's gate; screen-only and high risk override it below.
+        var chosen: ApprovalGate = .skip
+        var chosenReason: String?
 
         switch r.toolName {
         case let t where PermissionPolicy.readOnlyTools.contains(t):
@@ -120,6 +154,8 @@ public struct PermissionPolicy: Sendable {
             spoken = "Claude wants to \(verb) \(spokenFile(path)). Allow?"
             if !targets.isEmpty ? targets.allSatisfy(isInsideProject) : isInsideProject(path) {
                 risk = .medium
+                chosen = gates.gate(for: .fileEdits)
+                if chosen == .manual { chosenReason = "Editing files is set to Manual in Settings, Approval gates." }
             } else {
                 risk = .high
                 reasons.append("The file is outside the project folder.")
@@ -147,14 +183,26 @@ public struct PermissionPolicy: Sendable {
             // The summary line stands for an ordinary multi-step command, never for one PairVox cannot describe:
             // a step whose readout collapses to "a command", or a construct that hides what runs or where output
             // goes (redirection, substitution, backticks, heredocs, process substitution). Those stay screen-only
-            // whatever the setting, as does anything that reaches the network.
-            let reachesNetwork = bash.reasons.contains { BashRisk.networkReasons.contains($0) }
+            // whatever the setting or gate.
             let undescribable = narration.unspeakable || firstStep == "a command"
             // Without the summary setting, a spoken yes must also cover exactly what was heard.
-            screenOnly = undescribable || reachesNetwork || (narration.partial && !voiceFromSummary)
-            if reachesNetwork {
-                screenReason = "The command reaches the network. Check it on screen."
-            } else if undescribable {
+            screenOnly = undescribable || (narration.partial && !voiceFromSummary)
+            // Every step is gated (owner, 2026-10-26): a named command's rule, else its category (network and
+            // installs are Manual by default, as they were screen-only before). The strictest step decides.
+            let stepGates = BashRisk.segments(command).map(gate(for:))
+            if let strictest = stepGates.max(by: { $0.gate < $1.gate }) {
+                chosen = strictest.gate
+                if chosen == .manual {
+                    if let rule = strictest.rule {
+                        chosenReason = "\u{201C}\(rule.command)\u{201D} is set to Manual in Settings, Approval gates."
+                    } else if strictest.category == .network || strictest.category == .install {
+                        chosenReason = "The command reaches the network. Check it on screen."
+                    } else {
+                        chosenReason = "\(strictest.category.title) are set to Manual in Settings, Approval gates."
+                    }
+                }
+            }
+            if undescribable {
                 screenReason = "The command has a part that cannot be read out (redirection, substitution, a heredoc, or a step with no short name). Check it on screen."
             } else if screenOnly {
                 screenReason = "The command is too long or complex to read out. Check it on screen."
@@ -189,6 +237,13 @@ public struct PermissionPolicy: Sendable {
             voiceOK = false
             reasons.append("This request needs you at the screen.")
         }
+        // Manual for safety (high risk, screen-only, at the screen) is locked; the owner's gate applies otherwise.
+        let locked = !voiceOK
+        if voiceOK, chosen == .manual {
+            voiceOK = false
+            if let why = chosenReason { reasons.append(why) }
+        }
+        let byOwner = !locked && !voiceOK
         if !voiceOK {
             // Every prompt ends ". Allow?", so the sentence before it keeps its own full stop.
             spoken = spoken.replacingOccurrences(of: " Allow?", with: " Please confirm on screen.")
@@ -197,7 +252,9 @@ public struct PermissionPolicy: Sendable {
             && PermissionPolicy.readOnlyTools.contains(r.toolName) && !PermissionPolicy.neverAutoApprove.contains(r.toolName)
         // A folder grant only ever covers requests that are otherwise ordinary (never high risk, never flagged).
         var covered = false
-        if risk <= .medium, !r.requiresUserInteraction, !r.defaultToNo, r.decisionReasonType != "safetyCheck" {
+        // Nor anything the owner set to Manual: a grant is standing consent for ordinary work, not for what they asked
+        // to approve by hand (security review 2026-10-26).
+        if risk <= .medium, !r.requiresUserInteraction, !r.defaultToNo, r.decisionReasonType != "safetyCheck", chosen != .manual {
             if PermissionPolicy.fileWriteTools.contains(r.toolName) {
                 covered = FolderScope.editGrant(for: r, in: grants, projectRoot: projectRoot) != nil
             } else if r.toolName == "Bash" {
@@ -205,7 +262,8 @@ public struct PermissionPolicy: Sendable {
             }
         }
         return PermissionAssessment(risk: risk, voiceApprovable: voiceOK, spokenPrompt: spoken, summary: summary,
-                                    reasons: reasons, autoApprovable: auto, coveredByFolderGrant: covered)
+                                    reasons: reasons, autoApprovable: auto, coveredByFolderGrant: covered,
+                                    voiceGate: voiceOK ? chosen : .skip, ownerManual: byOwner)
     }
 
     /// Whether `path` is inside the project folder. Both sides are symlink-resolved, so /tmp vs /private/tmp (which
@@ -344,7 +402,9 @@ public enum BashRisk {
         Rule(pattern: #"(^|[^>])>\s*[^\s&]"#, level: .medium, reason: "Writes a file via redirection."),
         Rule(pattern: #"\b(python3?|node|deno|bun|perl|ruby|php|lua|osascript|swift|go\s+run)\b"#, level: .medium, reason: "Runs a script or interpreter."),
         Rule(pattern: #"(^|[\s;&|(])(ba|z)?sh\s|\beval\b|\bxargs\b|\bexec\b|\bsource\s|<\("#, level: .medium, reason: "Runs a nested shell or evaluates text as code."),
-        Rule(pattern: #"\bopen\s"#, level: .medium, reason: "Opens a file or URL with another app."),
+        // Only in command position: `gh pr list --state open` does not open anything (2026-10-26). The structural pass
+        // catches `open` after a wrapper.
+        Rule(pattern: #"(^|[;&|(]\s*)open\s"#, level: .medium, reason: "Opens a file or URL with another app."),
     ]
 
 
@@ -355,6 +415,9 @@ public enum BashRisk {
                                                      "Uses a tool that acts on outside services.", "Pipes a download into a shell.",
                                                      "Installs packages.", "Downloads and runs a package.",
                                                      "Opens a URL in another app."]
+
+    /// The subset of `networkReasons` that fetch code to install or run: the "installing" category in Settings.
+    public static let installReasons: Set<String> = ["Installs packages.", "Downloads and runs a package.", "Pipes a download into a shell."]
 
     static let downloaderNames: Set<String> = ["curl", "wget", "fetch"]
     static let remoteShellNames: Set<String> = ["ssh", "scp", "rsync", "nc", "ncat", "netcat", "telnet", "ftp", "sftp", "tftp", "socat"]
@@ -452,7 +515,8 @@ public enum BashRisk {
         let segs = segments(command)
         var sawDownloader = false
         for seg in segs {
-            let p = seg.program, a = seg.args
+            // Lower case: the Mac's disk is case-insensitive, so `CURL` runs curl (security review 2026-10-26).
+            let p = seg.program.lowercased(), a = seg.args
             let flags = a.filter { $0.hasPrefix("-") }
             func shortHas(_ letters: String) -> Bool {
                 flags.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && $0.contains(where: { letters.contains($0) }) }
@@ -533,6 +597,7 @@ public enum BashRisk {
                 found.append((.medium, "Downloads and runs a package."))
             }
             if installsPackages(program: p, args: a) { found.append((.medium, "Installs packages.")) }
+            if ["open", "xdg-open"].contains(p) { found.append((.medium, "Opens a file or URL with another app.")) }
             if ["open", "xdg-open"].contains(p), a.contains(where: { $0.range(of: #"^[a-z][a-z0-9+.-]*://"#, options: .regularExpression) != nil || $0.hasPrefix("www.") }) {
                 found.append((.medium, "Opens a URL in another app."))
             }

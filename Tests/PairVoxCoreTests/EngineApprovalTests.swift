@@ -102,6 +102,29 @@ final class EngineApprovalTests: XCTestCase {
         XCTAssertEqual(backend.responses.map(\.0), ["A"], "the user's own words, as before: no, do this instead")
     }
 
+    // 2026-10-26: text from the phone while a request waited denied it as "no, do this instead". It was the phone's
+    // own refusal heard back. Phone text now never answers or refuses a waiting request.
+    func testTextFromThePhoneNeverDeniesTheWaitingRequest() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        let sentBefore = backend.sent
+        await engine.submitFromRemote("This request needs a tap not a spoken yes")
+        await engine.submitFromRemote("no")
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "neither denied nor allowed")
+        XCTAssertEqual(backend.sent, sentBefore, "and not sent to Claude")
+        var snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "A")
+        await engine.approvePending(requestID: "A")
+        XCTAssertEqual(backend.responses.map(\.0), ["A"])
+        await engine.submitFromRemote("Now run the tests")
+        await settle()
+        XCTAssertEqual(backend.sent.last, "Now run the tests", "with nothing waiting, phone text is a message again")
+        snap = await engine.snapshot
+        XCTAssertNil(snap.pendingPermission)
+    }
+
     // Review of run 7: a prompt that was cut off is not an echo source, and "confirm high risk" is never one.
     func testAnAllowAfterACutOffPromptCounts() async {
         await engine.submit("Fix it")
@@ -275,7 +298,10 @@ final class EngineApprovalTests: XCTestCase {
         await engine.submitFromRemote("do something else instead")
         await settle()
         snap = await engine.snapshot
-        if case .deny? = backend.responses.first?.1 {} else { XCTFail("an instruction while a request waits refuses it, as speech does") }
+        // Until 2026-10-26 this refused the request, as speech on the Mac does. From the phone it may be the phone's
+        // own voice heard back, so it no longer decides anything (testTextFromThePhoneNeverDeniesTheWaitingRequest).
+        XCTAssertTrue(backend.responses.isEmpty, "an instruction from the phone neither refuses nor allows the request")
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "A")
     }
 
     func testSecondRequestQueuesInsteadOfReplacingTheFirst() async {

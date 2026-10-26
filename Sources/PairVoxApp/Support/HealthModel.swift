@@ -6,7 +6,7 @@ import PairVoxVoice
 
 /// The Settings tab the health popover opens for a fix it cannot do in place.
 enum SettingsTab: String {
-    case general, phone, project, voice, account, pronunciation, shortcuts, diagnostics, health, about
+    case general, approvals, phone, project, voice, account, pronunciation, shortcuts, diagnostics, health, about
 }
 
 extension HealthFix {

@@ -81,6 +81,8 @@ final class PhoneModel: ObservableObject {
     private var sayingPrompt = false
     private var promptEndedAt = Date.distantPast
     private var lastSpokenRequest: String?
+    /// The request whose plain-words summary has been read, so it is read once.
+    private var summarySpokenFor: String?
 
     /// How long the Mac may be quiet before a link is taken as dead when the app comes back to the front. A healthy
     /// idle Mac sends its state every 10 s, checked on a 5 s tick, so up to 15 s of silence is normal; this leaves
@@ -443,9 +445,24 @@ final class PhoneModel: ObservableObject {
                 if r.risk == "high" { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
                 else { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
                 // Spoken even while listening: listening pauses while the phone talks, then resumes for the answer.
-                let prompt = r.voiceApprovable && !r.truncated ? r.spokenPrompt : "Claude needs a decision that has to be made on the screen."
+                // The Mac's one line names what is asked ("Claude wants to run gh pr list…") even when the answer
+                // takes a tap; only a request cut short for the phone is not read (owner, 2026-10-26: "an approval is
+                // needed on the screen" said nothing about what).
+                let prompt: String
+                if let plain = r.plainSummary {
+                    summarySpokenFor = r.requestID
+                    prompt = Self.summaryReadout(plain, voiceApprovable: r.voiceApprovable && !r.truncated, gate: r.gate)
+                } else {
+                    prompt = r.truncated ? "Claude needs approval for a request too long to read here. Check it on the screen." : r.spokenPrompt
+                }
                 noteSaying(prompt)
                 speaker.say(prompt)
+            } else if let r = s.request, lastSpokenRequest == r.requestID, summarySpokenFor != r.requestID, let plain = r.plainSummary {
+                // The plain-words summary arrives a few seconds after the request; it is read once, as on the Mac.
+                summarySpokenFor = r.requestID
+                let readout = Self.summaryReadout(plain, voiceApprovable: r.voiceApprovable && !r.truncated, gate: r.gate)
+                noteSaying(readout)
+                speaker.say(readout)
             }
         case .speak(let text): noteSaying(text); speaker.say(text)
         case .speakAudio(let format, let data, let text):
@@ -527,6 +544,14 @@ final class PhoneModel: ObservableObject {
     private func noteSaying(_ text: String) {
         lastSaidText = text
         sayingPrompt = true
+    }
+
+    /// "Claude needs approval to …", then the question that fits: a spoken yes counts only for a request the Mac allows
+    /// by voice. The other endings have no answer word in them, so hearing them back answers nothing; an Auto request's
+    /// summary can arrive after its first yes, when "Allow?" heard back would be the second (security review 2026-10-26).
+    static func summaryReadout(_ plain: String, voiceApprovable: Bool, gate: String? = nil) -> String {
+        if gate == "auto" { return plain + " It takes two answers." }
+        return plain + (voiceApprovable ? " Allow?" : " Use the button to decide.")
     }
 
     /// True when every word of `heard` appears, in order and together, in `said` ("allow" after "…Allow?").

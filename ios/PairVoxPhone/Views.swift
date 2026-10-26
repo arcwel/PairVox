@@ -523,6 +523,12 @@ struct RequestCard: View {
                 Spacer()
                 if let n = model.snapshot?.queuedRequests, n > 0 { Text("+\(n) more").font(.caption).foregroundStyle(.secondary) }
             }
+            if let plain = request.plainSummary { Text(plain).font(.callout) }
+            if request.gate == "auto" {
+                Text("Say yes, hear what it will do, then say yes again. Or tap Allow.").font(.footnote).foregroundStyle(.secondary)
+            } else if request.gate == "manual", request.gateLocked == false {
+                Text("Set to Manual on the Mac: tap Allow.").font(.footnote).foregroundStyle(.secondary)
+            }
             ScrollView { Text(request.summary).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 .frame(maxHeight: 120)
             ForEach(request.reasons, id: \.self) { Text("• " + $0).font(.footnote) }
