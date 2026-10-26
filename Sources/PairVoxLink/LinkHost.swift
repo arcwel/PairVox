@@ -27,6 +27,12 @@ public extension LinkEngine {
 /// decisions, and a request the Mac's policy would not let a voice approve cannot be approved by voice here.
 public actor LinkHost {
     public static let staleAfter: TimeInterval = 300
+    /// The phone says a request's question as soon as the card arrives and listens for the answer after it. A spoken
+    /// approval that reaches the Mac sooner than this after the card went out was begun before the phone asked.
+    public static let minSpokenAnswerDelay: TimeInterval = 1.5
+    /// A tap is the phone's click, but the Mac cannot see the phone's screen: a card left up this long is answered on
+    /// the Mac (backlog 3.3).
+    public static let tapStaleAfter: TimeInterval = 1800
 
     private let pairing: PairingManager
     private let engine: LinkEngine
@@ -56,6 +62,7 @@ public actor LinkHost {
         var codec: FrameCodec
         let transport: LinkTransport
         let deviceID: String
+        /// When each request first went out to this phone (not refreshed by later snapshots of the same request).
         var presented: [String: Date] = [:]
         /// What is waiting to go to this phone, and whether a writer is already sending it. A phone that stops reading
         /// must only ever hold up itself, never `publish` and never the other phones.
@@ -236,7 +243,7 @@ public actor LinkHost {
                 // phone can already have the card and answer it; marking afterwards refused that answer as "not shown
                 // on this phone yet" (seen on CI with the in-memory transport). A send that fails closes the
                 // connection below, so nothing can be approved on the strength of a card that did not go out.
-                for k in item.presentedKeys { c.presented[k] = clock() }
+                for k in item.presentedKeys { c.presented[k] = c.presented[k] ?? clock() }
                 try await Self.within(Self.sendTimeout, transport) { try await transport.send(frame) }
             } catch {
                 c.outbox.removeAll()
@@ -457,9 +464,12 @@ public actor LinkHost {
             // none of those set up says so, and a high-risk request then waits for the Mac (audit run 7). The claim is
             // the phone's own; this keeps an ordinary phone honest, not a modified one (backlog 3.3).
             if request.risk == "high", auth == .none { return "This phone has no passcode, so a high-risk request is approved on the Mac." }
+            if age > Self.tapStaleAfter { return "This request has waited over half an hour. Approve it on the Mac." }
             return nil
         }
-        // Voice from here on.
+        // Voice from here on. The phone checks timing and its own echo too, but that is the phone's claim; the Mac
+        // can still tell an answer that arrived too soon to follow the question (audit run 9).
+        if clock().timeIntervalSince(shown) < Self.minSpokenAnswerDelay { return "I heard that before the phone asked. Please answer again." }
         if !request.voiceApprovable {
             // High risk, or too long to read out: only the spoken phrase, only if the Mac has that switched on, and
             // only with the phone's own second confirmation (Face ID, Touch ID or the passcode).
