@@ -324,6 +324,15 @@ public actor ConversationEngine {
                                            awaitingCatchUpChoice: catchUpOpen && answersPermissions,
                                            hasQueuedRequests: answersPermissions && !permissionQueue.isEmpty)
         var parsed = VoiceCommand.parse(text, context: context)
+        // PairVox's own prompt or notice heard back is not an instruction for Claude, nor "no, do this instead" for the
+        // request waiting (audit run 9): it is dropped, and speech it paused carries on. Echoed answer words are
+        // handled below, where a notice says why they did not count.
+        if parsed == nil, isOwnPromptEcho(text, spokenAt: answerSpokenAt) {
+            log.log(.info, .engine, "voice.ownEchoDropped", ["words": .int(lastUtteranceWords.count)])
+            resumeAfterFalseBargeIn()
+            recomputePhase()
+            return
+        }
         // A bare acknowledgement ("okay", "mm-hmm") carries on from where speech was paused; anything else is meant for us.
         if pausedBargeIn { if parsed == .backchannel { resumePausedInPlace() } else { commitPausedBargeIn() } }
         // Text from a phone is an instruction for Claude. Only "stop" and a bare acknowledgement keep their command

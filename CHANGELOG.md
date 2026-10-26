@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Audit run 9's hunters' notes.
+  - Microphone sleep is timed on the continuous clock, so setting the clock back cannot keep a hands-free microphone awake, and time the Mac spent asleep counts as quiet.
+  - A session hung in "working" no longer keeps the microphone awake for ever: phases that stay unchanged count as conversation for at most 20 minutes. A conversation that keeps moving is not affected.
+  - PairVox's own prompt or notice heard back, when it is not an answer, is dropped instead of being sent to Claude. While a request waited, such an echo used to deny it as "no, do this instead".
+  - Install Latest Build… runs the installer with an allow-list of variables (PATH, HOME, locale, Xcode, the SSH agent, proxies and the signing choices) instead of the Claude child's deny-list, which passed tokens such as `GITHUB_TOKEN`.
+  - `scripts/pv-install.sh --rollback` refuses a previous copy with a broken signature or a different signing team from the installed app, as an install already did.
 - The Mac now checks the timing of a spoken answer from the iPhone itself instead of relying only on the phone. A spoken yes that reaches the Mac less than 1.5 s after the card first went out to the phone was begun before the phone asked, and the phone says "I heard that before the phone asked. Please answer again." A spoken no is not held back.
 - A tap on Allow on the iPhone stops counting for a request that has waited more than 30 minutes; approve it on the Mac. A spoken yes and the lock-screen Allow keep their five-minute limit (backlog 3.3).
 - A spoken question that is over before it played is no longer asked afterwards. Until now this held only when a request was answered. Now it also holds when Claude Code cancels the request, Claude Code exits, the turn ends with a request still open, a new session starts, a request replaces the folder-access offer, or the offer is answered, cancelled or put off on screen. A question already playing is left to finish (audit run 9's deferred prompt-queue unit).

@@ -72,6 +72,36 @@ final class EngineApprovalTests: XCTestCase {
         guard case .allow? = backend.responses.first?.1 else { return XCTFail("\"yes\" is never in a prompt, so it counts") }
     }
 
+    // Audit run 9: words of the prompt heard back that are not an answer went to Claude, and while a request waited
+    // they denied it as "no, do this instead".
+    func testThePromptHeardBackIsNeitherADenialNorAMessage() async {
+        await engine.submit("Fix it")
+        backend.emit(edit("A", "a.swift"))
+        await settle()
+        guard let prompt = output.queue.last(where: { $0.kind == .prompt }) else { return XCTFail("prompt") }
+        output.continuation.yield(.started(prompt.id))
+        await settle()
+        let sentBefore = backend.sent
+        let echo = VoiceCommand.normalize(prompt.text).prefix(4).joined(separator: " ")
+        XCTAssertNil(VoiceCommand.parse(echo, context: .init(awaitingPermission: true)), "\(echo) is not an answer")
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit(echo)
+        await settle()
+        XCTAssertTrue(backend.responses.isEmpty, "\(echo) did not deny the request")
+        XCTAssertEqual(backend.sent, sentBefore, "nor was it sent to Claude")
+        let snap = await engine.snapshot
+        XCTAssertEqual(snap.pendingPermission?.request.requestID, "A")
+        // Said well after the prompt ended, the same words are the user's.
+        output.continuation.yield(.finished(prompt.id))
+        await settle(700)
+        await engine.userStartedSpeaking()
+        await engine.userStoppedSpeaking()
+        await engine.submit(echo)
+        await settle()
+        XCTAssertEqual(backend.responses.map(\.0), ["A"], "the user's own words, as before: no, do this instead")
+    }
+
     // Review of run 7: a prompt that was cut off is not an echo source, and "confirm high risk" is never one.
     func testAnAllowAfterACutOffPromptCounts() async {
         await engine.submit("Fix it")

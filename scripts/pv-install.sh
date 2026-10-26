@@ -75,8 +75,24 @@ launch_ok() {
   return 1
 }
 
+# What may replace the installed app, whether a new build or the previous copy: a whole signature, and the same signing
+# team as the installed app when it has one. A build with no team (no Apple Development certificate found) loses the
+# hardened runtime and the Keychain and microphone grants keyed on the team (audit run 8); a previous copy is held to
+# the same rule, since anything that can write to dist/ can put an app there (audit run 9).
+team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
+check_replacement() {   # app what
+  codesign --verify --deep --strict "$1" 2>/dev/null || finish false "$2's signature is broken; the installed app was not touched." 1
+  local old_team new_team
+  old_team=$([[ -d dist/PairVox.app ]] && team_of dist/PairVox.app || true)
+  new_team=$(team_of "$1")
+  if [[ -n "$old_team" && "$old_team" != "not set" && "$new_team" != "$old_team" ]]; then
+    finish false "$2 is signed by team '${new_team:-none}', the installed app by '$old_team'. It was not installed; check the Apple Development certificate in Keychain Access." 1
+  fi
+}
+
 if [[ $ROLLBACK -eq 1 ]]; then
   [[ -d dist/PairVox.previous.app ]] || finish false "There is no dist/PairVox.previous.app to go back to." 1
+  check_replacement dist/PairVox.previous.app "The previous build"
   if [[ $DRY -eq 1 ]]; then say "Would reopen dist/PairVox.previous.app in place of dist/PairVox.app"; finish true "dry run" 0; fi
   rm -rf .build/rollback && mkdir -p .build/rollback
   cp -R dist/PairVox.previous.app .build/rollback/PairVox.app   # the swap replaces dist/, so copy it out first
@@ -108,15 +124,7 @@ fi
 
 # Build beside the installed app, never over it: DIST_DIR keeps build-app.sh away from dist/ while the app runs.
 DIST_DIR=.build/install scripts/build-app.sh >/dev/null 2>&1 || finish false "The build failed; the installed app was not touched. Run scripts/build-app.sh to see why." 1
-codesign --verify --deep --strict .build/install/PairVox.app 2>/dev/null || finish false "The new build's signature is broken; the installed app was not touched." 1
-# A build with no signing team (no Apple Development certificate found) loses the hardened runtime and the Keychain and
-# microphone grants keyed on the team: never let one replace a team-signed app (audit run 8).
-team_of() { codesign -dv "$1" 2>&1 | sed -n 's/^TeamIdentifier=//p'; }
-old_team=$([[ -d dist/PairVox.app ]] && team_of dist/PairVox.app || true)
-new_team=$(team_of .build/install/PairVox.app)
-if [[ -n "$old_team" && "$old_team" != "not set" && "$new_team" != "$old_team" ]]; then
-  finish false "The new build is signed by team '${new_team:-none}', the installed app by '$old_team'. It was not installed; check the Apple Development certificate in Keychain Access." 1
-fi
+check_replacement .build/install/PairVox.app "The new build"
 say "Built $(git rev-parse --short HEAD)"
 
 had_app=0
