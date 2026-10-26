@@ -685,7 +685,7 @@ public actor ConversationEngine {
     /// aloud, so PairVox cannot end up answering its own question when the microphone hears it back.
     static func speakableAdvice(_ text: String) -> String {
         let context = VoiceCommand.Context(awaitingPermission: true, awaitingHighRiskConfirmation: true)
-        let sentences = text.split(whereSeparator: { ".!?\n".contains($0) }).map { String($0).trimmingCharacters(in: .whitespaces) }
+        let sentences = sentences(of: text)
         let kept = sentences.filter { sentence in
             guard !sentence.isEmpty else { return false }
             // Anything holding the high-risk phrase is dropped whatever its length: the announcement grammar accepts
@@ -702,6 +702,25 @@ public actor ConversationEngine {
             }
         }
         return kept.isEmpty ? "There is nothing more to add. Please decide on screen." : kept.joined(separator: ". ") + "."
+    }
+
+    /// Sentences end at . ! or ? followed by a space or the end, or at a line break, so "a.swift" stays one word.
+    static func sentences(of text: String) -> [String] {
+        text.replacingOccurrences(of: #"([.!?])(\s+|$)|\n+"#, with: "$1\u{1F}", options: .regularExpression)
+            .split(separator: "\u{1F}")
+            .map { $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: ".!?")) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The first two sentences of the plain-words summary, read after the request's short prompt. Nil when the
+    /// advice filter left nothing to say.
+    static func spokenSummary(_ text: String, voiceApprovable: Bool) -> String? {
+        let safe = speakableAdvice(text)
+        guard !safe.hasPrefix("There is nothing more to add") else { return nil }
+        let parts = sentences(of: safe)
+        guard !parts.isEmpty else { return nil }
+        let body = parts.prefix(2).joined(separator: ". ") + "."
+        return "In plain words: " + body + (voiceApprovable ? " Allow?" : " Please confirm it on screen.")
     }
 
     private func startExplanation(_ pending: PendingPermission) {
@@ -729,6 +748,11 @@ public actor ConversationEngine {
             if speakExplanationFor == requestID {
                 speakExplanationFor = nil
                 speak([make(Self.speakableAdvice(text), .notice)], record: false, force: true)
+            } else if !userIsSpeaking && !transcribing, let readout = Self.spokenSummary(text, voiceApprovable: pending.assessment.voiceApprovable) {
+                // The short prompt plays at once; the plain-words summary takes several seconds to arrive, so it
+                // follows as a second prompt while the request still waits (owner, 2026-10-25: "requests are not
+                // being summarized"). It is a prompt, so it gets the same timing and echo checks.
+                speakPrompt(readout)
             }
         case .failure:
             pending.explanation = .unavailable

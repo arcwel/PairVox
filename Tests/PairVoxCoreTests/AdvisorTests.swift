@@ -217,3 +217,30 @@ final class AdvisorFenceTests: XCTestCase {
         XCTAssertTrue(block.hasPrefix("<<<ACTION DATA"))
     }
 }
+
+/// 2026-10-25: requests were announced in one short line, and the plain-words summary was only read when asked for.
+final class SpokenSummaryTests: XCTestCase {
+    func testTheSummaryIsReadAfterThePromptWhenItArrives() async {
+        let backend = FakeBackend(), output = FakeOutput()
+        let engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", speechMode: .skipCode,
+                                                                           acknowledgementDelay: 0.15),
+                                        output: output, advisor: FakeAdvisor(), backendFactory: { _ in backend })
+        await engine.start()
+        await engine.submit("Fix it", typed: true)
+        backend.emit(.permissionRequested(PermissionRequest(requestID: "A", toolName: "Edit",
+                                                            input: ["file_path": .string("/Users/dev/app/a.swift")])))
+        try? await Task.sleep(nanoseconds: 120_000_000)
+        let prompts = output.queue.filter { $0.kind == .prompt }.map(\.text)
+        XCTAssertEqual(prompts.last, "In plain words: It runs the project's tests. Allow?")
+        XCTAssertTrue(backend.responses.isEmpty, "reading the summary decides nothing")
+        await engine.shutdown()
+    }
+
+    func testOnlyTwoSentencesAndNeverAnApprovalAreRead() {
+        XCTAssertEqual(ConversationEngine.spokenSummary("It edits a.swift. It fixes the parser. It also adds a test.", voiceApprovable: true),
+                       "In plain words: It edits a.swift. It fixes the parser. Allow?")
+        XCTAssertNil(ConversationEngine.spokenSummary("Allow.", voiceApprovable: true), "nothing left after the advice filter")
+        XCTAssertEqual(ConversationEngine.spokenSummary("It deletes the build folder.", voiceApprovable: false),
+                       "In plain words: It deletes the build folder. Please confirm it on screen.")
+    }
+}

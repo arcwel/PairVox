@@ -119,7 +119,10 @@ public struct AppSettings: Sendable, Codable, Equatable {
     public var trimSentenceSilence = true
     public var bargeInEnabled = true
     public var handsFree = true
-    public var endOfTurnSilence: Double = 0.65
+    /// Seconds of silence that end a spoken turn. 1.5 since 2026-10-25: at 0.65 PairVox took a pause mid-sentence for
+    /// the end, replied, and the rest of the sentence arrived as a second, partial request.
+    public var endOfTurnSilence: Double = 1.5
+    public static let endOfTurnSilenceRange: ClosedRange<Double> = 0.4...3.0
     /// Start transcribing after a short silence (0.3 s) instead of waiting for the whole end-of-turn silence, and discard
     /// the result if you keep talking. Saves up to about a third of a second per turn. Experimental.
     public var earlyTranscription = true
@@ -236,7 +239,10 @@ public struct AppSettings: Sendable, Codable, Equatable {
         trimSentenceSilence = (try? c.decode(Bool.self, forKey: .trimSentenceSilence)) ?? d.trimSentenceSilence
         bargeInEnabled = (try? c.decode(Bool.self, forKey: .bargeInEnabled)) ?? d.bargeInEnabled
         handsFree = (try? c.decode(Bool.self, forKey: .handsFree)) ?? d.handsFree
-        endOfTurnSilence = (try? c.decode(Double.self, forKey: .endOfTurnSilence)) ?? d.endOfTurnSilence
+        // A saved value below one second is the old 0.65 default or close to it; it cut people off, so it moves to the
+        // new default once. Longer values were chosen on purpose and are kept.
+        let silence = (try? c.decode(Double.self, forKey: .endOfTurnSilence)) ?? d.endOfTurnSilence
+        endOfTurnSilence = silence < 1.0 ? d.endOfTurnSilence : min(silence, Self.endOfTurnSilenceRange.upperBound)
         earlyTranscription = (try? c.decode(Bool.self, forKey: .earlyTranscription)) ?? d.earlyTranscription
         pronunciation = (try? c.decode([String: String].self, forKey: .pronunciation)) ?? [:]
         echoCancellation = (try? c.decode(Bool.self, forKey: .echoCancellation)) ?? d.echoCancellation
