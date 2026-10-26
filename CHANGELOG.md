@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A spoken question that is over before it played is no longer asked afterwards. Until now this held only when a request was answered. Now it also holds when Claude Code cancels the request, Claude Code exits, the turn ends with a request still open, a new session starts, a request replaces the folder-access offer, or the offer is answered, cancelled or put off on screen. A question already playing is left to finish (audit run 9's deferred prompt-queue unit).
 - The iPhone app no longer crashes when it starts listening after the audio device changed. A Bluetooth headset switching to its 16 kHz call mode left the microphone engine reporting 48 kHz, and a tap in that format raised an exception the app could not catch (seen in the Simulator on 2026-10-25). The same crash happened when listening started before anything had played, because the audio session could not record yet. The phone now sets the session up for recording first, uses a new engine for every listen, taps in the format the hardware runs at, and reports a microphone that is not ready instead of crashing.
 - When speech recognition fails as soon as it starts (the Simulator, or a phone without its on-device speech model), hands-free listening no longer restarts four times a second. After three quick failures in a row the phone mutes and says recognition is not working. Tap the microphone to try again.
 

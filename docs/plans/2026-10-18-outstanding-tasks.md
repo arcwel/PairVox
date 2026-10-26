@@ -4,7 +4,7 @@
 - **Shipped in beta.2.** Hands-free microphone sleep, click-only folder access, `scripts/release-assets.sh`, and the fixes from audit runs 8 and 9.
 - **beta.1 should be replaced.** Its DMG carried the debug entitlement (docs/security/2026-10-25-audit-run-9/REPORT.md §6).
 - **Gates passed.** Strix found nothing on `de91222` or `a3e5940`, and Gitleaks over the full history is clean.
-- **Still open from the audits.** The two units run 9's critic deferred: the phone's spoken answers, and prompt-queue cleanup on cancel and exit. Also backlog 3.3 and the hardening notes in run 9 §5.
+- **Still open from the audits.** The phone's spoken answers (deferred by run 9's critic; the Mac does no timing or echo check of its own), backlog 3.3 and the hardening notes in run 9 §5. Prompt-queue cleanup on cancel and exit, the other deferred unit, was done after beta.2 (`PromptQueueCleanupTests`).
 - **The v0.1 checks.** Checks 2 to 4 still need the headset session on an installed build.
 - **The Apple Developer Program.** Without the paid program the DMG stays ad-hoc and the iPhone build unsigned.
 
