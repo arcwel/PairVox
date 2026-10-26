@@ -1139,6 +1139,10 @@ final class AppModel: ObservableObject {
             let on = settings.approveByVoiceFromSummary
             broadcast { await $0.setApproveByVoiceFromSummary(on) }
         }
+        if old.approvalGates != settings.approvalGates {
+            let gates = settings.approvalGates
+            broadcast { await $0.setApprovalGates(gates) }
+        }
         if old.macSecondConfirmation != settings.macSecondConfirmation {
             let on = settings.macSecondConfirmation
             if on { broadcast { await $0.setSecondConfirmation(Self.touchIDCheck) } }

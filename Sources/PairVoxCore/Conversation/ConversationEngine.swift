@@ -83,6 +83,9 @@ public actor ConversationEngine {
     private var speechStarts: [Date] = []
     private static let maxPendingStarts = 8
     private var promptHeardAt: Date?
+    /// The Auto gate's read-back, and when it stopped sounding (finished, or cut off by speech or a stop).
+    private var secondYesPromptID: Int?
+    private var secondYesPromptEndedAt: Date?
     private var answerSpokenAt: Date?
     /// The text of the utterance being processed, for `IgnoredAnswer`.
     private var answerHeard = ""
@@ -118,7 +121,7 @@ public actor ConversationEngine {
         self.output = output
         self.makeBackend = backendFactory
         self.pronunciation = Pronunciation(dictionary: configuration.pronunciation)
-        self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation, grants: configuration.folderGrants, voiceFromSummary: configuration.approveByVoiceFromSummary)
+        self.policy = PermissionPolicy(projectRoot: configuration.projectRoot, pronunciation: pronunciation, grants: configuration.folderGrants, voiceFromSummary: configuration.approveByVoiceFromSummary, gates: configuration.approvalGates)
         self.planner = SpeechPlanner(mode: configuration.speechMode, verbosity: configuration.verbosity,
                                      pronunciation: pronunciation, ids: ids, spokenLimit: configuration.spokenReplyLimit)
         var cont: AsyncStream<EngineSnapshot>.Continuation!
@@ -455,9 +458,25 @@ public actor ConversationEngine {
         publish()
     }
 
+    /// Replaces the approval gates for the running session. The request on screen and those behind it are rated
+    /// again; a half-given Auto confirmation starts over, so a gate made stricter is never satisfied by an old yes.
+    public func setApprovalGates(_ gates: ApprovalGates) {
+        guard config.approvalGates != gates else { return }
+        config.approvalGates = gates
+        rebuildPolicy()
+        if var pending = snapshot.pendingPermission {
+            pending.assessment = policy.assess(pending.request)
+            pending.awaitingSecondYes = false
+            snapshot.pendingPermission = pending
+        }
+        permissionQueue = permissionQueue.map { var p = $0; p.assessment = policy.assess(p.request); p.awaitingSecondYes = false; return p }
+        snapshot.queuedPermissions = permissionQueue
+        publish()
+    }
+
     private func rebuildPolicy() {
         policy = PermissionPolicy(projectRoot: config.projectRoot, pronunciation: pronunciation, grants: config.folderGrants,
-                                  voiceFromSummary: config.approveByVoiceFromSummary)
+                                  voiceFromSummary: config.approveByVoiceFromSummary, gates: config.approvalGates)
     }
 
     /// Set while the owner wants Touch ID or a password after a spoken high-risk approval; nil turns it off.
@@ -774,7 +793,10 @@ public actor ConversationEngine {
             if speakExplanationFor == requestID {
                 speakExplanationFor = nil
                 speak([make(Self.speakableAdvice(text), .notice)], record: false, force: true)
-            } else if !userIsSpeaking && !transcribing, let readout = Self.spokenSummary(text, voiceApprovable: pending.assessment.voiceApprovable) {
+            } else if !userIsSpeaking && !transcribing, !pending.awaitingSecondYes,
+                      let readout = Self.spokenSummary(text, voiceApprovable: pending.assessment.voiceApprovable) {
+                // Not after an Auto read-back: its "Allow?" would follow "answer a second time", and would become the
+                // prompt the echo check compares against in its place (security review 2026-10-26).
                 // The short prompt plays at once; the plain-words summary takes several seconds to arrive, so it
                 // follows as a second prompt while the request still waits (owner, 2026-10-25: "requests are not
                 // being summarized"). It is a prompt, so it gets the same timing and echo checks.
@@ -821,9 +843,54 @@ public actor ConversationEngine {
     /// the screen stays a click.
     /// Spoken confirmation applies to anything the policy would not let a plain yes approve: high risk, or too long
     /// or complex to read out. Requests Claude Code says need the screen have their own switch.
+    /// The phrase stands in for a click only where Manual is a safety rule. A kind of command the owner set to Manual
+    /// takes a tap or click, as they asked.
     private func canConfirmHighRiskByVoice(_ p: PendingPermission) -> Bool {
-        config.spokenHighRiskConfirmation && !p.assessment.voiceApprovable
+        config.spokenHighRiskConfirmation && !p.assessment.voiceApprovable && p.assessment.gateLocked
             && (!p.request.needsPersonAtScreen || config.voiceApprovesNeedsScreen)
+    }
+
+    /// The Auto gate's first yes: what will happen is read back, and the next yes approves. The read-back has no
+    /// answer word in it, so hearing it through the microphone cannot complete the confirmation, and it opens a new
+    /// answer window, so the second yes must be begun after it started.
+    private func askForSecondYes(_ pending: PendingPermission, lead: String? = nil) {
+        var p = pending
+        p.awaitingSecondYes = true
+        p.secondYesAskedAt = now()
+        snapshot.pendingPermission = p
+        log.log(.info, .policy, "permission.firstYes", ["tool": .string(p.request.toolName)])
+        endWaitingQuestion()
+        secondYesPromptEndedAt = nil
+        secondYesPromptID = speakPrompt(Self.secondYesPrompt(p), after: lead.map { [make($0, .notice)] } ?? [])
+        publish()
+    }
+
+    /// The Auto gate's second yes counts only if it was begun after the read-back finished (one said over it was
+    /// said before the person heard what it does) and within `secondYesWindow` of it.
+    private func secondYesCounts(_ p: PendingPermission) -> Bool {
+        guard let asked = p.secondYesAskedAt, now().timeIntervalSince(asked) <= Self.secondYesWindow else {
+            askForSecondYes(p)   // too long ago: this yes is a first yes again
+            return false
+        }
+        if let spoken = answerSpokenAt {
+            guard let ended = secondYesPromptEndedAt, spoken >= ended else {
+                log.log(.info, .policy, "permission.secondYesDuringReadBack", [:])
+                askForSecondYes(p, lead: "Let me finish first.")
+                return false
+            }
+        }
+        return true
+    }
+
+    /// How long the Auto gate's first yes holds.
+    static let secondYesWindow: TimeInterval = 60
+
+    /// No word or run of words in it is an answer, so PairVox's own voice heard back cannot be the second yes
+    /// (checked word run by word run in the tests; "to confirm" and "go ahead" were answers, security review 2026-10-26).
+    static func secondYesPrompt(_ p: PendingPermission) -> String {
+        var what = p.plainSummary ?? p.assessment.spokenPrompt.replacingOccurrences(of: " Allow?", with: "")
+        while what.hasSuffix(".") { what.removeLast() }
+        return "Before it runs: \(what). Answer a second time to proceed."
     }
 
     public func interruptClaude() {
@@ -987,7 +1054,16 @@ public actor ConversationEngine {
                 noteIgnored(.stale)
                 speak([make("That request has been waiting a while. Please confirm it on screen.", .notice)], record: false, force: true)
             } else if pending.assessment.voiceApprovable {
-                approvePending(always: command == .approveAlways)
+                if pending.assessment.gate == .auto, !pending.awaitingSecondYes {
+                    askForSecondYes(pending)
+                } else if pending.assessment.gate == .auto, !secondYesCounts(pending) {
+                    break
+                } else {
+                    approvePending(always: command == .approveAlways)
+                }
+            } else if !pending.assessment.gateLocked {
+                noteIgnored(.manualGate)   // the owner's choice for this kind of command
+                speak([make("That one is set to Manual. Please tap or click to continue.", .notice)], record: false, force: true)
             } else if canConfirmHighRiskByVoice(pending) {
                 noteIgnored(.highRisk)
                 speak([make("That one is high risk. Say confirm high risk to allow it, or use the button.", .notice)],
@@ -1005,7 +1081,8 @@ public actor ConversationEngine {
             if answerPrecedesPrompt(for: head) { break }
             let waiting = [head] + permissionQueue
             let clock = now()
-            let eligible = waiting.filter { $0.assessment.voiceApprovable && !$0.isStale(now: clock) }
+            // Only what one yes approves: an Auto request needs its own read-back and second yes.
+            let eligible = waiting.filter { $0.assessment.voiceApprovable && $0.assessment.gate == .skip && !$0.isStale(now: clock) }
             guard !eligible.isEmpty else {
                 noteIgnored(.needsClick)
                 speak([make("None of these can be allowed by voice. Please use the buttons.", .notice)], record: false, force: true)
@@ -1264,6 +1341,7 @@ public actor ConversationEngine {
         case .finished(let id), .failed(let id, _):
             startedIDs.remove(id)
             if id == lastPromptID, lastPromptEndedAt == nil { lastPromptEndedAt = now() }
+            if id == secondYesPromptID, secondYesPromptEndedAt == nil { secondYesPromptEndedAt = now() }
             if case .failed(_, let why) = event {
                 log.log(.error, .tts, "utterance.failed", ["id": .int(id), "reason": .string(why)])
             } else {
@@ -1356,6 +1434,7 @@ public actor ConversationEngine {
     /// for the echo check: its sound stops at this moment.
     private func clearQueued() {
         if let id = lastPromptID, lastPromptEndedAt == nil, queued[id] != nil { lastPromptEndedAt = now() }
+        if let id = secondYesPromptID, secondYesPromptEndedAt == nil, queued[id] != nil { secondYesPromptEndedAt = now() }
         queued.removeAll()
     }
 
@@ -1441,10 +1520,12 @@ public actor ConversationEngine {
     }
 
     /// Speaks a prompt for the request or offer now waiting, and remembers it as one of that request's prompts.
-    private func speakPrompt(_ text: String, after lead: [Utterance] = []) {
+    @discardableResult
+    private func speakPrompt(_ text: String, after lead: [Utterance] = []) -> Int {
         let prompt = make(text, .prompt)
         pendingPromptIDs.insert(prompt.id)
         speak(lead + [prompt], record: false, force: true)
+        return prompt.id
     }
 
     /// The question for what was waiting is over: answered, cancelled by Claude Code, replaced, or gone with the

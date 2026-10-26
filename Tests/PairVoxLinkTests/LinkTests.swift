@@ -1041,6 +1041,58 @@ final class PhoneSpokenAnswerTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    // Approval gates (owner, 2026-10-26) hold on the phone too: Auto takes two spoken answers with the read-back
+    // between them, and a command the owner set to Manual takes a tap, whatever the high-risk phrase setting.
+    func testAutoOnThePhoneTakesTwoAnswersWithTheReadBackBetween() async throws {
+        let request = LinkRequest(requestID: "R", summary: "Run: swift build", spokenPrompt: "Claude wants to run swift build. Allow?",
+                                  risk: "medium", reasons: [], voiceApprovable: true,
+                                  plainSummary: "Claude needs approval to build the app.", gate: "auto", gateLocked: false)
+        let (host, engine, client, clock) = try await connected(request)
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        var readBack: String?
+        for _ in 0..<6 where readBack == nil { if case .speak(let t) = try await client.receive() { readBack = t } }
+        XCTAssertEqual(readBack, "Before it runs: Claude needs approval to build the app. Answer a second time to proceed.")
+        XCTAssertEqual(VoiceCommand.spokenAnswer(readBack ?? ""), .notAnAnswer, "heard back, it is not the second yes")
+        XCTAssertTrue(engine.calls.isEmpty, "one yes is not enough")
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))   // at once: begun before the read-back played
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty)
+        try await client.send(.approve(requestID: "R", method: .voice, auth: .faceID))   // nor one ID-bound voice message
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty)
+        clock.advance(LinkHost.secondYesWindow + 1)   // a minute later, the first yes has lapsed
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "that yes is a first yes again")
+        clock.advance(LinkHost.minSpokenAnswerDelay)
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"])
+        withExtendedLifetime(host) {}
+    }
+
+    func testManualByChoiceOnThePhoneIsATapEvenWithTheHighRiskPhraseOn() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, clock) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        var snap = h.snapshot()
+        snap.voiceHighRisk = true
+        snap.request = LinkRequest(requestID: "R", summary: "Run: gh pr list", spokenPrompt: "x", risk: "medium", reasons: [],
+                                   voiceApprovable: false, gate: "manual", gateLocked: false)
+        await host.publish(snap)
+        _ = try await h.nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        try await client.send(.approve(requestID: "R", method: .voice, auth: .faceID))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "the owner set it to Manual")
+        try await client.send(.approve(requestID: "R", method: .tap, auth: .faceID))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"])
+        withExtendedLifetime(host) {}
+    }
+
     func testOnceNothingWaitsTheSameWordsAreAMessage() async throws {
         let h = LinkTests()
         let (host, engine, pairing, _) = await h.makeHost()

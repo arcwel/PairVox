@@ -135,6 +135,10 @@ public struct PendingPermission: Sendable, Equatable {
     public var questions: [AdvisorTurn] = []
     /// When the request arrived. A spoken yes stops counting after `Announcer.staleAfter`; a click still works.
     public var receivedAt: Date
+    /// The Auto gate's first yes was heard and what will happen was read back: the next yes approves.
+    public var awaitingSecondYes = false
+    /// When the read-back was asked for; the second yes holds for `ConversationEngine.secondYesWindow`.
+    public var secondYesAskedAt: Date?
 
     public init(request: PermissionRequest, assessment: PermissionAssessment, receivedAt: Date = Date()) {
         self.request = request
@@ -165,6 +169,8 @@ public struct IgnoredAnswer: Sendable, Equatable {
         case highRisk
         /// Screen-only: a click is the only way.
         case needsClick
+        /// The owner set this kind of command to Manual (Settings, Approval gates).
+        case manualGate
     }
 
     public var requestID: String
@@ -183,6 +189,7 @@ public struct IgnoredAnswer: Sendable, Equatable {
         case .stale: return "The request has waited over five minutes, so a spoken answer no longer counts. Click Allow."
         case .highRisk: return "High-risk requests need the words \"confirm high risk\", or a click."
         case .needsClick: return "This request can only be allowed with a click."
+        case .manualGate: return "This kind of command is set to Manual in Settings, Approval gates: tap or click to allow it."
         }
     }
 }
@@ -255,6 +262,8 @@ public struct EngineConfiguration: Sendable {
     public var voiceApprovesNeedsScreen: Bool
     /// A spoken yes answers a request from its one-line summary; the full command stays on screen.
     public var approveByVoiceFromSummary: Bool
+    /// Which kinds of command take one spoken yes, two, or a tap.
+    public var approvalGates: ApprovalGates
     /// Ask a separate read-only Claude call to explain each request in plain words (uses a small amount of usage).
     public var explainRequests: Bool
     public var folderGrants: [FolderGrant]
@@ -269,7 +278,7 @@ public struct EngineConfiguration: Sendable {
                 conversationMode: ConversationMode = .execute, verbosity: Verbosity = .normal,
                 acknowledgements: Bool = true, autoApproveLowRisk: Bool = false,
                 spokenHighRiskConfirmation: Bool = false, voiceApprovesNeedsScreen: Bool = false,
-                approveByVoiceFromSummary: Bool = true, explainRequests: Bool = true,
+                approveByVoiceFromSummary: Bool = true, approvalGates: ApprovalGates = ApprovalGates(), explainRequests: Bool = true,
                 folderGrants: [FolderGrant] = [], pronunciation: [String: String] = [:],
                 speechRate: Double = 1.0, spokenReplyLimit: Int = 0, acknowledgementDelay: TimeInterval = 0.8) {
         self.projectRoot = projectRoot
@@ -281,6 +290,7 @@ public struct EngineConfiguration: Sendable {
         self.spokenHighRiskConfirmation = spokenHighRiskConfirmation
         self.voiceApprovesNeedsScreen = voiceApprovesNeedsScreen
         self.approveByVoiceFromSummary = approveByVoiceFromSummary
+        self.approvalGates = approvalGates
         self.explainRequests = explainRequests
         self.folderGrants = folderGrants
         self.pronunciation = pronunciation
@@ -299,6 +309,7 @@ public struct EngineConfiguration: Sendable {
                   spokenHighRiskConfirmation: settings.spokenHighRiskConfirmation,
                   voiceApprovesNeedsScreen: settings.voiceApprovesNeedsScreen,
                   approveByVoiceFromSummary: settings.approveByVoiceFromSummary,
+                  approvalGates: settings.approvalGates,
                   explainRequests: settings.explainRequests,
                   folderGrants: settings.folderGrants,
                   pronunciation: settings.pronunciation,

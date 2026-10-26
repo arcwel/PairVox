@@ -21,11 +21,13 @@ public struct EngineLink: LinkEngine {
         let request = s.pendingPermission.map { p in
             LinkRequest(requestID: p.request.requestID, summary: p.assessment.summary, spokenPrompt: p.assessment.spokenPrompt,
                         risk: "\(p.assessment.risk)", reasons: p.assessment.reasons, voiceApprovable: p.assessment.voiceApprovable,
-                        needsScreen: p.request.needsPersonAtScreen, plainSummary: p.plainSummary)
+                        needsScreen: p.request.needsPersonAtScreen, plainSummary: p.plainSummary,
+                        gate: p.assessment.gate.rawValue, gateLocked: p.assessment.gateLocked)
         }
         let more = others.map { i in
             LinkRequest(requestID: i.requestID, summary: i.summary, spokenPrompt: i.spokenPrompt, risk: "\(i.risk)", reasons: [],
-                        voiceApprovable: i.voiceApprovable, needsScreen: i.needsScreen, projectID: i.projectID, projectName: i.projectName)
+                        voiceApprovable: i.voiceApprovable, needsScreen: i.needsScreen, projectID: i.projectID, projectName: i.projectName,
+                        gate: i.gate.rawValue, gateLocked: i.gateLocked)
         }
         return LinkSnapshot(phase: s.phase.rawValue, project: project, transcriptTail: entries, request: request,
                             queuedRequests: s.queuedPermissionCount, others: more, voiceHighRisk: voiceHighRisk, voiceNeedsScreen: voiceNeedsScreen, activeProjectID: activeProjectID)

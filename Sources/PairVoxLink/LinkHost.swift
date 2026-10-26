@@ -34,6 +34,17 @@ public actor LinkHost {
     /// the Mac (backlog 3.3).
     public static let tapStaleAfter: TimeInterval = 1800
 
+    /// How long a first yes from the phone holds.
+    static let secondYesWindow: TimeInterval = 60
+
+    /// What an Auto-gated request is about to do, read back after the first yes. No word or run of words in it is an
+    /// answer, so the phone hearing it back cannot give the second yes (security review 2026-10-26).
+    static func secondYesPrompt(_ r: LinkRequest) -> String {
+        var what = r.plainSummary ?? r.spokenPrompt.replacingOccurrences(of: " Allow?", with: "")
+        while what.hasSuffix(".") { what.removeLast() }
+        return "Before it runs: \(what). Answer a second time to proceed."
+    }
+
     private let pairing: PairingManager
     private let engine: LinkEngine
     private let clock: @Sendable () -> Date
@@ -64,6 +75,8 @@ public actor LinkHost {
         let deviceID: String
         /// When each request first went out to this phone (not refreshed by later snapshots of the same request).
         var presented: [String: Date] = [:]
+        /// Auto-gated requests whose first spoken yes was heard and read back, and when the read-back went out.
+        var firstYes: [String: Date] = [:]
         /// What is waiting to go to this phone, and whether a writer is already sending it. A phone that stops reading
         /// must only ever hold up itself, never `publish` and never the other phones.
         var outbox: [Outgoing] = []
@@ -403,6 +416,25 @@ public actor LinkHost {
                     if let latest { await push(latest, to: c, id: id) }
                     return
                 }
+                // The Auto gate: the first yes is answered with what will happen, and only a second yes, begun after
+                // that read-back reached the phone, approves (owner, 2026-10-26).
+                if let request = find(requestID, projectID), request.gate == ApprovalGate.auto.rawValue {
+                    let k = key(projectID, requestID)
+                    // A first yes holds for a minute, as on the Mac; older, this yes is a first yes again.
+                    if let armed = c.firstYes[k], clock().timeIntervalSince(armed) > Self.secondYesWindow { c.firstYes[k] = nil }
+                    guard let armed = c.firstYes[k] else {
+                        c.firstYes[k] = clock()
+                        log("link.firstYes \(requestID)")
+                        enqueue(.speak(Self.secondYesPrompt(request)), to: c, id: id)
+                        return
+                    }
+                    guard clock().timeIntervalSince(armed) >= Self.minSpokenAnswerDelay else {
+                        log("link.approvalRefused second yes too soon")
+                        enqueue(.refused("I heard that before the phone asked. Please answer again."), to: c, id: id)
+                        return
+                    }
+                    c.firstYes[k] = nil
+                }
                 log("link.approved \(requestID) via voice none\(projectID == nil ? "" : " (other project)")")
                 await engine.approve(requestID: requestID, projectID: target)
             case .deny:
@@ -439,6 +471,12 @@ public actor LinkHost {
             guard find(requestID, projectID) != nil else { return }
             await engine.deny(requestID: requestID, projectID: projectID ?? latest?.activeProjectID)
         case .approve(let requestID, let method, let auth, let projectID):
+            // A spoken approval of an Auto request comes as two spoken answers, never as one ID-bound message.
+            if method == .voice, find(requestID, projectID)?.gate == ApprovalGate.auto.rawValue {
+                log("link.approvalRefused auto gate")
+                enqueue(.refused("That one takes two answers. Answer on the phone, or tap."), to: c, id: id)
+                return
+            }
             if let reason = approvalRefusal(requestID, projectID, method, auth, c) {
                 log("link.approvalRefused \(reason)")
                 enqueue(.refused(reason), to: c, id: id)
@@ -483,6 +521,9 @@ public actor LinkHost {
         // Voice from here on. The phone checks timing and its own echo too, but that is the phone's claim; the Mac
         // can still tell an answer that arrived too soon to follow the question (audit run 9).
         if clock().timeIntervalSince(shown) < Self.minSpokenAnswerDelay { return "I heard that before the phone asked. Please answer again." }
+        if !request.voiceApprovable, request.gateLocked == false {
+            return "This one is set to Manual on the Mac: a tap on the phone or a click on the Mac."
+        }
         if !request.voiceApprovable {
             // High risk, or too long to read out: only the spoken phrase, only if the Mac has that switched on, and
             // only with the phone's own second confirmation (Face ID, Touch ID or the passcode).

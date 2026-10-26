@@ -18,6 +18,11 @@ public struct InboxItem: Sendable, Equatable, Identifiable {
     public var arrival: Int
     /// Short enough, and with few enough reasons, to approve from a small surface without opening the project.
     public var fitsCompactSurface = false
+    /// The owner's gate when a spoken answer may approve it, and whether it is Manual only by the owner's choice.
+    public var voiceGate: ApprovalGate = .skip
+    public var ownerManual = false
+    public var gate: ApprovalGate { voiceApprovable ? voiceGate : .manual }
+    public var gateLocked: Bool { !voiceApprovable && !ownerManual }
 }
 
 /// Every pending request across all open projects, in the order they arrived.
@@ -38,6 +43,7 @@ public struct ApprovalInbox: Sendable, Equatable {
                 kept.summary = p.assessment.summary; kept.spokenPrompt = p.assessment.spokenPrompt
                 kept.risk = p.assessment.risk; kept.voiceApprovable = p.assessment.voiceApprovable
                 kept.fitsCompactSurface = p.assessment.fitsCompactSurface
+                kept.voiceGate = p.assessment.voiceGate; kept.ownerManual = p.assessment.ownerManual
                 items.append(kept)
             } else {
                 counter += 1
@@ -45,7 +51,8 @@ public struct ApprovalInbox: Sendable, Equatable {
                                        spokenPrompt: p.assessment.spokenPrompt, risk: p.assessment.risk,
                                        voiceApprovable: p.assessment.voiceApprovable,
                                        needsScreen: p.request.needsPersonAtScreen,
-                                       firstSeen: now, arrival: counter, fitsCompactSurface: p.assessment.fitsCompactSurface))
+                                       firstSeen: now, arrival: counter, fitsCompactSurface: p.assessment.fitsCompactSurface,
+                                       voiceGate: p.assessment.voiceGate, ownerManual: p.assessment.ownerManual))
             }
         }
         items.sort { $0.arrival < $1.arrival }
@@ -138,8 +145,11 @@ public struct Announcer: Sendable {
         if waiting > 1 { body += " \(waiting - 1) more waiting." }
         // An announcement is a small surface like the menu bar: it offers "approve" only for a request the one line
         // fully describes. A long command was never read to this listener, so it is reviewed on its card.
+        // One "approve" from here is one yes, so only a Skip request takes it; an Auto one is answered in its project.
+        if item.voiceApprovable && item.gate == .auto { return body + " That one takes two answers. Say tell me more, switch, or use the card." }
         if item.voiceApprovable && item.fitsCompactSurface { return body + " Say approve, deny, tell me more, or switch." }
         if item.voiceApprovable { return body + " That one is too long to approve from here. Say tell me more, switch, or use the card." }
+        if !item.gateLocked { return body + " That one is set to Manual. Say switch, or use the card." }
         let canByVoice = settings.voiceHighRisk && (!item.needsScreen || settings.voiceNeedsScreen)
         let name = settings.speakProjectNames ? " \(item.projectName)" : ""
         return body + (canByVoice ? " This needs care. Say tell me more, switch, or confirm high risk\(name)."
@@ -202,6 +212,8 @@ public enum AnnouncementRouter {
         case .switchHere: return .switchTo(item)
         case .deny: return .deny(item)
         case .approve:
+            if item.voiceApprovable && item.gate == .auto { return .say("That one takes two answers. Use the card, or say switch.") }
+            if !item.voiceApprovable && !item.gateLocked { return .say("That one is set to Manual. Use the card, or say switch.") }
             if !item.voiceApprovable {
                 return .say(settings.voiceHighRisk ? "That one needs care. Say confirm high risk \(who), or use the card."
                                                    : "That one needs a click. Use the card, or say switch.")
@@ -211,7 +223,7 @@ public enum AnnouncementRouter {
             if stale { return .say("That request is old. Use the card, or say switch.") }
             return .approve(item, needsSecondConfirmation: false)
         case .confirmHighRisk(let project):
-            guard settings.voiceHighRisk, !item.voiceApprovable else {
+            guard settings.voiceHighRisk, !item.voiceApprovable, item.gateLocked else {
                 return .say("That one needs a click. Use the card, or say switch.")
             }
             guard !item.needsScreen || settings.voiceNeedsScreen else {

@@ -24,11 +24,16 @@ public struct LinkRequest: Codable, Sendable, Equatable {
     /// What the request does in plain words ("Claude needs approval to …"), once the Mac's advisor has written it, a
     /// few seconds after the request. Advice only: it never decides anything. Nil from an older Mac.
     public var plainSummary: String?
+    /// The Mac's approval gate for it ("manual", "auto", "skip"), and whether Manual is a safety rule rather than the
+    /// owner's choice. The Mac enforces both; the phone only uses them to say what it needs. Nil from an older Mac.
+    public var gate: String?
+    public var gateLocked: Bool?
 
     public init(requestID: String, summary: String, spokenPrompt: String, risk: String, reasons: [String],
                 voiceApprovable: Bool, ageSeconds: Int = 0, needsScreen: Bool = false, projectID: String? = nil, projectName: String? = nil,
-                plainSummary: String? = nil) {
+                plainSummary: String? = nil, gate: String? = nil, gateLocked: Bool? = nil) {
         self.needsScreen = needsScreen; self.projectID = projectID; self.projectName = projectName; self.plainSummary = plainSummary
+        self.gate = gate; self.gateLocked = gateLocked
         self.requestID = requestID; self.summary = summary; self.spokenPrompt = spokenPrompt; self.risk = risk
         self.reasons = reasons; self.voiceApprovable = voiceApprovable; self.ageSeconds = ageSeconds
     }
@@ -115,6 +120,7 @@ extension LinkSnapshot {
             r.projectID = r.projectID.map { Self.cut($0, 128).text }
             r.projectName = r.projectName.map { Self.cut($0, 128).text }
             r.plainSummary = r.plainSummary.map { Self.cut($0, 512).text }   // advice: shortening it hides nothing that is decided
+            r.gate = r.gate.map { Self.cut($0, 16).text }
             r.truncated = cutAny
             return r
         }

@@ -451,7 +451,7 @@ final class PhoneModel: ObservableObject {
                 let prompt: String
                 if let plain = r.plainSummary {
                     summarySpokenFor = r.requestID
-                    prompt = Self.summaryReadout(plain, voiceApprovable: r.voiceApprovable && !r.truncated)
+                    prompt = Self.summaryReadout(plain, voiceApprovable: r.voiceApprovable && !r.truncated, gate: r.gate)
                 } else {
                     prompt = r.truncated ? "Claude needs approval for a request too long to read here. Check it on the screen." : r.spokenPrompt
                 }
@@ -460,7 +460,7 @@ final class PhoneModel: ObservableObject {
             } else if let r = s.request, lastSpokenRequest == r.requestID, summarySpokenFor != r.requestID, let plain = r.plainSummary {
                 // The plain-words summary arrives a few seconds after the request; it is read once, as on the Mac.
                 summarySpokenFor = r.requestID
-                let readout = Self.summaryReadout(plain, voiceApprovable: r.voiceApprovable && !r.truncated)
+                let readout = Self.summaryReadout(plain, voiceApprovable: r.voiceApprovable && !r.truncated, gate: r.gate)
                 noteSaying(readout)
                 speaker.say(readout)
             }
@@ -547,9 +547,11 @@ final class PhoneModel: ObservableObject {
     }
 
     /// "Claude needs approval to …", then the question that fits: a spoken yes counts only for a request the Mac allows
-    /// by voice. The other ending has no answer word in it, so hearing it back answers nothing.
-    static func summaryReadout(_ plain: String, voiceApprovable: Bool) -> String {
-        plain + (voiceApprovable ? " Allow?" : " Use the button to decide.")
+    /// by voice. The other endings have no answer word in them, so hearing them back answers nothing; an Auto request's
+    /// summary can arrive after its first yes, when "Allow?" heard back would be the second (security review 2026-10-26).
+    static func summaryReadout(_ plain: String, voiceApprovable: Bool, gate: String? = nil) -> String {
+        if gate == "auto" { return plain + " It takes two answers." }
+        return plain + (voiceApprovable ? " Allow?" : " Use the button to decide.")
     }
 
     /// True when every word of `heard` appears, in order and together, in `said` ("allow" after "…Allow?").

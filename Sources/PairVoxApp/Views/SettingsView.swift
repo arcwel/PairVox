@@ -12,6 +12,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general.rawValue)
+            ApprovalGatesSettings().tabItem { Label("Approvals", systemImage: "checkmark.shield") }.tag(SettingsTab.approvals.rawValue)
             HealthSettings().tabItem { Label("Health", systemImage: "heart.text.square") }.tag(SettingsTab.health.rawValue)
             PhoneSettings().tabItem { Label("Phone", systemImage: "iphone") }.tag(SettingsTab.phone.rawValue)
             ProjectSettings().tabItem { Label("Project", systemImage: "folder") }.tag(SettingsTab.project.rawValue)
@@ -132,7 +133,7 @@ private struct GeneralSettings: View {
 
             Section("Permissions") {
                 Toggle("Auto-approve read-only tools (Read, Grep, Glob, search)", isOn: $model.settings.autoApproveLowRisk)
-                Text("High-risk actions (deleting files, pushing, sudo, edits outside the project) always need a click, never just a spoken “yes”.")
+                Text("High-risk actions (deleting files, pushing, sudo, edits outside the project) always need a click, never just a spoken “yes”. Which other commands take one yes, two, or a click is set in Settings, Approvals.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Explain each request in plain words, and let me ask questions about it", isOn: $model.settings.explainRequests)
                 Text("A small separate Claude call, limited to reading files in the project, writes a short summary shown beside the real command and answers questions you ask before deciding. It is advice only and never approves anything. It counts toward your usage.")
