@@ -324,6 +324,15 @@ public actor ConversationEngine {
                                            awaitingCatchUpChoice: catchUpOpen && answersPermissions,
                                            hasQueuedRequests: answersPermissions && !permissionQueue.isEmpty)
         var parsed = VoiceCommand.parse(text, context: context)
+        // PairVox's own prompt or notice heard back is not an instruction for Claude, nor "no, do this instead" for the
+        // request waiting (audit run 9): it is dropped, and speech it paused carries on. Echoed answer words are
+        // handled below, where a notice says why they did not count.
+        if parsed == nil, isOwnPromptEcho(text, spokenAt: answerSpokenAt) {
+            log.log(.info, .engine, "voice.ownEchoDropped", ["words": .int(lastUtteranceWords.count)])
+            resumeAfterFalseBargeIn()
+            recomputePhase()
+            return
+        }
         // A bare acknowledgement ("okay", "mm-hmm") carries on from where speech was paused; anything else is meant for us.
         if pausedBargeIn { if parsed == .backchannel { resumePausedInPlace() } else { commitPausedBargeIn() } }
         // Text from a phone is an instruction for Claude. Only "stop" and a bare acknowledgement keep their command
@@ -367,7 +376,7 @@ public actor ConversationEngine {
         // Carrying on with something else means the user does not want the catch-up.
         if catchUpOpen { resolveCatchUp(.skip, speakReprompt: false) }
         // Anything else said while a folder offer is open is not an answer: drop the offer without recording a no.
-        if snapshot.grantOffer != nil, snapshot.pendingPermission == nil { snapshot.grantOffer = nil }
+        if snapshot.grantOffer != nil, snapshot.pendingPermission == nil { snapshot.grantOffer = nil; endWaitingQuestion() }
         // A question about the request on screen is asked of the advisor, never taken as a refusal.
         if snapshot.pendingPermission != nil, advisor != nil, VoiceCommand.isQuestion(text) {
             appendEntry(.user, text, status: .done)
@@ -573,6 +582,7 @@ public actor ConversationEngine {
         guard var offer = snapshot.grantOffer else { return }
         guard yes else {
             snapshot.grantOffer = nil
+            endWaitingQuestion()
             if offer.kind == .edit { grantHandler?(.declined(path: offer.folder)) }
             log.log(.info, .policy, "folderGrant.declined", ["kind": "\(offer.kind)", "stage": "\(offer.stage)"])
             speak([make("Okay, I'll keep asking.", .notice)], record: false, force: true)
@@ -585,6 +595,7 @@ public actor ConversationEngine {
         case .confirming:
             offer.stage = .confirming
             snapshot.grantOffer = nil
+            endWaitingQuestion()
             let shell = offer.kind == .shell
             if let i = config.folderGrants.firstIndex(where: { $0.path == offer.folder }) {
                 if shell { config.folderGrants[i].allowShell = true }
@@ -606,6 +617,7 @@ public actor ConversationEngine {
     public func dismissGrantOffer() {
         guard snapshot.grantOffer != nil else { return }
         snapshot.grantOffer = nil
+        endWaitingQuestion()
         publish()
     }
 
@@ -629,9 +641,8 @@ public actor ConversationEngine {
         case (.shell, .confirming):
             o.text = "To confirm: Claude will be able to run commands inside \(spokenPath) with no further questions, until you turn this off in Settings." + answer
         }
+        endWaitingQuestion()   // the previous stage's question, if it has not played yet
         snapshot.grantOffer = o
-        promptHeardAt = nil
-        pendingPromptIDs = []
         speakPrompt(o.text)
         publish()
     }
@@ -864,6 +875,7 @@ public actor ConversationEngine {
     }
 
     private func restart(resume: String?) {
+        endWaitingQuestion()
         startedIDs.removeAll()
         pausedBargeIn = false
         pausedRemaining = []
@@ -1118,6 +1130,7 @@ public actor ConversationEngine {
             permissionQueue.removeAll { $0.request.requestID == id }
             snapshot.queuedPermissions = permissionQueue
             if snapshot.pendingPermission?.request.requestID == id {
+                endWaitingQuestion()
                 snapshot.pendingPermission = nil
                 promoteNextPermission()
             }
@@ -1151,6 +1164,7 @@ public actor ConversationEngine {
                 resetTurnState()
                 snapshot.isClaudeWorking = false
             }
+            if snapshot.pendingPermission != nil { endWaitingQuestion() }
             snapshot.pendingPermission = nil
             permissionQueue.removeAll()
             snapshot.queuedPermissions = []
@@ -1189,6 +1203,7 @@ public actor ConversationEngine {
         snapshot.usage.turns += 1
         if authKind == .apiKey { snapshot.usage.costUSD += result.costUSD }
         snapshot.lastLatency = latency
+        if snapshot.pendingPermission != nil { endWaitingQuestion() }
         snapshot.pendingPermission = nil
 
         lastPlanner = planner
@@ -1293,7 +1308,7 @@ public actor ConversationEngine {
     private func respondToPermission(_ request: PermissionRequest, decision: PermissionDecision) {
         cancelAdvisorWork(for: request.requestID)
         sendDecision(request, decision)
-        dropUnplayedPrompts()
+        endWaitingQuestion()
         snapshot.pendingPermission = nil
         snapshot.ignoredAnswer = nil
         promoteNextPermission()
@@ -1417,6 +1432,14 @@ public actor ConversationEngine {
         speak(lead + [prompt], record: false, force: true)
     }
 
+    /// The question for what was waiting is over: answered, cancelled by Claude Code, replaced, or gone with the
+    /// session. Its prompt is not played afterwards if it has not started, and nothing said from now on is timed
+    /// against it (audit run 9 deferred the paths other than an answer).
+    private func endWaitingQuestion() {
+        dropUnplayedPrompts()
+        promptHeardAt = nil
+    }
+
     /// A decided request's prompt that has not started is taken out of the queue, so it is not played afterwards as
     /// if it asked about the next request (audit run 8).
     private func dropUnplayedPrompts() {
@@ -1437,10 +1460,9 @@ public actor ConversationEngine {
 
     private func showPermission(_ pending: PendingPermission) {
         snapshot.grantOffer = nil   // a real request outranks the standing-access question
+        endWaitingQuestion()        // and the offer's question, if it has not played, is not asked after it
         snapshot.pendingPermission = pending
         snapshot.ignoredAnswer = nil
-        pendingPromptIDs = []
-        promptHeardAt = nil
         ackTask?.cancel()
         speakPrompt(permissionPrompt(for: pending))
         startExplanation(pending)

@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+- Audit run 9's hunters' notes.
+  - Microphone sleep is timed on the continuous clock, so setting the clock back cannot keep a hands-free microphone awake, and time the Mac spent asleep counts as quiet.
+  - A session hung in "working" no longer keeps the microphone awake for ever: phases that stay unchanged count as conversation for at most 20 minutes. A conversation that keeps moving is not affected.
+  - PairVox's own prompt or notice heard back, when it is not an answer, is dropped instead of being sent to Claude. While a request waited, such an echo used to deny it as "no, do this instead".
+  - Install Latest Build… runs the installer with an allow-list of variables (PATH, HOME, locale, Xcode, the SSH agent, proxies and the signing choices) instead of the Claude child's deny-list, which passed tokens such as `GITHUB_TOKEN`.
+  - `scripts/pv-install.sh --rollback` refuses a previous copy with a broken signature or a different signing team from the installed app, as an install already did.
+- The Mac now checks the timing of a spoken answer from the iPhone itself instead of relying only on the phone. A spoken yes that reaches the Mac less than 1.5 s after the card first went out to the phone was begun before the phone asked, and the phone says "I heard that before the phone asked. Please answer again." A spoken no is not held back.
+- A tap on Allow on the iPhone stops counting for a request that has waited more than 30 minutes; approve it on the Mac. A spoken yes and the lock-screen Allow keep their five-minute limit (backlog 3.3).
+- A spoken question that is over before it played is no longer asked afterwards. Until now this held only when a request was answered. Now it also holds when Claude Code cancels the request, Claude Code exits, the turn ends with a request still open, a new session starts, a request replaces the folder-access offer, or the offer is answered, cancelled or put off on screen. A question already playing is left to finish (audit run 9's deferred prompt-queue unit).
 - PairVox waits 1.5 seconds of silence before it takes your turn as finished, so a pause mid-sentence no longer gets a reply and splits the rest into a second request. A saved setting under one second (the old 0.65 default) moves to 1.5; Settings, General, Listening, "End of turn after" now goes up to 3 seconds.
 - A spoken "yes" is no longer lost when the early transcription comes back empty. The whole utterance is transcribed instead (on 2026-10-25 four answers in a row arrived as empty text and had to be clicked).
 - Requests are read in plain words. The short prompt plays at once, and when the summary arrives a few seconds later PairVox reads its first two sentences ("In plain words: … Allow?") if the request is still waiting. File names such as `a.swift` are no longer split into two sentences when advice is read aloud.
-
 - The iPhone app no longer crashes when it starts listening after the audio device changed. A Bluetooth headset switching to its 16 kHz call mode left the microphone engine reporting 48 kHz, and a tap in that format raised an exception the app could not catch (seen in the Simulator on 2026-10-25). The same crash happened when listening started before anything had played, because the audio session could not record yet. The phone now sets the session up for recording first, uses a new engine for every listen, taps in the format the hardware runs at, and reports a microphone that is not ready instead of crashing.
 - When speech recognition fails as soon as it starts (the Simulator, or a phone without its on-device speech model), hands-free listening no longer restarts four times a second. After three quick failures in a row the phone mutes and says recognition is not working. Tap the microphone to try again.
 

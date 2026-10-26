@@ -225,6 +225,7 @@ final class LinkTests: XCTestCase {
         // Low risk: voice approval is accepted once the request was shown on this phone.
         await host.publish(snapshot())
         _ = try await nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)
         try await client.send(.approve(requestID: "R1", method: .voice, auth: .none))
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1"])
@@ -232,6 +233,7 @@ final class LinkTests: XCTestCase {
         // A request the Mac does not allow by voice cannot be approved by voice from the phone.
         await host.publish(snapshot(risk: "medium", voice: false, id: "R2"))
         _ = try await nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)
         try await client.send(.approve(requestID: "R2", method: .voice, auth: .none))
         // An approval for something that is not the waiting request is refused.
         try await client.send(.approve(requestID: "OLD", method: .tap, auth: .passcode))
@@ -242,6 +244,7 @@ final class LinkTests: XCTestCase {
         // never counts, and since audit run 7 neither does a tap from a phone with no passcode set.
         await host.publish(snapshot(risk: "high", voice: false, id: "R3"))
         _ = try await nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)
         try await client.send(.approve(requestID: "R3", method: .voice, auth: .faceID))
         try await client.send(.approve(requestID: "R3", method: .tap, auth: .none))
         try await Task.sleep(nanoseconds: 150_000_000)
@@ -253,6 +256,7 @@ final class LinkTests: XCTestCase {
         // A stale request cannot be answered by voice, but a tap works.
         await host.publish(snapshot(id: "R4"))
         _ = try await nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)
         clock.advance(LinkHost.staleAfter + 1)
         try await client.send(.approve(requestID: "R4", method: .voice, auth: .none))
         try await Task.sleep(nanoseconds: 150_000_000)
@@ -277,12 +281,13 @@ final class LinkTests: XCTestCase {
     }
 
     func testRequestNotShownOnThisConnectionCannotBeApproved() async throws {
-        let (host, engine, pairing, _) = await makeHost()
+        let (host, engine, pairing, clock) = await makeHost()
         let (id, psk) = try await pairPhone(host, pairing)
         await host.publish(snapshot())   // published before any phone is connected
         let client = try await connect(host, id, psk)
         // Connecting re-presents it, so wait for that, then a fresh connection must also see it before approving.
         _ = try await nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)
         try await client.send(.approve(requestID: "R1", method: .voice, auth: .none))
         try await Task.sleep(nanoseconds: 150_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1"], "re-presented on connect, so it counts as shown")
@@ -357,7 +362,8 @@ final class TCPLoopbackTests: XCTestCase {
         var got: LinkSnapshot?
         while got == nil { if case .snapshot(let s) = try await client.receive() { got = s } }
         XCTAssertEqual(got?.request?.requestID, "R1")
-        try await client.send(.approve(requestID: "R1", method: .voice, auth: .none))
+        // A tap: a spoken yes this soon after the card would be refused as begun before the phone asked.
+        try await client.send(.approve(requestID: "R1", method: .tap, auth: .none))
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertEqual(engine.calls, ["approve:R1"])
     }
@@ -979,15 +985,16 @@ final class PhoneProjectSwitchTests: XCTestCase {
 
 /// The phone's spoken answers are decided by the Mac with the Mac's parser and voice rules.
 final class PhoneSpokenAnswerTests: XCTestCase {
-    func connected(_ request: LinkRequest) async throws -> (LinkHost, FakeEngine, LinkClient) {
+    func connected(_ request: LinkRequest, asked: Bool = true) async throws -> (LinkHost, FakeEngine, LinkClient, Clock) {
         let h = LinkTests()
-        let (host, engine, pairing, _) = await h.makeHost()
+        let (host, engine, pairing, clock) = await h.makeHost()
         let (id, psk) = try await h.pairPhone(host, pairing)
         let client = try await h.connect(host, id, psk)
         var snap = h.snapshot(); snap.request = request
         await host.publish(snap)
         _ = try await h.nextSnapshot(client)
-        return (host, engine, client)
+        if asked { clock.advance(LinkHost.minSpokenAnswerDelay) }   // the phone has had time to ask
+        return (host, engine, client, clock)
     }
 
     func waitForCall(_ engine: FakeEngine) async {
@@ -996,7 +1003,7 @@ final class PhoneSpokenAnswerTests: XCTestCase {
     }
 
     func testAllowWithAFullStopApprovesARequestTheMacAllowsByVoice() async throws {
-        let (host, engine, client) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+        let (host, engine, client, _) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
                                                                        risk: "medium", reasons: [], voiceApprovable: true))
         try await client.send(.spokenAnswer(requestID: "R", text: "Allow."))
         await waitForCall(engine)
@@ -1005,7 +1012,7 @@ final class PhoneSpokenAnswerTests: XCTestCase {
     }
 
     func testASpokenAllowCannotApproveWhatTheMacKeepsForTheScreen() async throws {
-        let (host, engine, client) = try await connected(LinkRequest(requestID: "H", summary: "Run: git push", spokenPrompt: "x",
+        let (host, engine, client, _) = try await connected(LinkRequest(requestID: "H", summary: "Run: git push", spokenPrompt: "x",
                                                                        risk: "high", reasons: [], voiceApprovable: false))
         try await client.send(.spokenAnswer(requestID: "H", text: "Allow."))
         try? await Task.sleep(nanoseconds: 250_000_000)
@@ -1014,7 +1021,7 @@ final class PhoneSpokenAnswerTests: XCTestCase {
     }
 
     func testNoDeniesAndAMumbleIsAskedAgain() async throws {
-        let (host, engine, client) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+        let (host, engine, client, _) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
                                                                        risk: "medium", reasons: [], voiceApprovable: true))
         try await client.send(.spokenAnswer(requestID: "R", text: "Yasp."))
         var askedAgain = false
@@ -1028,6 +1035,50 @@ final class PhoneSpokenAnswerTests: XCTestCase {
         await waitForCall(engine)
         XCTAssertEqual(engine.calls, ["deny:R"])
         withExtendedLifetime(host) {}
+    }
+
+    // Audit run 9 deferred this: the Mac checked no timing of its own on the phone's spoken answers. One that arrives
+    // sooner after the card than the phone could have asked was begun before the question.
+    func testASpokenYesThatArrivesBeforeThePhoneCouldAskIsRefused() async throws {
+        let request = LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "Claude wants to edit a dot swift. Allow?",
+                                  risk: "medium", reasons: [], voiceApprovable: true)
+        let (host, engine, client, clock) = try await connected(request, asked: false)
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine.calls.isEmpty, "begun before the phone asked")
+        // Later snapshots of the same card do not restart the wait: the Mac republishes every few seconds.
+        clock.advance(LinkHost.minSpokenAnswerDelay)
+        var again = LinkTests().snapshot(); again.request = request
+        await host.publish(again)
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"], "after the question, the same yes counts")
+        withExtendedLifetime(host) {}
+    }
+
+    func testANoNeedsNoWait() async throws {
+        let (host, engine, client, _) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
+                                                                          risk: "medium", reasons: [], voiceApprovable: true), asked: false)
+        try await client.send(.spokenAnswer(requestID: "R", text: "No."))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["deny:R"])
+        withExtendedLifetime(host) {}
+    }
+
+    // Backlog 3.3: a tap had no age limit. It still has a long one, unlike a spoken yes.
+    func testATapOnACardLeftUpOverHalfAnHourIsRefused() async throws {
+        let request = LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x", risk: "medium", reasons: [], voiceApprovable: true)
+        let (host, engine, client, clock) = try await connected(request)
+        clock.advance(LinkHost.tapStaleAfter - 10)
+        try await client.send(.approve(requestID: "R", method: .tap, auth: .faceID))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"], "within the limit a tap works, long after a spoken yes would stop")
+        let (host2, engine2, client2, clock2) = try await connected(request)
+        clock2.advance(LinkHost.tapStaleAfter + 1)
+        try await client2.send(.approve(requestID: "R", method: .tap, auth: .faceID))
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(engine2.calls.isEmpty, "a card left up over half an hour is answered on the Mac")
+        withExtendedLifetime((host, host2)) {}
     }
 }
 
@@ -1107,11 +1158,12 @@ final class CrossProjectPhoneTests: XCTestCase {
     }
 
     func connected(_ h: LinkTests, _ snap: LinkSnapshot) async throws -> (LinkHost, FakeEngine, LinkClient) {
-        let (host, engine, pairing, _) = await h.makeHost()
+        let (host, engine, pairing, clock) = await h.makeHost()
         let (id, psk) = try await h.pairPhone(host, pairing)
         let client = try await h.connect(host, id, psk)
         await host.publish(snap)
         _ = try await h.nextSnapshot(client)
+        clock.advance(LinkHost.minSpokenAnswerDelay)   // the phone has had time to ask
         return (host, engine, client)
     }
 

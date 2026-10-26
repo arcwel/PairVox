@@ -904,9 +904,9 @@ final class AppModel: ObservableObject {
         p.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
         p.arguments = [root.appendingPathComponent("scripts/pv-install.sh").path, "--pull", "--json"]
         p.currentDirectoryURL = root
-        // The same filtered environment the claude child gets: the build of a pulled tree needs PATH and the developer
-        // tools, not the API keys and tokens a login shell may export (audit run 8).
-        p.environment = ChildEnvironment.filter(loginEnvironment)
+        // Only the variables a build needs, by name: the build of a pulled tree needs PATH and the developer tools, not
+        // the API keys and tokens a login shell may export (audit runs 8 and 9).
+        p.environment = InstallerEnvironment.filter(loginEnvironment)
         p.standardOutput = out
         p.standardError = out
         p.terminationHandler = { [weak self] process in

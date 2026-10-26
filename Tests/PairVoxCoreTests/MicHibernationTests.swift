@@ -5,9 +5,10 @@ import XCTest
 @testable import PairVoxCore
 
 final class MicHibernationTests: XCTestCase {
-    private let start = Date(timeIntervalSince1970: 1_000_000)
+    // The continuous clock, as the app uses: the wall clock can be set back, this one cannot (audit run 9).
+    private let start = ContinuousClock.now
 
-    private func at(_ seconds: TimeInterval) -> Date { start.addingTimeInterval(seconds) }
+    private func at(_ seconds: Double) -> MicHibernation.Instant { start.advanced(by: .seconds(seconds)) }
 
     func testSleepsAfterThreeQuietMinutes() {
         var h = MicHibernation(now: start)
@@ -60,6 +61,30 @@ final class MicHibernationTests: XCTestCase {
         var h = MicHibernation(now: at(100))
         h.noteActivity(at: at(50))
         XCTAssertEqual(h.lastActivity, at(100))
+    }
+
+    // Audit run 9: a session hung in "working" kept a hands-free microphone listening to the room for ever.
+    func testTheSamePhasesStopCountingAsConversationAfterTwentyMinutes() {
+        var h = MicHibernation(now: start)
+        let cap = Double(MicHibernation.maxUnchangedConversation.components.seconds)
+        var t = 0.0
+        while t <= cap {
+            XCTAssertFalse(h.tick(phases: [.idle, .working], handsFreeListening: true, minutes: 3, now: at(t)), "\(t)")
+            t += 5
+        }
+        XCTAssertFalse(h.tick(phases: [.idle, .working], handsFreeListening: true, minutes: 3, now: at(cap + 179)))
+        XCTAssertTrue(h.tick(phases: [.idle, .working], handsFreeListening: true, minutes: 3, now: at(cap + 181)),
+                      "three quiet minutes after the hung phase stopped counting")
+    }
+
+    func testAConversationThatKeepsMovingStaysAwakePastTheCap() {
+        var h = MicHibernation(now: start)
+        let cycle: [[EnginePhase]] = [[.thinking], [.working], [.speaking], [.idle]]
+        var t = 0.0
+        while t <= 3600 {
+            XCTAssertFalse(h.tick(phases: cycle[Int(t / 30) % cycle.count], handsFreeListening: true, minutes: 3, now: at(t)), "\(t)")
+            t += 5
+        }
     }
 
     func testOnlyAHandsFreeMicrophoneSleeps() {
