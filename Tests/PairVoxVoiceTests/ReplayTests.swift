@@ -128,16 +128,14 @@ final class EarlyTranscriptionReplayTests: XCTestCase {
     }
 
     func testStartingEarlySavesAboutAThirdOfASecondBeforeClaudeIsToldWhatYouSaid() async throws {
-        // Real time on a shared CI runner: a slow moment only ever adds delay, so each side's best of up to three runs
-        // is compared, stopping once the saving shows (CI saw 0.15 s twice, e.g. run 40262308054; locally 0.36 s).
-        var normal = Double.infinity, early = Double.infinity
-        for _ in 0..<3 {
-            normal = min(normal, try await secondsFromEndOfSpeechToSend(early: 0))
-            early = min(early, try await secondsFromEndOfSpeechToSend(early: 0.3))
-            if normal - early > 0.2 { break }
-        }
+        let normal = try await secondsFromEndOfSpeechToSend(early: 0)
+        let early = try await secondsFromEndOfSpeechToSend(early: 0.3)
         print("EARLY STT: end of speech to text sent: \(String(format: "%.2f", normal)) s normally, \(String(format: "%.2f", early)) s with early transcription (\(String(format: "%.2f", normal - early)) s sooner)")
-        XCTAssertGreaterThan(normal - early, 0.2, "early transcription should save at least 0.2 s")
+        // The saving depends on the machine, and steadily so: about 0.36 s on a Mac Studio, but 0.15 to 0.21 s on the
+        // GitHub macOS runners, the same in every run (0.74 or 0.80 s against 0.59 s; main failed at 98a3726). CI holds
+        // it to a lower bar, which a broken early transcription (no saving) still fails.
+        let bar = ProcessInfo.processInfo.environment["CI"] == nil ? 0.2 : 0.1
+        XCTAssertGreaterThan(normal - early, bar, "early transcription should save at least \(bar) s")
         // Measured from the audio's last sample, which trails the detector's last voiced frame by a little, so the bound is looser
         // than the 0.65 s end silence; the strict rule (never before the confirmed end) is the next test.
         XCTAssertGreaterThanOrEqual(early, 0.4, "it cannot be instant: the end of the turn still has to be confirmed")
