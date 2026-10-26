@@ -21,10 +21,14 @@ public struct LinkRequest: Codable, Sendable, Equatable {
     /// Set for a request in a project other than the one on the Mac's screen.
     public var projectID: String?
     public var projectName: String?
+    /// What the request does in plain words ("Claude needs approval to …"), once the Mac's advisor has written it, a
+    /// few seconds after the request. Advice only: it never decides anything. Nil from an older Mac.
+    public var plainSummary: String?
 
     public init(requestID: String, summary: String, spokenPrompt: String, risk: String, reasons: [String],
-                voiceApprovable: Bool, ageSeconds: Int = 0, needsScreen: Bool = false, projectID: String? = nil, projectName: String? = nil) {
-        self.needsScreen = needsScreen; self.projectID = projectID; self.projectName = projectName
+                voiceApprovable: Bool, ageSeconds: Int = 0, needsScreen: Bool = false, projectID: String? = nil, projectName: String? = nil,
+                plainSummary: String? = nil) {
+        self.needsScreen = needsScreen; self.projectID = projectID; self.projectName = projectName; self.plainSummary = plainSummary
         self.requestID = requestID; self.summary = summary; self.spokenPrompt = spokenPrompt; self.risk = risk
         self.reasons = reasons; self.voiceApprovable = voiceApprovable; self.ageSeconds = ageSeconds
     }
@@ -110,6 +114,7 @@ extension LinkSnapshot {
             r.reasons = Array(r.reasons.prefix(20)).map { field($0, 512) }
             r.projectID = r.projectID.map { Self.cut($0, 128).text }
             r.projectName = r.projectName.map { Self.cut($0, 128).text }
+            r.plainSummary = r.plainSummary.map { Self.cut($0, 512).text }   // advice: shortening it hides nothing that is decided
             r.truncated = cutAny
             return r
         }

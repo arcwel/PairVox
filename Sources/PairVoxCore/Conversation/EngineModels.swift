@@ -142,6 +142,12 @@ public struct PendingPermission: Sendable, Equatable {
         self.receivedAt = receivedAt
     }
 
+    /// The advisor's summary as it is read aloud ("Claude needs approval to …"), without the question at the end.
+    public var plainSummary: String? {
+        if case .ready(let text) = explanation { return ConversationEngine.plainSummary(text) }
+        return nil
+    }
+
     /// Older than the age limit every voice path shares (the announcer's and the phone link's).
     public func isStale(now: Date) -> Bool { now.timeIntervalSince(receivedAt) > Announcer.staleAfter }
 }

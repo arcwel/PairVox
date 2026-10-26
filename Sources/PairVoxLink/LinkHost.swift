@@ -383,6 +383,12 @@ public actor LinkHost {
                 enqueue(.notice("Your Mac has no project open, so that was not sent. Open a project in PairVox on the Mac."), to: c, id: id)
                 return
             }
+            // Typed while a request waits: held back rather than taken as "no, do this instead" on the Mac.
+            if latest?.request != nil {
+                log("link.submit.held \(text.count) chars")
+                enqueue(.notice("A request is waiting. Answer it before sending something new."), to: c, id: id)
+                return
+            }
             log("link.submit \(text.count) chars")   // the length only; the text itself is the person's
             await engine.submit(text)
         case .spokenAnswer(let requestID, let text, let projectID):
@@ -407,7 +413,14 @@ public actor LinkHost {
                 log("link.spokenAnswer.unclear")
                 enqueue(.speak("Sorry, was that a yes or a no?"), to: c, id: id)
             case .notAnAnswer:
-                // Something else entirely: the same as saying it to the Mac ("no, do this instead").
+                // Not a yes or a no. While that request still waits it is not sent on: it may be the phone hearing its
+                // own voice, and on the Mac it would have counted as "no, do this instead" (2026-10-26). Shown, not
+                // spoken, so it cannot be heard back in turn.
+                if find(requestID, projectID) != nil {
+                    log("link.spokenAnswer.notAnAnswer")
+                    enqueue(.notice("That was not a yes or a no, so the request is still waiting."), to: c, id: id)
+                    return
+                }
                 guard text.count <= 4000, await engine.canSubmit() else { return }
                 log("link.submit \(text.count) chars")
                 await engine.submit(text)
@@ -473,7 +486,8 @@ public actor LinkHost {
         if !request.voiceApprovable {
             // High risk, or too long to read out: only the spoken phrase, only if the Mac has that switched on, and
             // only with the phone's own second confirmation (Face ID, Touch ID or the passcode).
-            guard latest.voiceHighRisk else { return "This request needs a tap, not a spoken yes." }
+            // No answer word in it: the phone says this aloud, and on 2026-10-26 heard it back ("…not a spoken yes").
+            guard latest.voiceHighRisk else { return "This one needs a tap on the phone or a click on the Mac." }
             guard !request.needsScreen || latest.voiceNeedsScreen else { return "Claude Code says this needs you at the screen. Tap to allow." }
             guard auth != .none else { return "Confirm with Face ID, Touch ID or your passcode as well." }
         }

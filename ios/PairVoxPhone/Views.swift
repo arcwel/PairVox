@@ -523,6 +523,7 @@ struct RequestCard: View {
                 Spacer()
                 if let n = model.snapshot?.queuedRequests, n > 0 { Text("+\(n) more").font(.caption).foregroundStyle(.secondary) }
             }
+            if let plain = request.plainSummary { Text(plain).font(.callout) }
             ScrollView { Text(request.summary).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
                 .frame(maxHeight: 120)
             ForEach(request.reasons, id: \.self) { Text("• " + $0).font(.footnote) }

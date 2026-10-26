@@ -1020,6 +1020,40 @@ final class PhoneSpokenAnswerTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
+    // 2026-10-26: the Mac refused a spoken yes for a request that needs a tap, the phone said the refusal aloud
+    // ("…not a spoken yes"), heard it back, and the Mac took it as "no, do this instead" and denied the request.
+    func testARefusalHeardBackNeverDeniesTheRequest() async throws {
+        let (host, engine, client, _) = try await connected(LinkRequest(requestID: "R", summary: "Run: gh pr list", spokenPrompt: "x",
+                                                                          risk: "medium", reasons: [], voiceApprovable: false))
+        try await client.send(.spokenAnswer(requestID: "R", text: "Yes."))
+        var refusal: String?
+        for _ in 0..<6 where refusal == nil { if case .refused(let t) = try await client.receive() { refusal = t } }
+        let said = try XCTUnwrap(refusal)
+        XCTAssertEqual(VoiceCommand.spokenAnswer(said), .notAnAnswer, "\(said): no answer word to hear back")
+        try await client.send(.spokenAnswer(requestID: "R", text: said))
+        try await client.send(.spokenAnswer(requestID: "R", text: "This request needs a tap not a spoken yes"))   // 2026-10-26's words
+        try await client.send(.submit("Use the other branch instead"))   // typed while it waits
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(engine.calls, [], "nothing reached the engine: the request still waits for a tap")
+        try await client.send(.approve(requestID: "R", method: .tap, auth: .faceID))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["approve:R"])
+        withExtendedLifetime(host) {}
+    }
+
+    func testOnceNothingWaitsTheSameWordsAreAMessage() async throws {
+        let h = LinkTests()
+        let (host, engine, pairing, _) = await h.makeHost()
+        let (id, psk) = try await h.pairPhone(host, pairing)
+        let client = try await h.connect(host, id, psk)
+        await host.publish(LinkSnapshot(phase: "idle", project: "app", transcriptTail: [], request: nil, queuedRequests: 0))
+        _ = try await h.nextSnapshot(client)
+        try await client.send(.submit("Use the other branch instead"))
+        await waitForCall(engine)
+        XCTAssertEqual(engine.calls, ["submit:Use the other branch instead"])
+        withExtendedLifetime(host) {}
+    }
+
     func testNoDeniesAndAMumbleIsAskedAgain() async throws {
         let (host, engine, client, _) = try await connected(LinkRequest(requestID: "R", summary: "Edit a.swift", spokenPrompt: "x",
                                                                        risk: "medium", reasons: [], voiceApprovable: true))

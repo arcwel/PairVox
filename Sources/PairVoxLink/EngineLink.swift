@@ -21,7 +21,7 @@ public struct EngineLink: LinkEngine {
         let request = s.pendingPermission.map { p in
             LinkRequest(requestID: p.request.requestID, summary: p.assessment.summary, spokenPrompt: p.assessment.spokenPrompt,
                         risk: "\(p.assessment.risk)", reasons: p.assessment.reasons, voiceApprovable: p.assessment.voiceApprovable,
-                        needsScreen: p.request.needsPersonAtScreen)
+                        needsScreen: p.request.needsPersonAtScreen, plainSummary: p.plainSummary)
         }
         let more = others.map { i in
             LinkRequest(requestID: i.requestID, summary: i.summary, spokenPrompt: i.spokenPrompt, risk: "\(i.risk)", reasons: [],

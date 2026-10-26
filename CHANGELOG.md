@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A request is no longer denied when the iPhone hears itself. On 2026-10-26 the Mac refused a spoken yes for a request that needs a tap, the phone said "This request needs a tap, not a spoken yes", heard its own voice, and the Mac took the words as "no, do this instead" and denied the request. Text from the phone now never answers or refuses a waiting request: the phone shows "That was not a yes or a no, so the request is still waiting", and typed text waits until the request is answered. The refusal now reads "This one needs a tap on the phone or a click on the Mac", with no answer word in it.
+- Requests are described in plain words on the phone as well as the Mac: "Claude needs approval to list the open pull requests…". The advisor is asked for one sentence that names a file by what it is, not by its path. The phone reads the Mac's one-line prompt at once, even for a request that needs a tap (it used to say only that a decision was needed on the screen), then the summary when it arrives, and shows the summary on the card.
 - Audit run 9's hunters' notes.
   - Microphone sleep is timed on the continuous clock, so setting the clock back cannot keep a hands-free microphone awake, and time the Mac spent asleep counts as quiet.
   - A session hung in "working" no longer keeps the microphone awake for ever: phases that stay unchanged count as conversation for at most 20 minutes. A conversation that keeps moving is not affected.

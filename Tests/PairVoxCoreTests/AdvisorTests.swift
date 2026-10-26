@@ -231,16 +231,35 @@ final class SpokenSummaryTests: XCTestCase {
                                                             input: ["file_path": .string("/Users/dev/app/a.swift")])))
         try? await Task.sleep(nanoseconds: 120_000_000)
         let prompts = output.queue.filter { $0.kind == .prompt }.map(\.text)
-        XCTAssertEqual(prompts.last, "In plain words: It runs the project's tests. Allow?")
+        XCTAssertEqual(prompts.last, "Claude needs approval. It runs the project's tests. Allow?")
         XCTAssertTrue(backend.responses.isEmpty, "reading the summary decides nothing")
         await engine.shutdown()
     }
 
     func testOnlyTwoSentencesAndNeverAnApprovalAreRead() {
         XCTAssertEqual(ConversationEngine.spokenSummary("It edits a.swift. It fixes the parser. It also adds a test.", voiceApprovable: true),
-                       "In plain words: It edits a.swift. It fixes the parser. Allow?")
+                       "Claude needs approval. It edits a.swift. It fixes the parser. Allow?")
         XCTAssertNil(ConversationEngine.spokenSummary("Allow.", voiceApprovable: true), "nothing left after the advice filter")
         XCTAssertEqual(ConversationEngine.spokenSummary("It deletes the build folder.", voiceApprovable: false),
-                       "In plain words: It deletes the build folder. Please confirm it on screen.")
+                       "Claude needs approval. It deletes the build folder. Please confirm it on screen.")
+    }
+
+    // Owner, 2026-10-26: say "Claude needs approval to …" with what the file is, not its path.
+    func testTheSummaryLeadsWithWhatClaudeNeedsApprovalFor() {
+        XCTAssertEqual(ConversationEngine.spokenSummary("Claude needs approval to list the open pull requests and the branch status.", voiceApprovable: false),
+                       "Claude needs approval to list the open pull requests and the branch status. Please confirm it on screen.")
+        let prompt = AdvisorPrompt.summary(PermissionRequest(requestID: "r", toolName: "Edit", input: ["file_path": "/p/Sources/Login/LoginView.swift"]),
+                                           assessment: PermissionAssessment(risk: .medium, voiceApprovable: true, spokenPrompt: "", summary: "", reasons: []),
+                                           project: "/p")
+        XCTAssertTrue(prompt.contains(#"begins "Claude needs approval to""#), prompt)
+        XCTAssertTrue(prompt.contains("not by its path or file name"))
+    }
+
+    func testThePhoneIsSentTheSummaryOnceItIsReady() {
+        var pending = PendingPermission(request: PermissionRequest(requestID: "A", toolName: "Bash", input: ["command": "gh pr list"]),
+                                        assessment: PermissionAssessment(risk: .medium, voiceApprovable: false, spokenPrompt: "x", summary: "Run: gh pr list", reasons: []))
+        XCTAssertNil(pending.plainSummary, "nothing until the advisor has answered")
+        pending.explanation = .ready("Claude needs approval to list the open pull requests.")
+        XCTAssertEqual(pending.plainSummary, "Claude needs approval to list the open pull requests.")
     }
 }

@@ -373,6 +373,15 @@ public actor ConversationEngine {
             perform(command)
             return
         }
+        // Text from the phone never answers the request waiting, and never refuses it either: it may be the phone's
+        // own voice heard back. On 2026-10-26 the phone's "This request needs a tap…" came back as text and denied the
+        // request as "no, do this instead". The request waits for a yes, a no, a tap or a click.
+        if !answersPermissions, snapshot.pendingPermission != nil {
+            log.log(.info, .engine, "remote.textWhileRequestWaits", ["words": .int(lastUtteranceWords.count)])
+            snapshot.lastNotice = "A request is waiting. Answer it before sending something new."
+            publish()
+            return
+        }
         // Carrying on with something else means the user does not want the catch-up.
         if catchUpOpen { resolveCatchUp(.skip, speakReprompt: false) }
         // Anything else said while a folder offer is open is not an answer: drop the offer without recording a no.
@@ -723,15 +732,21 @@ public actor ConversationEngine {
             .filter { !$0.isEmpty }
     }
 
-    /// The first two sentences of the plain-words summary, read after the request's short prompt. Nil when the
+    /// The plain-words summary as it is read aloud: at most two sentences, led by "Claude needs approval" (the
+    /// advisor is asked to begin that way; owner, 2026-10-26: say what it is for, not the file path). Nil when the
     /// advice filter left nothing to say.
-    static func spokenSummary(_ text: String, voiceApprovable: Bool) -> String? {
+    public static func plainSummary(_ text: String) -> String? {
         let safe = speakableAdvice(text)
         guard !safe.hasPrefix("There is nothing more to add") else { return nil }
         let parts = sentences(of: safe)
         guard !parts.isEmpty else { return nil }
         let body = parts.prefix(2).joined(separator: ". ") + "."
-        return "In plain words: " + body + (voiceApprovable ? " Allow?" : " Please confirm it on screen.")
+        return body.lowercased().hasPrefix("claude needs approval") ? body : "Claude needs approval. " + body
+    }
+
+    /// The summary read after the request's short prompt, with the question that fits the request.
+    static func spokenSummary(_ text: String, voiceApprovable: Bool) -> String? {
+        plainSummary(text).map { $0 + (voiceApprovable ? " Allow?" : " Please confirm it on screen.") }
     }
 
     private func startExplanation(_ pending: PendingPermission) {

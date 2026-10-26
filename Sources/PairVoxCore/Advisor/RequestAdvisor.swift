@@ -75,7 +75,9 @@ public enum AdvisorPrompt {
         """
         \(requestBlock(request, assessment: assessment, project: project))
 
-        In at most two short sentences, say what this action would do.
+        Say what this action would do in one short sentence that begins "Claude needs approval to", for someone \
+        listening rather than reading. Name a file or folder by what it is (the login screen, the project's \
+        settings, the test for the parser), not by its path or file name. Reply with that sentence only.
         """
     }
 
