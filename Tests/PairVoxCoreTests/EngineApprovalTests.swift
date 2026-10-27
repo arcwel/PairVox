@@ -889,3 +889,61 @@ final class AuditRun9EngineTests: XCTestCase {
         XCTAssertEqual(snap.pendingPermission?.request.requestID, "A", "the stale one waits for a click")
     }
 }
+
+/// Stability audit, 2026-10-26.
+final class StabilityAuditEngineTests: XCTestCase {
+    func settle(_ ms: UInt64 = 80) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+
+    func testAnAnswerForAnotherProjectLetsThisOneCarryOnTalking() async {
+        let backend = FakeBackend(), output = FakeOutput()
+        output.pausable = true
+        let engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", speechMode: .skipCode,
+                                                                           acknowledgementDelay: 5),
+                                        output: output, backendFactory: { _ in backend })
+        await engine.start()
+        await engine.setUtteranceInterceptor { _ in true }
+        await engine.submit("Explain it", typed: true)
+        backend.emit(.textDelta("Here is a long answer that keeps going for a while. "))
+        await settle()
+        await engine.userStartedSpeaking()          // barge-in pauses the reply
+        XCTAssertEqual(output.pauses, 1)
+        await engine.submit("approve", startedAt: Date())
+        await settle()
+        XCTAssertEqual(output.resumes, 1, "the utterance was for another project, so this reply resumes")
+        await engine.shutdown()
+    }
+
+    func testAQueuedRequestDoesNotOutliveItsTurn() async {
+        let backend = FakeBackend(), output = FakeOutput()
+        let engine = ConversationEngine(configuration: EngineConfiguration(projectRoot: "/Users/dev/app", acknowledgementDelay: 5),
+                                        output: output, backendFactory: { _ in backend })
+        await engine.start()
+        await engine.submit("Do the work", typed: true)
+        for (id, f) in [("A", "a.swift"), ("B", "b.swift")] {
+            backend.emit(.permissionRequested(PermissionRequest(requestID: id, toolName: "Edit", input: ["file_path": .string("/Users/dev/app/\(f)")])))
+        }
+        await settle()
+        backend.emit(.turnCompleted(TurnResult(outcome: .interrupted)))
+        await settle()
+        let snap = await engine.snapshot
+        XCTAssertNil(snap.pendingPermission)
+        XCTAssertTrue(snap.queuedPermissions.isEmpty, "B belonged to the turn that ended")
+        await engine.shutdown()
+    }
+
+    func testAHugeCommandIsRatedQuickly() {
+        let policy = PermissionPolicy(projectRoot: "/Users/dev/app", gates: ApprovalGates(categories: [:],
+                                      rules: [CommandGateRule(command: "gh pr list", gate: .manual)]))
+        let longWord = "ps " + String(repeating: "e", count: 50_000) + "1"
+        let manyWords = "echo " + Array(repeating: "word", count: 20_000).joined(separator: " ")
+        let began = Date()
+        for c in [longWord, manyWords] {
+            _ = policy.assess(PermissionRequest(requestID: "r", toolName: "Bash", input: ["command": .string(c)]))
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(began), 5, "rating must not stall the engine")
+        XCTAssertTrue(BashRisk.isEnvironmentFlag("eww"))
+        XCTAssertTrue(BashRisk.isEnvironmentFlag("-E"))
+        XCTAssertFalse(BashRisk.isEnvironmentFlag("aux"))
+        XCTAssertFalse(BashRisk.isEnvironmentFlag(String(repeating: "e", count: 50_000) + "1"))
+    }
+}

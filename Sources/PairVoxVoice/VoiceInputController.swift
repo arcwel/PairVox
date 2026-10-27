@@ -66,11 +66,20 @@ public final class VoiceInputController: @unchecked Sendable {
     /// cannot land in the wrong project.
     public func setEngine(_ newEngine: ConversationEngine) {
         lock.lock()
+        let old = _engine, wasCapturing = capturing, started = utteranceStartedAt
         _engine = newEngine
         capturing = false
         utterance = []
+        utteranceStartedAt = nil
+        speculative?.cancel(); speculative = nil
         lock.unlock()
+        // The project switched mid-utterance: the old one is told it ended, or it stays "hearing you" and keeps the
+        // microphone from ever sleeping (stability audit, 2026-10-26).
+        if wasCapturing, old !== newEngine { Task { await old.transcriptionFailed(startedAt: started) } }
     }
+
+    /// True while an utterance is being captured, before the engine has heard about it.
+    public var isCapturing: Bool { lock.lock(); defer { lock.unlock() }; return capturing }
 
     public func setMode(_ newMode: ListeningMode) {
         lock.lock()
@@ -79,6 +88,7 @@ public final class VoiceInputController: @unchecked Sendable {
         let started = utteranceStartedAt
         if newMode == .muted {
             capturing = false; utterance = []; utteranceStartedAt = nil
+            pushToTalkHeld = false   // a release after a mute has nothing to finish
             // Audio from before the mute must not seed the next push-to-talk, and a transcription begun before it
             // must not be picked up later (audit run 9).
             preRoll = []
@@ -153,6 +163,7 @@ public final class VoiceInputController: @unchecked Sendable {
 
     public func pushToTalkEnded() {
         lock.lock()
+        guard pushToTalkHeld else { lock.unlock(); return }   // muted while held: already ended
         pushToTalkHeld = false
         let samples = utterance
         let started = utteranceStartedAt

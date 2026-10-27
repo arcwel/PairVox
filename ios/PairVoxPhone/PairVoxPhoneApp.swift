@@ -30,7 +30,9 @@ final class CrashReportCollector: NSObject, MXMetricManagerSubscriber {
     override init() {
         super.init()
         MXMetricManager.shared.add(self)
-        for payload in MXMetricManager.shared.pastDiagnosticPayloads { keep(payload) }
+        // Off the main thread, so launch does not wait on writing old reports (stability audit, 2026-10-26).
+        let past = MXMetricManager.shared.pastDiagnosticPayloads
+        DispatchQueue.global(qos: .utility).async { [weak self] in past.forEach { self?.keep($0) } }
     }
 
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
@@ -39,7 +41,9 @@ final class CrashReportCollector: NSObject, MXMetricManagerSubscriber {
 
     private func keep(_ payload: MXDiagnosticPayload) {
         let crashes = payload.crashDiagnostics?.count ?? 0, hangs = payload.hangDiagnostics?.count ?? 0
-        PhoneModel.log.log("diagnostics.received", ["crashes": "\(crashes)", "hangs": "\(hangs)"])
-        PhoneModel.log.saveCrashReport(payload.jsonRepresentation(), receivedAt: payload.timeStampEnd)
+        let kind = crashes > 0 ? "crash" : (hangs > 0 ? "hang" : "crash")
+        if PhoneModel.log.saveCrashReport(payload.jsonRepresentation(), receivedAt: payload.timeStampEnd, kind: kind) {
+            PhoneModel.log.log("diagnostics.received", ["crashes": "\(crashes)", "hangs": "\(hangs)"])
+        }
     }
 }

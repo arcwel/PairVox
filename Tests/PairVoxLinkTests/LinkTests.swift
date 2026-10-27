@@ -1743,6 +1743,22 @@ final class PhoneLogTests: XCTestCase {
     func testCrashReportsAreKeptBesideTheLog() {
         let (log, dir) = makeLog(); defer { try? FileManager.default.removeItem(at: dir) }
         for i in 0..<7 { log.saveCrashReport(Data("{}".utf8), receivedAt: Date(timeIntervalSince1970: Double(1_000_000 + i))) }
-        XCTAssertEqual(log.files.filter { $0.lastPathComponent.hasPrefix("crash-") }.count, 5, "the five newest are kept")
+        XCTAssertEqual(log.files.filter { $0.lastPathComponent.hasPrefix("crash-crash-") }.count, 5, "the five newest are kept")
+        // Hangs are kept apart, so they never push a crash report out; the same report is not written twice.
+        for i in 0..<7 { log.saveCrashReport(Data("{}".utf8), receivedAt: Date(timeIntervalSince1970: Double(2_000_000 + i)), kind: "hang") }
+        XCTAssertEqual(log.files.filter { $0.lastPathComponent.hasPrefix("crash-crash-") }.count, 5)
+        XCTAssertEqual(log.files.filter { $0.lastPathComponent.hasPrefix("crash-hang-") }.count, 5)
+        XCTAssertFalse(log.saveCrashReport(Data("{}".utf8), receivedAt: Date(timeIntervalSince1970: 2_000_006), kind: "hang"))
+    }
+}
+
+/// The phone log scrubs what the Mac log scrubs (cleanup, 2026-10-26).
+final class PhoneLogScrubTests: XCTestCase {
+    func testThePhoneLogScrubsLikeTheMacLog() {
+        let line = PhoneLog.clean("token ghp_abcdefghijklmnopqrstuvwx1234 for anthony@example.com, Bearer abcdef1234567890, password=hunter2")
+        XCTAssertFalse(line.contains("ghp_abc"))
+        XCTAssertFalse(line.contains("anthony@example.com"))
+        XCTAssertFalse(line.contains("abcdef1234567890"))
+        XCTAssertFalse(line.contains("hunter2"))
     }
 }

@@ -21,6 +21,7 @@
 # Exit codes: 0 built (or planned), 1 a step failed, 2 bad usage.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/lib/common.sh
 
 usage() { echo "usage: scripts/release-assets.sh VERSION [--out DIR] [--signed] [--strix-run DIR] [--allow-dirty] [--dry-run] [--json]" >&2; exit 2; }
 [[ $# -ge 1 ]] || usage
@@ -64,6 +65,13 @@ if [[ -n "$DIRTY" && $DIRTY_OK -eq 0 && $DRY -eq 0 ]]; then
 $DIRTY"
 fi
 
+# The files must match the commit the release is tagged with: an existing tag that points elsewhere stops the build.
+TAG_COMMIT="$(git rev-parse -q --verify "refs/tags/v$VERSION^{commit}" 2>/dev/null || true)"
+if [[ -n "$TAG_COMMIT" && "$TAG_COMMIT" != "$(git rev-parse HEAD)" ]]; then
+  fail "tag v$VERSION points at $(git rev-parse --short "$TAG_COMMIT"), not at HEAD ($COMMIT); check out the tag or move it first"
+fi
+[[ -n "$TAG_COMMIT" ]] || say "Note: there is no tag v$VERSION yet; tag $COMMIT before publishing."
+
 DMG="PairVox-$VERSION.dmg"
 IPA="PairVoxPhone-$VERSION-unsigned.ipa"
 STRIX_MD="PairVox-$VERSION-strix-report.md"
@@ -78,7 +86,7 @@ if [[ $DRY -eq 1 ]]; then
   say "  into $OUT: ${FILES[*]}"
   if [[ $JSON -eq 1 ]]; then
     printf '{"ok":true,"dryRun":true,"version":"%s","appVersion":"%s","build":%s,"commit":"%s","out":"%s","strixRun":"%s","auditRun":"%s","files":[%s]}\n' \
-      "$VERSION" "$MARKETING" "$BUILD_NUMBER" "$COMMIT" "$OUT" "$STRIX_RUN" "$AUDIT_RUN" "$(printf '"%s",' "${FILES[@]}" | sed 's/,$//')"
+      "$VERSION" "$MARKETING" "$BUILD_NUMBER" "$COMMIT" "$(json_escape "$OUT")" "$(json_escape "$STRIX_RUN")" "$(json_escape "$AUDIT_RUN")" "$(printf '"%s",' "${FILES[@]}" | sed 's/,$//')"
   fi
   exit 0
 fi
@@ -88,6 +96,11 @@ mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# Everything is built in $WORK and moved into $OUT only once it all checks, so a failed run leaves $OUT empty and
+# the same command can simply be run again (stability audit, 2026-10-26).
+FINAL="$OUT"
+OUT="$WORK/out"
+mkdir -p "$OUT"
 
 # 1. Mac. release.sh checks the bundle (and, signed, notarizes and staples it).
 say "Building the Mac app $MARKETING ($BUILD_NUMBER)…"
@@ -116,18 +129,28 @@ cp -R "$APP" "$WORK/ipa/Payload/"
 # 3. Security reports: the Strix report on its own, and everything in one zip.
 cp "$STRIX_RUN/penetration_test_report.md" "$OUT/$STRIX_MD"
 mkdir -p "$WORK/$REPORTS/strix" "$WORK/$REPORTS/audit"
-for f in penetration_test_report.md findings.sarif coverage.json run.json; do
-  [[ -f "$STRIX_RUN/$f" ]] && cp "$STRIX_RUN/$f" "$WORK/$REPORTS/strix/"
+# The reports and the record behind them are required; a missing one stops the build instead of shipping a
+# thinner bundle without a word.
+for f in penetration_test_report.md coverage.json; do
+  [[ -f "$STRIX_RUN/$f" ]] || fail "$STRIX_RUN/$f is missing"
+  cp "$STRIX_RUN/$f" "$WORK/$REPORTS/strix/"
 done
-[[ -n "$STRIX_GATE" ]] && cp "$STRIX_GATE" "$WORK/$REPORTS/strix/README.md"
-for f in REPORT.md findings.json coverage-ledger.json NEEDS-VALIDATION.md; do
-  [[ -f "$AUDIT_RUN/$f" ]] && cp "$AUDIT_RUN/$f" "$WORK/$REPORTS/audit/"
+for f in findings.sarif run.json; do
+  if [[ -f "$STRIX_RUN/$f" ]]; then cp "$STRIX_RUN/$f" "$WORK/$REPORTS/strix/"; else say "Note: $STRIX_RUN/$f is missing; not in the bundle."; fi
 done
+if [[ -n "$STRIX_GATE" ]]; then cp "$STRIX_GATE" "$WORK/$REPORTS/strix/README.md"; else say "Note: no gate note names $(basename "$STRIX_RUN"); the bundle has no Strix README."; fi
+for f in REPORT.md findings.json coverage-ledger.json; do
+  [[ -f "$AUDIT_RUN/$f" ]] || fail "$AUDIT_RUN/$f is missing"
+  cp "$AUDIT_RUN/$f" "$WORK/$REPORTS/audit/"
+done
+if [[ -f "$AUDIT_RUN/NEEDS-VALIDATION.md" ]]; then cp "$AUDIT_RUN/NEEDS-VALIDATION.md" "$WORK/$REPORTS/audit/"; fi
 (cd "$WORK" && zip -qry "$OUT/$REPORTS.zip" "$REPORTS")
 
 # 4. Checksums, then check them.
 (cd "$OUT" && shasum -a 256 "$DMG" "$IPA" "$STRIX_MD" "$REPORTS.zip" > SHA256SUMS && shasum -a 256 -c SHA256SUMS >/dev/null) \
   || fail "SHA256SUMS does not check"
+for f in "${FILES[@]}"; do mv "$OUT/$f" "$FINAL/$f"; done
+OUT="$FINAL"
 
 say ""
 say "Release files for $VERSION in $OUT:"
@@ -146,5 +169,5 @@ if [[ $JSON -eq 1 ]]; then
     entries+="{\"name\":\"$f\",\"size\":$size,\"sha256\":\"$sha\"},"
   done
   printf '{"ok":true,"dryRun":false,"version":"%s","appVersion":"%s","build":%s,"commit":"%s","signed":%s,"out":"%s","files":[%s]}\n' \
-    "$VERSION" "$MARKETING" "$BUILD_NUMBER" "$COMMIT" "$([[ $SIGNED -eq 1 ]] && echo true || echo false)" "$OUT" "${entries%,}"
+    "$VERSION" "$MARKETING" "$BUILD_NUMBER" "$COMMIT" "$([[ $SIGNED -eq 1 ]] && echo true || echo false)" "$(json_escape "$OUT")" "${entries%,}"
 fi

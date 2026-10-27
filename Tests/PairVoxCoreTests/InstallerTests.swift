@@ -45,6 +45,9 @@ final class InstallerRollbackTests: XCTestCase {
         for d in [scripts, dist] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         try FileManager.default.copyItem(at: repo.appendingPathComponent("scripts/pv-install.sh"), to: scripts.appendingPathComponent("pv-install.sh"))
+        // The script sources the shared helpers.
+        try FileManager.default.createDirectory(at: scripts.appendingPathComponent("lib"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: repo.appendingPathComponent("scripts/lib/common.sh"), to: scripts.appendingPathComponent("lib/common.sh"))
         #endif
     }
 

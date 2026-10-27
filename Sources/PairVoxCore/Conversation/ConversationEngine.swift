@@ -150,6 +150,7 @@ public actor ConversationEngine {
     }
 
     public func shutdown() {
+        cancelAdvisorWork()
         ackTask?.cancel()
         eventTask?.cancel()
         outputTask?.cancel()
@@ -285,7 +286,11 @@ public actor ConversationEngine {
         // Words PairVox itself just said ("…Say approve, deny…" from an announcement) are not offered to the
         // cross-project interceptor: heard back, they would answer another project's request (audit run 8).
         if !isOwnPromptEcho(rawText, spokenAt: spokenAt), let intercept = utteranceInterceptor, intercept(rawText) {
-            userIsSpeaking = false; transcribing = false; recomputePhase(); return
+            // It was for another project, so this one carries on talking where it was (stability audit, 2026-10-26:
+            // speech stayed paused or held back until the next utterance).
+            userIsSpeaking = false; transcribing = false
+            resumeAfterFalseBargeIn()
+            recomputePhase(); return
         }
         process(rawText, allowProjectSwitch: true, spokenAt: spokenAt)
     }
@@ -346,7 +351,6 @@ public actor ConversationEngine {
             default: parsed = nil
             }
         }
-        if parsed != .approveAllWaiting { approveAllArmed = nil }
         // "switch to X" is only a command when X is one of the open projects; otherwise it is an instruction for Claude.
         if case .switchProject(let name)? = parsed {
             if allowProjectSwitch, let handler = projectSwitchHandler {
@@ -882,15 +886,10 @@ public actor ConversationEngine {
         return true
     }
 
-    /// How long the Auto gate's first yes holds.
-    static let secondYesWindow: TimeInterval = 60
+    static let secondYesWindow = ApprovalGate.secondYesWindow
 
-    /// No word or run of words in it is an answer, so PairVox's own voice heard back cannot be the second yes
-    /// (checked word run by word run in the tests; "to confirm" and "go ahead" were answers, security review 2026-10-26).
     static func secondYesPrompt(_ p: PendingPermission) -> String {
-        var what = p.plainSummary ?? p.assessment.spokenPrompt.replacingOccurrences(of: " Allow?", with: "")
-        while what.hasSuffix(".") { what.removeLast() }
-        return "Before it runs: \(what). Answer a second time to proceed."
+        ApprovalGate.secondYesReadBack(summary: p.plainSummary, spokenPrompt: p.assessment.spokenPrompt)
     }
 
     public func interruptClaude() {
@@ -967,10 +966,7 @@ public actor ConversationEngine {
         backend?.stop()
         resetTurnState()
         sendTimes.removeAll()
-        snapshot.pendingPermission = nil
-        permissionQueue.removeAll()
-        snapshot.queuedPermissions = []
-        cancelAdvisorWork()
+        dropAllWaitingRequests()
         snapshot.session = nil
         snapshot.isClaudeWorking = false
         appendEntry(.system, resume == nil ? "New session started." : "Resuming an earlier session.", status: .done)
@@ -1092,7 +1088,13 @@ public actor ConversationEngine {
                 approveAllArmed = nil
                 // Only what was read out and is still fresh: a request that aged past the limit since the readout
                 // is answered on screen (audit run 9).
-                approveAllWaiting(requestIDs: Array(armed.intersection(eligible.map(\.request.requestID))))
+                let still = armed.intersection(eligible.map(\.request.requestID))
+                if still.isEmpty {
+                    // Everything read out has gone stale: say so instead of doing nothing.
+                    speak([make("Those requests waited too long. Please answer them on screen.", .notice)], record: false, force: true)
+                } else {
+                    approveAllWaiting(requestIDs: Array(still))
+                }
             } else {
                 // Read what would be allowed first; a second \"allow all\" does it. Only the readout opens the answer
                 // window for that second one, so it must be begun after the readout started (audit run 9).
@@ -1100,9 +1102,12 @@ public actor ConversationEngine {
                 promptHeardAt = nil
                 pendingPromptIDs = []
                 let items = eligible.map { $0.assessment.spokenPrompt.replacingOccurrences(of: " Allow?", with: "") }
-                let skipped = waiting.count - eligible.count
+                let left = waiting.filter { w in !eligible.contains { $0.request.requestID == w.request.requestID } }
+                let high = left.filter { $0.assessment.risk == .high }.count, others = left.count - high
                 var text = "\(eligible.count) \(eligible.count == 1 ? "request" : "requests") can be allowed together. " + items.joined(separator: ". Then, ") + ". "
-                if skipped > 0 { text += "\(skipped) high-risk \(skipped == 1 ? "one" : "ones") will still ask. " }
+                if high > 0 { text += "\(high) high-risk \(high == 1 ? "one" : "ones") will still ask. " }
+                // The rest are kept to the screen or to their own gate by the owner's settings, not high risk.
+                if others > 0 { text += "\(others) \(others == 1 ? "other needs its" : "others need their") own answer. " }
                 text += "Say allow all again to allow them."
                 speakPrompt(text)
             }
@@ -1221,6 +1226,7 @@ public actor ConversationEngine {
         case .permissionCancelled(let id):
             permissionQueue.removeAll { $0.request.requestID == id }
             snapshot.queuedPermissions = permissionQueue
+            cancelAdvisorWork(for: id)
             if snapshot.pendingPermission?.request.requestID == id {
                 endWaitingQuestion()
                 snapshot.pendingPermission = nil
@@ -1256,11 +1262,7 @@ public actor ConversationEngine {
                 resetTurnState()
                 snapshot.isClaudeWorking = false
             }
-            if snapshot.pendingPermission != nil { endWaitingQuestion() }
-            snapshot.pendingPermission = nil
-            permissionQueue.removeAll()
-            snapshot.queuedPermissions = []
-            cancelAdvisorWork()
+            dropAllWaitingRequests()
             if code != 0, !stderr.isEmpty { snapshot.lastNotice = String(stderr.suffix(300)) }
         }
         recomputePhase()
@@ -1295,8 +1297,9 @@ public actor ConversationEngine {
         snapshot.usage.turns += 1
         if authKind == .apiKey { snapshot.usage.costUSD += result.costUSD }
         snapshot.lastLatency = latency
-        if snapshot.pendingPermission != nil { endWaitingQuestion() }
-        snapshot.pendingPermission = nil
+        // Requests still queued belong to the turn that ended: left behind, one surfaced later as a fresh question
+        // for a request Claude Code no longer waits on (stability audit, 2026-10-26).
+        dropAllWaitingRequests()
 
         lastPlanner = planner
         snapshot.hasHeldBack = !planner.heldBack.isEmpty
@@ -1304,6 +1307,17 @@ public actor ConversationEngine {
         resetTurnState()
         snapshot.isClaudeWorking = !sendTimes.isEmpty
         if snapshot.isClaudeWorking { scheduleAcknowledgement() }
+    }
+
+    /// Forgets every request still waiting, shown or queued, with its question, its advice work and an armed
+    /// "allow all": the turn, the process or the session they belonged to is over.
+    private func dropAllWaitingRequests() {
+        if snapshot.pendingPermission != nil { endWaitingQuestion() }
+        snapshot.pendingPermission = nil
+        permissionQueue.removeAll()
+        snapshot.queuedPermissions = []
+        approveAllArmed = nil
+        cancelAdvisorWork()
     }
 
     private func resetTurnState() {

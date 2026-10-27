@@ -112,7 +112,7 @@ final class AppModel: ObservableObject {
         _ = crossProject
         phone.startControl()
         phone.engineBox.setSwitcher { [weak self] projectID in
-            await MainActor.run { self?.switchFromPhone(projectID) ?? false }
+            await self?.switchFromPhone(projectID) ?? false
         }
         phone.apply(enabled: loaded.phoneLinkEnabled, port: loaded.phoneLinkPort)
         Task { await bootstrap() }
@@ -293,17 +293,16 @@ final class AppModel: ObservableObject {
                 self?.receive(snap, from: session)
             }
         }
-        Task {
+        Task { [weak self] in
             await engine.setGrantHandler { [weak self] change in Task { @MainActor in self?.applyGrantChange(change) } }
             await engine.setProjectSwitchHandler { [weak self] name in
-                await MainActor.run { self?.switchToProject(named: name) ?? false }
+                await self?.switchToProject(named: name) ?? false
             }
             await engine.start()
             // Offer standing access once per project, after the greeting has had time to play.
             let folder = FolderScope.resolved(projectPath)
-            let alreadyDecided = await MainActor.run {
-                self.settings.folderGrants.contains { $0.path == folder } || self.settings.declinedGrantFolders.contains(folder)
-            }
+            guard let self else { return }
+            let alreadyDecided = self.settings.folderGrants.contains { $0.path == folder } || self.settings.declinedGrantFolders.contains(folder)
             if !alreadyDecided {
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 await engine.offerFolderGrant()
@@ -314,10 +313,7 @@ final class AppModel: ObservableObject {
         let extra = settings.preferences(for: projectPath).vocabulary
         Task.detached(priority: .utility) { [weak self] in
             let words = extra + RepoVocabulary.scan(root: url)
-            await MainActor.run {
-                session.vocabulary = words
-                if self?.activeSessionID == session.id { self?.input?.setVocabulary(words) }
-            }
+            await self?.applyVocabulary(words, to: session)
         }
 
         switchTo(session.id)
@@ -604,7 +600,7 @@ final class AppModel: ObservableObject {
                 let zip = try DiagnosticsExporter.export(s)
                 await MainActor.run { NSWorkspace.shared.activateFileViewerSelecting([zip]) }
             } catch {
-                await MainActor.run { self?.errorMessage = error.localizedDescription }
+                await self?.setError(error.localizedDescription)
             }
         }
     }
@@ -645,9 +641,9 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             do {
                 try audio.restart()
-                await MainActor.run { self?.setup.audioError = nil }
+                await self?.clearAudioError()
             } catch {
-                await MainActor.run { self?.errorMessage = "Microphone unavailable: \(error.localizedDescription)" }
+                await self?.setError("Microphone unavailable: \(error.localizedDescription)")
             }
         }
     }
@@ -814,6 +810,14 @@ final class AppModel: ObservableObject {
     /// without starting one at every short pause in a sentence now that the turn ends after 1.5 s.
     static func earlyTranscriptionStart(endSilence: Double) -> Double { max(0.3, endSilence - 0.6) }
 
+    private func applyVocabulary(_ words: [String], to session: ProjectSession) {
+        session.vocabulary = words
+        if activeSessionID == session.id { input?.setVocabulary(words) }
+    }
+
+    private func setError(_ message: String) { errorMessage = message }
+    private func clearAudioError() { setup.audioError = nil }
+
     // MARK: Microphone sleep
 
     /// Checks every few seconds whether the hands-free microphone has heard no conversation for the chosen time.
@@ -829,7 +833,13 @@ final class AppModel: ObservableObject {
 
     private func checkMicSleep() {
         let listening = listeningMode == .handsFree && settings.microphoneEnabled && microphoneAvailable
-            && !pushToTalkActive && !micAsleep
+            && !pushToTalkActive && !micAsleep && !sessionOrder.isEmpty
+        // While the microphone is not listening hands-free (off, unplugged, push-to-talk, no project, sleep set to
+        // never), the idle clock restarts, so turning it back on does not put it straight to sleep (stability
+        // audit, 2026-10-26).
+        guard listening, settings.micSleepMinutes > 0 else { micSleep.noteActivity(); return }
+        // Never in the middle of an utterance the engine has not been told about yet.
+        if input?.isCapturing == true { micSleep.noteActivity(); return }
         let phases = sessionOrder.compactMap { liveSessions[$0]?.snapshot.phase }
         guard micSleep.tick(phases: phases, handsFreeListening: listening, minutes: settings.micSleepMinutes) else { return }
         putMicToSleep(reason: "idle")
@@ -917,6 +927,9 @@ final class AppModel: ObservableObject {
                 if status != 0 { self?.errorMessage = "The update did not finish: \(detail ?? "see \(logFile)")" }
             }
         }
+        // The child has its own copy of the log's descriptor; this one is closed either way, so a failed update does
+        // not leak one per try (stability audit, 2026-10-26).
+        defer { try? out.close() }
         do {
             try p.run()
             updateRunning = true
@@ -961,14 +974,15 @@ final class AppModel: ObservableObject {
         let stack = voice
         let rate = settings.speechRate
         let line = VoiceCatalog.sampleLine(for: id)
-        Task {
+        Task { [weak self] in
             do {
                 try await stack.previewKokoroVoice(id, text: line, rate: rate) { [weak self] in
                     Task { @MainActor in if self?.previewingVoice == id { self?.previewingVoice = nil } }
                 }
             } catch {
-                if previewingVoice == id { previewingVoice = nil }
-                errorMessage = "Couldn't play the sample: \(error.localizedDescription)"
+                guard let self else { return }
+                if self.previewingVoice == id { self.previewingVoice = nil }
+                self.errorMessage = "Couldn't play the sample: \(error.localizedDescription)"
             }
         }
     }

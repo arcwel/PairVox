@@ -17,9 +17,9 @@ final class PhoneModel: ObservableObject {
     }
 
     /// The phone's own log (Library/Logs/PairVox): events and lengths, never what was said or a request's text.
-    static let log = PhoneLog(directory: PhoneLog.defaultDirectory())
+    nonisolated static let log = PhoneLog(directory: PhoneLog.defaultDirectory())
     @Published private(set) var state: LinkState = .unpaired {
-        didSet { if "\(state)" != "\(oldValue)" { Self.log.log("link.state", ["state": Self.stateName(state)]) } }
+        didSet { if state != oldValue { Self.log.log("link.state", ["state": Self.stateName(state)]) } }
     }
     @Published private(set) var snapshot: LinkSnapshot?
     @Published private(set) var notice: String? {
@@ -102,11 +102,19 @@ final class PhoneModel: ObservableObject {
         recognizer.onPartial = { [weak self] text in Task { @MainActor in self?.heard = text } }
         recognizer.onFinal = { [weak self] text in Task { @MainActor in self?.finishedListening(text) } }
         recognizer.onLevel = { [weak self] level in Task { @MainActor in self?.inputLevel = level } }
+        recognizer.onInterrupted = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.listening = false; self.heard = ""; self.inputLevel = 0
+                self.listenFailures.reset()
+                self.resumeHandsFree(after: 1.0)   // after the call, alarm or route change has settled
+            }
+        }
         speaker.onSpeakingChanged = { [weak self] speaking in
             Task { @MainActor in
                 guard let self else { return }
                 self.phoneSpeaking = speaking
-                if speaking { if self.listening { self.recognizer.cancel(); self.listening = false } }
+                if speaking { if self.listening { self.recognizer.cancel(); self.listening = false; self.listenFailures.reset() } }
                 else {
                     if self.sayingPrompt { self.sayingPrompt = false; self.promptEndedAt = Date() }
                     self.resumeHandsFree(after: 0.6)
@@ -208,13 +216,16 @@ final class PhoneModel: ObservableObject {
         return "The connection to your Mac dropped. Trying again."
     }
 
-    /// Pairing does not retry, so none of its sentences promise that it will.
+    private func setClient(_ c: LinkClient) { client = c }
+    private func clearClient(ifItIs c: LinkClient) { if client === c { client = nil } }
+
     /// The link state's name for the log, without the human message (it can quote an address).
     static func stateName(_ state: LinkState) -> String {
         let text = "\(state)"
         return String(text.prefix(while: { $0 != "(" }))
     }
 
+    /// Pairing does not retry, so none of its sentences promise that it will.
     static func plainPairingFailure(_ error: Error, network: String, port: UInt16) -> String {
         if error as? LinkError == .authFailed {
             return "The QR code or link did not match. Show a new QR code on the Mac and try again; each one works once and expires after two minutes."
@@ -272,12 +283,12 @@ final class PhoneModel: ObservableObject {
                 }
             },
             run: { [weak self] c in
-                await MainActor.run { self?.client = c }
-                while true { let m = try await c.receive(); await MainActor.run { self?.handle(m) } }
+                await self?.setClient(c)
+                while true { let m = try await c.receive(); await self?.handle(m) }
             },
             check: { c in await c.closeIfSilent(longerThan: Self.staleAfterForeground) },
             close: { [weak self] c in
-                await MainActor.run { if self?.client === c { self?.client = nil } }
+                await self?.clearClient(ifItIs: c)
                 await c.close()
             },
             isPermanent: { Self.refusal(in: $0) != nil },
@@ -592,6 +603,7 @@ final class PhoneModel: ObservableObject {
 
     func toggleMute() {
         muted.toggle()
+        listenFailures.reset()
         if muted { recognizer.cancel(); listening = false; heard = "" } else { resumeHandsFree() }
     }
 
@@ -615,15 +627,23 @@ final class PhoneModel: ObservableObject {
         }
     }
 
-    private func startListening(endAfterSilence: TimeInterval?) {
+    private func startListening(endAfterSilence: TimeInterval?, attempt: Int = 1) {
         Task {
             if micAllowed == nil { micAllowed = await recognizer.requestPermission() }
             guard micAllowed == true else { notice = "Microphone or speech access is off. Turn it on in Settings."; return }
-            guard !listening else { return }
+            // The permission prompt can take a while: the app may have gone to the background meanwhile.
+            guard !listening, appActive || pushToTalk else { return }
             recognizer.endAfterSilence = endAfterSilence
             do { try recognizer.start(); listening = true; heard = "" }
             catch {
-                Self.log.log("listen.startFailed", ["error": error.localizedDescription])
+                Self.log.log("listen.startFailed", ["error": error.localizedDescription, "attempt": "\(attempt)"])
+                // The audio is often busy for a moment after a call or a headset change: try once more first.
+                if attempt == 1 {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard !muted, !listening else { return }
+                    startListening(endAfterSilence: endAfterSilence, attempt: 2)
+                    return
+                }
                 notice = "Could not start listening: \(error.localizedDescription)"
                 muted = true   // do not retry in a loop; the person can unmute to try again
             }
@@ -637,8 +657,9 @@ final class PhoneModel: ObservableObject {
         heard = ""
         Self.log.log("listen.ended", ["seconds": String(format: "%.1f", recognizer.lastListenSeconds),
                                       "chars": "\(spoken.count)", "error": recognizer.lastError.map { $0.localizedDescription } ?? ""])
-        if listenFailures.ended(afterSeconds: recognizer.lastListenSeconds, heardSomething: !spoken.isEmpty,
-                                failed: recognizer.lastError != nil) {
+        // A quick push-to-talk tap with nothing said is not a broken recognizer.
+        if !pushToTalk, listenFailures.ended(afterSeconds: recognizer.lastListenSeconds, heardSomething: !spoken.isEmpty,
+                                             failed: recognizer.lastError != nil) {
             listenFailures.reset()
             muted = true   // the person unmutes to try again
             notice = "Speech recognition is not working on this phone right now"

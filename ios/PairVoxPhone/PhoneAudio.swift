@@ -27,6 +27,11 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDe
         voice = PhoneSpeaker.bestVoice()
         super.init()
         synthesizer.delegate = self
+        // A call or Siri pauses the player without a finished callback; without this the queue stalled, "speaking"
+        // stayed on and hands-free listening never resumed (stability audit, 2026-10-26).
+        NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            if note.interruptionBegan { self?.stop() }
+        }
     }
 
     /// Premium, then enhanced, then the default voice for the phone's language (iOS lets people download the better
@@ -63,17 +68,23 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDe
 
     /// The audio session is switched on only when there is something to say or hear, so the app is not kept alive
     /// for nothing. The recognizer uses the same setup.
-    static func activateSession() {
+    /// Returns the error when the session could not be set up (another app holds the audio, a call is on), so the
+    /// caller can log it.
+    @discardableResult
+    static func activateSession() -> Error? {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
-        try? session.setActive(true)
+        do {
+            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
+            try session.setActive(true)
+            return nil
+        } catch { return error }
     }
 
     private func next() {
         guard !busy else { return }
         guard !queue.isEmpty else { setSpeaking(false); return }
         busy = true
-        Self.activateSession()
+        if let error = Self.activateSession() { PhoneModel.log.log("audio.session.failed", ["error": error.localizedDescription]) }
         setSpeaking(true)
         switch queue.removeFirst() {
         case .text(let text):
@@ -123,20 +134,31 @@ final class PhoneSpeaker: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDe
 }
 
 /// Turns speech into text on the phone. It insists on on-device recognition, so audio never leaves the phone.
+///
+/// Each listen has its own engine, request and task, tagged with a generation number: a callback from an earlier
+/// listen (a late final, a "no speech" error) is ignored instead of ending the current one. A call, Siri, an alarm or
+/// an audio route change stops the engine under a running listen; that listen is then thrown away and
+/// `onInterrupted` is called, so hands-free listening starts again instead of staying stuck (stability audit,
+/// 2026-10-26).
 final class PhoneRecognizer {
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
-    /// Microphone level 0...1 for every buffer while listening, for a meter.
+    /// The system stopped the current listen (interruption or route change); what was heard is discarded.
+    var onInterrupted: (() -> Void)?
+    /// Microphone level 0...1, about 15 times a second while listening, for a meter.
     var onLevel: ((Double) -> Void)?
 
     private let recognizer = SFSpeechRecognizer()
     /// A new engine for every listen: one kept for the app's life keeps the input format it first saw, and a tap in
     /// that format after the route changed (a headset in call mode) crashed the app (2026-10-25).
     private var engine = AVAudioEngine()
+    private var tapped = false
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    private var generation = 0
+    private var observers: [NSObjectProtocol] = []
     private var last = ""
-    private var delivered = false
+    private var delivered = true
     private var startedAt = Date()
     /// How the listen that just ended went, read by the model in `onFinal`.
     private(set) var lastError: Error?
@@ -155,37 +177,47 @@ final class PhoneRecognizer {
 
     func start() throws {
         guard let recognizer, recognizer.supportsOnDeviceRecognition else { throw NSError(domain: "PairVox", code: 1, userInfo: [NSLocalizedDescriptionKey: "On-device speech recognition is not available for this language."]) }
-        stop()
+        tearDown()
+        generation += 1
+        let current = generation
+        // Before the first prompt has played the session is still the default, which cannot record: the input then
+        // reads 0 Hz and a tap on it is the same crash.
+        if let error = PhoneSpeaker.activateSession() { PhoneModel.log.log("audio.session.failed", ["error": error.localizedDescription]) }
+        engine = AVAudioEngine()
+        let input = engine.inputNode
+        // The tap takes the format the input hardware runs at now. The node's output format can still say 48 kHz
+        // while a headset in call mode delivers 16 kHz, and a tap in that format is the crash. The format is read
+        // again after `prepare`, so a route that changed in between is caught before the tap goes live.
+        let format = input.inputFormat(forBus: 0)
+        engine.prepare()
+        let settled = input.inputFormat(forBus: 0)
+        guard CaptureFormat.isUsable(sampleRate: format.sampleRate, channels: format.channelCount,
+                                     hardwareSampleRate: settled.sampleRate), settled.channelCount == format.channelCount else {
+            throw NSError(domain: "PairVox", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                "The microphone is not ready (the audio device just changed). Tap the microphone to try again."])
+        }
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.requiresOnDeviceRecognition = true
         req.shouldReportPartialResults = true
         request = req
-        // Before the first prompt has played the session is still the default, which cannot record: the input then
-        // reads 0 Hz and a tap on it is the same crash.
-        PhoneSpeaker.activateSession()
-        engine = AVAudioEngine()
-        let input = engine.inputNode
-        // The tap takes the format the input hardware runs at now. The node's output format can still say 48 kHz
-        // while a headset in call mode delivers 16 kHz, and a tap in that format is the crash.
-        let format = input.inputFormat(forBus: 0)
-        guard CaptureFormat.isUsable(sampleRate: format.sampleRate, channels: format.channelCount,
-                                     hardwareSampleRate: format.sampleRate) else {
-            request = nil
-            throw NSError(domain: "PairVox", code: 2, userInfo: [NSLocalizedDescriptionKey:
-                "The microphone is not ready (the audio device just changed). Tap the microphone to try again."])
-        }
+        var lastLevel = Date.distantPast
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req, weak self] buffer, _ in
             req?.append(buffer)
-            if let onLevel = self?.onLevel { onLevel(Self.level(of: buffer)) }
+            let now = Date()
+            if now.timeIntervalSince(lastLevel) >= 1.0 / 15, let onLevel = self?.onLevel {
+                lastLevel = now
+                onLevel(Self.level(of: buffer))
+            }
         }
-        engine.prepare()
-        try engine.start()
+        tapped = true
+        do { try engine.start() } catch { tearDown(); throw error }
         last = ""
         delivered = false
         lastError = nil
         startedAt = Date()
+        observe(current)
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            guard let self else { return }
+            guard let self, self.generation == current, !self.delivered else { return }
             if let result {
                 self.last = result.bestTranscription.formattedString
                 self.onPartial?(self.last)
@@ -196,23 +228,48 @@ final class PhoneRecognizer {
         }
     }
 
+    /// Watches for the system taking the audio away from the running listen.
+    private func observe(_ current: Int) {
+        let center = NotificationCenter.default
+        let interrupted: (Notification) -> Void = { [weak self] _ in
+            guard let self, self.generation == current, !self.delivered else { return }
+            PhoneModel.log.log("listen.interrupted", [:])
+            self.cancel()
+            self.onInterrupted?()
+        }
+        observers = [
+            center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main, using: interrupted),
+            center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { note in
+                if note.interruptionBegan { interrupted(note) }
+            },
+        ]
+    }
+
+    /// Created on the main queue, where the recognition handler runs, so every teardown (which invalidates it) sees
+    /// it: a timer from an earlier listen cannot fire into a later one.
     private func armSilenceTimer() {
         guard let wait = endAfterSilence, !last.isEmpty else { return }
-        DispatchQueue.main.async {
-            self.silenceTimer?.invalidate()
-            self.silenceTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in self?.stop() }
-        }
+        silenceTimer?.invalidate()
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in self?.stop() }
     }
 
     var isRunning: Bool { engine.isRunning }
 
-    /// Ends the capture; the recognizer then reports the final text.
+    /// Ends the capture; the recognizer then reports the final text. Works whether or not the engine is still running
+    /// (the system may have stopped it), so the request always gets its end of audio.
     func stop() {
         silenceTimer?.invalidate(); silenceTimer = nil
-        guard engine.isRunning else { return }
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
+        if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
         request?.endAudio()
+    }
+
+    /// Ends everything belonging to the current listen.
+    private func tearDown() {
+        stop()
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers = []
+        task?.cancel(); task = nil; request = nil
     }
 
     /// RMS of the buffer, mapped from -50 dBFS (silence) to 0 dBFS onto 0...1.
@@ -228,8 +285,7 @@ final class PhoneRecognizer {
     /// Stops listening and throws away what was heard (the phone is about to speak, or the person muted).
     func cancel() {
         delivered = true
-        stop()
-        task?.cancel(); task = nil; request = nil
+        tearDown()
     }
 
     private func finish() {
@@ -237,8 +293,14 @@ final class PhoneRecognizer {
         guard !delivered else { return }
         delivered = true
         let text = last
-        stop()
-        task?.cancel(); task = nil; request = nil
+        tearDown()
         onFinal?(text)
+    }
+}
+
+extension Notification {
+    /// An AVAudioSession interruption (a call, Siri, an alarm) has begun.
+    var interruptionBegan: Bool {
+        (userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt).flatMap(AVAudioSession.InterruptionType.init) == .began
     }
 }

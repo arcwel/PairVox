@@ -6,6 +6,6 @@
 /// phone app this way (2026-10-25). The phone checks first and reports an error instead.
 public enum CaptureFormat {
     public static func isUsable(sampleRate: Double, channels: UInt32, hardwareSampleRate: Double) -> Bool {
-        sampleRate > 0 && channels > 0 && hardwareSampleRate > 0 && sampleRate == hardwareSampleRate
+        sampleRate > 0 && channels > 0 && sampleRate == hardwareSampleRate
     }
 }

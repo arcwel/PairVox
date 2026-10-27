@@ -44,8 +44,10 @@ public final class PhoneLog: @unchecked Sendable {
         return out
     }
 
+    private static let stamp: ISO8601DateFormatter = ISO8601DateFormatter()
+
     public func log(_ event: String, _ fields: [String: String] = [:]) {
-        var line: [String: String] = ["t": ISO8601DateFormatter().string(from: clock()), "run": run, "ev": Self.clean(event)]
+        var line: [String: String] = ["t": Self.stamp.string(from: clock()), "run": run, "ev": Self.clean(event)]
         for (k, v) in fields { line[Self.clean(k)] = Self.clean(v) }
         guard let data = try? JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) else { return }
         lock.lock(); defer { lock.unlock() }
@@ -58,16 +60,22 @@ public final class PhoneLog: @unchecked Sendable {
         try? handle.write(contentsOf: data + Data("\n".utf8))
     }
 
-    /// Keeps an iOS crash or hang report (MetricKit's JSON) beside the log, one file each, at most five.
-    public func saveCrashReport(_ json: Data, receivedAt date: Date) {
+    /// Keeps an iOS crash or hang report (MetricKit's JSON) beside the log. Crash and hang reports are kept apart,
+    /// the five newest of each, so a run of hangs cannot push the one crash out; one already kept is not written
+    /// again. Returns false when it was already there.
+    @discardableResult
+    public func saveCrashReport(_ json: @autoclosure () -> Data, receivedAt date: Date, kind: String = "crash") -> Bool {
         lock.lock(); defer { lock.unlock() }
-        let stamp = ISO8601DateFormatter().string(from: date).replacingOccurrences(of: ":", with: "-")
-        let url = directory.appendingPathComponent("crash-\(stamp).json")
-        try? json.write(to: url)
+        let kind = kind == "hang" ? "hang" : "crash"
+        let stamp = Self.stamp.string(from: date).replacingOccurrences(of: ":", with: "-")
         let fm = FileManager.default
-        let crashes = ((try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.lastPathComponent.hasPrefix("crash-") }.sorted { $0.lastPathComponent > $1.lastPathComponent }
-        for old in crashes.dropFirst(5) { try? fm.removeItem(at: old) }
+        let url = directory.appendingPathComponent("crash-\(kind)-\(stamp).json")
+        guard !fm.fileExists(atPath: url.path) else { return false }
+        try? json().write(to: url)   // serialized only for a report not kept yet
+        let same = ((try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("crash-\(kind)-") }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        for old in same.dropFirst(5) { try? fm.removeItem(at: old) }
+        return true
     }
 
     private func rotateIfNeeded() {
@@ -82,12 +90,27 @@ public final class PhoneLog: @unchecked Sendable {
         }
     }
 
-    /// One line, at most `maxValue` characters, with anything that looks like a key or secret replaced.
+    /// The Mac log's patterns (LogRedactor; LinkKit cannot depend on PairVoxCore, so they are repeated here and kept in
+    /// step), plus a pairing secret in a link and any long run of key characters. Compiled once.
+    private static let patterns: [(NSRegularExpression, String)] = [
+        (#"sk-ant-[A-Za-z0-9_\-]{8,}"#, "<api-key>"),
+        (#"\bsk-[A-Za-z0-9]{20,}"#, "<api-key>"),
+        (#"\bgh[pousr]_[A-Za-z0-9]{20,}"#, "<github-token>"),
+        (#"\bAKIA[0-9A-Z]{16}\b"#, "<aws-key>"),
+        (#"(?i)\bBearer\s+[A-Za-z0-9._~+/=\-]{12,}"#, "Bearer <token>"),
+        (#"(?i)(api[_-]?key|auth[_-]?token|access[_-]?token|secret|password)(\s*[=:]\s*)\S+"#, "$1$2<redacted>"),
+        (#"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"#, "<email>"),
+        (#"([?&]s=)[^&\s]+"#, "$1<secret>"),
+        (#"[A-Za-z0-9+/=_-]{32,}"#, "<redacted>"),
+    ].compactMap { spec in (try? NSRegularExpression(pattern: spec.0)).map { ($0, spec.1) } }
+
+    /// One line, at most `maxValue` characters, with anything that looks like a key or secret replaced. A very long
+    /// value is cut before it is scrubbed, so a huge error message costs no more than a short one.
     static func clean(_ value: String) -> String {
-        var s = value.replacingOccurrences(of: "\n", with: " ")
-        s = s.replacingOccurrences(of: #"sk-ant-[A-Za-z0-9_-]{8,}"#, with: "<api-key>", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"([?&]s=)[^&\s]+"#, with: "$1<secret>", options: .regularExpression)
-        s = s.replacingOccurrences(of: #"[A-Za-z0-9+/=_-]{32,}"#, with: "<redacted>", options: .regularExpression)
+        var s = String(value.prefix(maxValue * 4)).replacingOccurrences(of: "\n", with: " ")
+        for (regex, template) in patterns {
+            s = regex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: template)
+        }
         return s.count > maxValue ? String(s.prefix(maxValue)) + "…" : s
     }
 }

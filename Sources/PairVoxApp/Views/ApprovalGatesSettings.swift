@@ -14,7 +14,7 @@ struct ApprovalGatesSettings: View {
     var body: some View {
         Form {
             Section {
-                ForEach(ApprovalGate.allCases.reversed(), id: \.self) { g in
+                ForEach(ApprovalGate.strictestFirst, id: \.self) { g in
                     LabeledContent(g.title) { Text(g.explanation).foregroundStyle(.secondary) }
                 }
                 Text("A tap on the phone or a click on the Mac always works. High-risk requests (deleting files, pushing, sudo, edits outside the project) and commands PairVox cannot read out are always Manual, whatever is set here.")
@@ -23,11 +23,9 @@ struct ApprovalGatesSettings: View {
 
             Section {
                 ForEach(CommandCategory.allCases, id: \.self) { category in
-                    Picker(category.title, selection: Binding(
+                    GatePicker(title: category.title, selection: Binding(
                         get: { gates.wrappedValue.gate(for: category) },
-                        set: { gates.wrappedValue.categories[category] = $0 })) {
-                        ForEach(ApprovalGate.allCases.reversed(), id: \.self) { Text($0.title).tag($0) }
-                    }
+                        set: { gates.wrappedValue.categories[category] = $0 }))
                 }
             } header: { Text("Kinds of request") }
 
@@ -37,11 +35,12 @@ struct ApprovalGatesSettings: View {
                 ForEach(gates.rules) { $rule in
                     HStack {
                         TextField("Command", text: $rule.command).font(.body.monospaced()).labelsHidden()
-                        Picker("Gate", selection: $rule.gate) {
-                            ForEach(ApprovalGate.allCases.reversed(), id: \.self) { Text($0.title).tag($0) }
-                        }
-                        .labelsHidden().fixedSize()
-                        Button(role: .destructive) { gates.wrappedValue.rules.removeAll { $0.id == rule.id } } label: {
+                        GatePicker(selection: $rule.gate).labelsHidden().fixedSize()
+                        // Removed on the next turn of the run loop, after a field being edited has let go of its row.
+                        Button(role: .destructive) {
+                            let id = rule.id
+                            DispatchQueue.main.async { gates.wrappedValue.rules.removeAll { $0.id == id } }
+                        } label: {
                             Image(systemName: "minus.circle")
                         }
                         .buttonStyle(.borderless)
@@ -52,10 +51,7 @@ struct ApprovalGatesSettings: View {
                 HStack {
                     TextField("Add a command, such as npm test", text: $newCommand).font(.body.monospaced()).labelsHidden()
                         .onSubmit(add)
-                    Picker("Gate", selection: $newGate) {
-                        ForEach(ApprovalGate.allCases.reversed(), id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .labelsHidden().fixedSize()
+                    GatePicker(selection: $newGate).labelsHidden().fixedSize()
                     Button("Add", action: add).disabled(!canAdd)
                 }
             } header: { Text("Commands") }
@@ -80,5 +76,17 @@ struct ApprovalGatesSettings: View {
         guard canAdd else { return }
         gates.wrappedValue.rules.append(CommandGateRule(command: trimmed, gate: newGate))
         newCommand = ""
+    }
+}
+
+/// The gates, strictest first, as every picker on this page lists them.
+private struct GatePicker: View {
+    var title = "Gate"
+    @Binding var selection: ApprovalGate
+
+    var body: some View {
+        Picker(title, selection: $selection) {
+            ForEach(ApprovalGate.strictestFirst, id: \.self) { Text($0.title).tag($0) }
+        }
     }
 }

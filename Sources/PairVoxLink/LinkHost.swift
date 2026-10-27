@@ -34,15 +34,10 @@ public actor LinkHost {
     /// the Mac (backlog 3.3).
     public static let tapStaleAfter: TimeInterval = 1800
 
-    /// How long a first yes from the phone holds.
-    static let secondYesWindow: TimeInterval = 60
+    static let secondYesWindow = ApprovalGate.secondYesWindow
 
-    /// What an Auto-gated request is about to do, read back after the first yes. No word or run of words in it is an
-    /// answer, so the phone hearing it back cannot give the second yes (security review 2026-10-26).
     static func secondYesPrompt(_ r: LinkRequest) -> String {
-        var what = r.plainSummary ?? r.spokenPrompt.replacingOccurrences(of: " Allow?", with: "")
-        while what.hasSuffix(".") { what.removeLast() }
-        return "Before it runs: \(what). Answer a second time to proceed."
+        ApprovalGate.secondYesReadBack(summary: r.plainSummary, spokenPrompt: r.spokenPrompt)
     }
 
     private let pairing: PairingManager

@@ -76,9 +76,15 @@ public struct PermissionPolicy: Sendable {
             : (reasons.contains(where: BashRisk.networkReasons.contains) ? .network : .otherCommands)
         let atProgram = gates.rule(program: segment.program, args: segment.args)
         var result: (gate: ApprovalGate, rule: CommandGateRule?, category: CommandCategory) = (atProgram?.gate ?? gates.gate(for: category), atProgram, category)
-        let words = segment.words.map(BashRisk.unquoted)
-        for start in words.indices {
-            if let r = gates.rule(at: Array(words[start...])), r.gate > result.gate { result = (r.gate, r, category) }
+        // Only as many words as the longest rule has are compared from each start, so a step with thousands of words
+        // costs no more than a short one (stability audit, 2026-10-26: the whole suffix was copied for every word).
+        let longest = gates.longestRule
+        if longest > 0 {
+            let words = segment.words.map(BashRisk.unquoted)
+            for start in words.indices {
+                let window = Array(words[start..<min(start + longest, words.count)])
+                if let r = gates.rule(at: window), r.gate > result.gate { result = (r.gate, r, category) }
+            }
         }
         return result
     }
@@ -175,7 +181,8 @@ public struct PermissionPolicy: Sendable {
             // (or a prompt-injected repo) chooses, so it never stands in for what will run.
             let narration = BashRisk.narration(command, pronunciation: pronunciation)
             // The first step and a count: the rest of a long command is read from the screen, not the speaker.
-            let steps = BashRisk.segments(command).count
+            let segments = BashRisk.segments(command)
+            let steps = segments.count
             let firstStep = ToolNarrator.commandSummary(command, pronunciation: pronunciation)
             let more = steps > 1 ? " and \(steps - 1) more \(steps == 2 ? "step" : "steps") shown on screen" : ""
             // With the summary setting off, the whole command is read, so that a yes covers only what was heard.
@@ -189,7 +196,7 @@ public struct PermissionPolicy: Sendable {
             screenOnly = undescribable || (narration.partial && !voiceFromSummary)
             // Every step is gated (owner, 2026-10-26): a named command's rule, else its category (network and
             // installs are Manual by default, as they were screen-only before). The strictest step decides.
-            let stepGates = BashRisk.segments(command).map(gate(for:))
+            let stepGates = segments.map(gate(for:))
             if let strictest = stepGates.max(by: { $0.gate < $1.gate }) {
                 chosen = strictest.gate
                 if chosen == .manual {
@@ -358,6 +365,11 @@ public enum BashRisk {
         let reason: String
     }
 
+    /// The rules compiled once: every request used to compile all of them again (cleanup, 2026-10-26).
+    static let compiledRules: [(Rule, NSRegularExpression)] = rules.compactMap { rule in
+        (try? NSRegularExpression(pattern: rule.pattern)).map { (rule, $0) }
+    }
+
     static let rules: [Rule] = [
         Rule(pattern: #"(^|[\s;&|(])sudo\s"#, level: .high, reason: "Runs as administrator (sudo)."),
         // Any recursive or forced flag after rm, long or short, last word or not, also inside `sh -c '...'` and after
@@ -365,7 +377,6 @@ public enum BashRisk {
         Rule(pattern: #"\brm\s+([^;&|]*\s)?(-[a-zA-Z]*[rRfF][a-zA-Z]*|--recursive|--force|--no-preserve-root)(\s|$|['"])"#, level: .high, reason: "Deletes files recursively or forcefully."),
         // Printing the environment shows the API key Claude Code was started with (security audit 2026-10-24).
         // `ps` with the e flag prints each process's environment, the claude child's included (audit run 8).
-        Rule(pattern: #"(^|[;&|(]\s*)ps\s+(-?[A-Za-z]*[eE][A-Za-z]*)(\s|$)"#, level: .high, reason: "Reads the environment, which holds your API key."),
         // Only in command position, so `python3 -m venv env` or `grep ANTHROPIC_API_KEY Sources` is not caught; the
         // structural pass catches the respellings (`/usr/bin/env`, `pr''intenv`, `env -0`).
         Rule(pattern: #"(^|[;&|(]\s*)(printenv|env|export|set|declare\s+-[a-zA-Z]*[xp][a-zA-Z]*|typeset\s+-[a-zA-Z]*[xp][a-zA-Z]*|compgen\s+-e)\s*($|\d?[>;&|)])|\bexport\s+-p\b|/proc/[^/\s]+/environ|\$\{?ANTHROPIC_(API_KEY|AUTH_TOKEN)"#, level: .high, reason: "Reads the environment, which holds your API key."),
@@ -508,6 +519,15 @@ public enum BashRisk {
         return out
     }
 
+    /// `ps` with the e or E flag: a word of letters, with or without a leading dash, that has an e in it (`e`, `eww`,
+    /// `-E`, `auxe`). A plain scan, not a regular expression: `[A-Za-z]*[eE][A-Za-z]*` backtracked quadratically on a
+    /// long model-chosen word and could stall the engine (stability audit, 2026-10-26).
+    static func isEnvironmentFlag(_ word: String) -> Bool {
+        let letters = word.hasPrefix("-") ? word.dropFirst() : Substring(word)
+        guard !letters.isEmpty, letters.count <= 64 else { return false }
+        return letters.allSatisfy { $0.isASCII && $0.isLetter } && letters.contains { $0 == "e" || $0 == "E" }
+    }
+
     /// Classifies by program and subcommand instead of by spelling, so `--recursive`, `git -p push`,
     /// `/usr/bin/sudo` and `| /bin/sh` rate the same as their common forms.
     static func structuralFindings(_ command: String) -> [(RiskLevel, String)] {
@@ -531,7 +551,7 @@ public enum BashRisk {
             }
             // `ps` with the e flag in any word, however it is reached (`ps -ax -E`, `/bin/ps -E`, `nice ps eww`); the rule
             // above only sees a first argument in command position (audit run 9). Errs high: on macOS `-e` lists all processes.
-            if p == "ps", a.contains(where: { unquoted($0).range(of: #"^-?[A-Za-z]*[eE][A-Za-z]*$"#, options: .regularExpression) != nil }) {
+            if p == "ps", a.contains(where: { isEnvironmentFlag(unquoted($0)) }) {
                 found.append((.high, "Reads the environment, which holds your API key."))
             }
             if p == "rm" {
@@ -658,9 +678,11 @@ public enum BashRisk {
 
     /// Global git options (`-C dir`, `-c k=v`, ...) sit between `git` and the subcommand and would hide it from the
     /// rules, so matching is done on a copy with them removed.
+    private static let gitGlobalOptions = try? NSRegularExpression(
+        pattern: #"\bgit(\s+(-C\s+\S+|-c\s+\S+|--git-dir(=|\s+)\S+|--work-tree(=|\s+)\S+|--no-pager|-P|--no-optional-locks))+"#)
+
     static func normalizedForMatching(_ command: String) -> String {
-        let pattern = #"\bgit(\s+(-C\s+\S+|-c\s+\S+|--git-dir(=|\s+)\S+|--work-tree(=|\s+)\S+|--no-pager|-P|--no-optional-locks))+"#
-        guard let re = try? NSRegularExpression(pattern: pattern) else { return command }
+        guard let re = gitGlobalOptions else { return command }
         return re.stringByReplacingMatches(in: command, range: NSRange(location: 0, length: (command as NSString).length),
                                            withTemplate: "git")
     }
@@ -705,7 +727,7 @@ public enum BashRisk {
         func isProtected(_ path: String) -> Bool { PermissionPolicy.isInProtectedFolder(FolderScope.resolved(path)) }
         // `cd`, `pushd` or a bare `cd` change what a relative word means, so later words are read from there.
         var base = projectRoot
-        var words = shellWords(command)
+        let words = shellWords(command)
         var i = 0
         while i < words.count {
             var w = words[i]; i += 1
@@ -781,8 +803,7 @@ public enum BashRisk {
         }
         let ns = command as NSString
         let range = NSRange(location: 0, length: ns.length)
-        for rule in rules {
-            guard let re = try? NSRegularExpression(pattern: rule.pattern) else { continue }
+        for (rule, re) in compiledRules {
             if re.firstMatch(in: command, range: range) != nil {
                 if rule.level > level { level = rule.level }
                 if !reasons.contains(rule.reason) { reasons.append(rule.reason) }

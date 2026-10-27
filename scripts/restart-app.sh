@@ -71,7 +71,7 @@ prune() {
 }
 
 # One JSON line at the end (or at the first failure); json_escape keeps the detail text valid JSON.
-json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'; }
+source scripts/lib/common.sh   # json_escape (the script has already changed to the repo root)
 finish() {   # ok detail exit-code
   if [[ $JSON -eq 1 ]]; then
     local list="" i
@@ -120,8 +120,12 @@ if [[ "$SRC" != "dist/PairVox.app" ]]; then
   rm -rf dist/.PairVox.new
   cp -R "$SRC" dist/.PairVox.new
   codesign --verify --deep --strict dist/.PairVox.new 2>/dev/null || { rm -rf dist/.PairVox.new; finish false "The copy failed its signature check; dist/PairVox.app was not touched." 1; }
-  rm -rf dist/PairVox.app
+  # The old app is moved aside, not deleted, before the new one goes in, so an interruption never leaves dist/
+  # without an app (stability audit, 2026-10-26).
+  rm -rf dist/.PairVox.old
+  [[ -d dist/PairVox.app ]] && mv dist/PairVox.app dist/.PairVox.old
   mv dist/.PairVox.new dist/PairVox.app
+  rm -rf dist/.PairVox.old
 fi
 swapped=true
 open dist/PairVox.app

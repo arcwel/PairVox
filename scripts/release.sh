@@ -18,6 +18,7 @@
 #     never turn into a real release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/lib/common.sh
 
 [[ $# -ge 1 && $# -le 2 ]] || { echo "usage: scripts/release.sh VERSION [--dry-run]" >&2; exit 2; }
 VERSION="$1"
@@ -55,6 +56,9 @@ else
   ENT_ALL="$(entitlement_keys "$OUT/PairVox.app")"
   [[ "$ENT_ALL" != *"com.apple.security.get-task-allow"* ]] || { echo "$OUT/PairVox.app carries get-task-allow (debugger attach); notarization rejects it. Not releasing." >&2; exit 1; }
   [[ "$ENT_ALL" == "$EXPECTED_ENTITLEMENTS" ]] || { echo "Unexpected entitlements in $OUT/PairVox.app: ${ENT_ALL:-none}. Not releasing." >&2; exit 1; }
+  # Notarization rejects a bundle without the hardened runtime only after a long wait; caught here instead
+  # (stability audit, 2026-10-26). build-app.sh has already verified the signature.
+  has_hardened_runtime "$OUT/PairVox.app" || { echo "$OUT/PairVox.app has no hardened runtime; notarization rejects it. Not releasing." >&2; exit 1; }
 fi
 
 DMG="$OUT/PairVox-$VERSION.dmg"
@@ -94,9 +98,7 @@ if [[ $DRY -eq 1 ]]; then
   ADHOC_EXPECTED="com.apple.security.automation.apple-events com.apple.security.cs.disable-library-validation com.apple.security.device.audio-input "
   if [[ "$ENT_ALL" == "$EXPECTED_ENTITLEMENTS" || "$ENT_ALL" == "$ADHOC_EXPECTED" ]]; then ok "entitlements: $ENT_ALL"; else problem "unexpected entitlements: ${ENT_ALL:-none}"; fi
   if [[ "$ENT_ALL" == *"com.apple.security.get-task-allow"* ]]; then problem "get-task-allow is present: any process of the same user could attach a debugger"; fi
-  # Captured first: with pipefail, grep -q closing the pipe early can make the pipeline report failure.
-  SIGNATURE="$(codesign -dv "$APP" 2>&1 || true)"
-  if [[ "$SIGNATURE" == *"flags="*"runtime"* ]]; then ok "hardened runtime"; else problem "no hardened runtime on $APP"; fi
+  if has_hardened_runtime "$APP"; then ok "hardened runtime"; else problem "no hardened runtime on $APP"; fi
 
   # 4. No Mach-O file in the bundle is unsigned (notarization rejects any), and nothing stray is embedded.
   UNSIGNED=0

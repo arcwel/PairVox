@@ -30,6 +30,22 @@ public enum ApprovalGate: String, Codable, Sendable, CaseIterable, Comparable {
     /// Stricter gates sort higher: a command takes the strictest gate of its steps.
     public static func < (a: ApprovalGate, b: ApprovalGate) -> Bool { a.strictness < b.strictness }
     private var strictness: Int { self == .skip ? 0 : (self == .auto ? 1 : 2) }
+
+    /// The order Settings lists them in: the strictest first.
+    public static let strictestFirst: [ApprovalGate] = allCases.reversed()
+
+    /// How long the Auto gate's first yes holds, on the Mac and from the phone.
+    public static let secondYesWindow: TimeInterval = 60
+
+    /// What an Auto-gated request is about to do, read back after the first yes, from its plain-words summary or its
+    /// one-line prompt. No word or run of words in it is an answer, so PairVox's own voice heard back (on the Mac or
+    /// by the phone) cannot be the second yes (checked word run by word run in the tests; "to confirm" and "go ahead"
+    /// were answers, security review 2026-10-26). One copy for both, so the wording cannot drift apart.
+    public static func secondYesReadBack(summary: String?, spokenPrompt: String) -> String {
+        var what = summary ?? spokenPrompt.replacingOccurrences(of: " Allow?", with: "")
+        while what.hasSuffix(".") { what.removeLast() }
+        return "Before it runs: \(what). Answer a second time to proceed."
+    }
 }
 
 /// The kinds of request a gate is chosen for in Settings.
@@ -107,11 +123,15 @@ public struct ApprovalGates: Codable, Sendable, Equatable {
         categories[category] ?? Self.defaultCategories[category] ?? .manual
     }
 
+    /// The most words any rule has; 0 with no rules.
+    public var longestRule: Int { rules.map(\.words.count).max() ?? 0 }
+
     /// The rule for words starting at the front of `step`: the longest that matches (`gh pr list` before `gh`), and
     /// of two as long, the stricter. Flags count as words, so `gh pr list` does not match `gh --repo x pr list`; that
     /// falls back to `gh`. Words are compared in lower case, the first without its folder.
     public func rule(at step: [String]) -> CommandGateRule? {
-        let step = step.enumerated().map { $0.offset == 0 ? ($0.element.lowercased() as NSString).lastPathComponent : $0.element.lowercased() }
+        guard !rules.isEmpty else { return nil }
+        let step = step.prefix(longestRule).enumerated().map { $0.offset == 0 ? ($0.element.lowercased() as NSString).lastPathComponent : $0.element.lowercased() }
         return rules.filter { r in
             let w = r.words
             return !w.isEmpty && w.count <= step.count && Array(step.prefix(w.count)) == w

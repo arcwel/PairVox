@@ -68,9 +68,16 @@ set +x
 
 # DIST_DIR lets a dry run or a test build land somewhere other than dist/, where the app you are running lives.
 DIST="${DIST_DIR:-dist}"
+PRODUCT=".build/xcode/Build/Products/$CONFIG/PairVox.app"
+[[ -d "$PRODUCT" ]] || { echo "No $PRODUCT after the build; $DIST/PairVox.app was not touched." >&2; exit 1; }
 mkdir -p "$DIST"
-rm -rf "$DIST/PairVox.app"
-cp -R ".build/xcode/Build/Products/$CONFIG/PairVox.app" "$DIST/"
+# Copied beside the old app first, so a failed copy (a full disk) leaves the old one in place.
+rm -rf "$DIST/.PairVox.new" "$DIST/.PairVox.old"
+cp -R "$PRODUCT" "$DIST/.PairVox.new"
+# The old app is moved aside before the new one goes in, as restart-app.sh does, so dist/ is never without one.
+[[ -d "$DIST/PairVox.app" ]] && mv "$DIST/PairVox.app" "$DIST/.PairVox.old"
+mv "$DIST/.PairVox.new" "$DIST/PairVox.app"
+rm -rf "$DIST/.PairVox.old"
 
 if [[ -z "$AUTO_TEAM" && "$IDENTITY" == "-" ]]; then
   # Ad-hoc (also the published DMG until there is a Developer ID): the app is re-signed with the hardened runtime,
@@ -79,8 +86,11 @@ if [[ -z "$AUTO_TEAM" && "$IDENTITY" == "-" ]]; then
   # disable-library-validation, which the frameworks need without a Team ID.
   codesign --force --sign - --options runtime --entitlements Sources/PairVoxApp/PairVox-adhoc.entitlements "$DIST/PairVox.app"
 fi
-codesign --verify --deep --strict "$DIST/PairVox.app" && echo "Signature OK"
-if find "$DIST/PairVox.app" -name "*.metallib" | grep -q .; then
+# A failed check must stop the script: as `verify && echo` it was ignored by set -e (stability audit, 2026-10-26).
+codesign --verify --deep --strict "$DIST/PairVox.app" || { echo "The signature of $DIST/PairVox.app failed its check." >&2; exit 1; }
+echo "Signature OK"
+METALLIBS="$(find "$DIST/PairVox.app" -name "*.metallib" || true)"
+if [[ -n "$METALLIBS" ]]; then
   echo "MLX Metal library embedded: Kokoro voice available."
 else
   echo "Warning: no .metallib found in the bundle; Kokoro will fall back to the system voice." >&2

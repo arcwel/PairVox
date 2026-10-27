@@ -22,6 +22,9 @@ public struct MicHibernation: Sendable, Equatable {
     /// listening, thinking and speaking; a session hung in "working" would otherwise keep the microphone awake for
     /// ever (audit run 9).
     public static let maxUnchangedConversation: Duration = .seconds(20 * 60)
+    /// A waiting request keeps the microphone awake for as long as a spoken answer to it may still count (the age
+    /// limit on spoken approvals). After that the answer is on screen anyway.
+    public static let maxWaitingRequest: Duration = .seconds(Int(Announcer.staleAfter))
 
     public private(set) var lastActivity: Instant
     /// The phases seen at the last tick, and since when they have been the same.
@@ -55,6 +58,9 @@ public struct MicHibernation: Sendable, Equatable {
             phasesSince = now
         }
         if phases.contains(where: Self.isConversation), now - phasesSince <= Self.maxUnchangedConversation { noteActivity(at: now) }
+        // Someone deciding a request is in the conversation too, for as long as a spoken answer could still count
+        // (stability audit, 2026-10-26: the microphone slept while the card was being read, so the "yes" was lost).
+        if phases.contains(.awaitingPermission), now - phasesSince <= Self.maxWaitingRequest { noteActivity(at: now) }
         guard handsFreeListening, minutes > 0, !phases.contains(where: Self.isHearing) else { return false }
         return now - lastActivity >= .seconds(minutes * 60)
     }

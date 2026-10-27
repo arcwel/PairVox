@@ -60,8 +60,7 @@ struct ContentView: View {
         }
         // The whole top bar turns orange while the microphone sleeps, so it is plain from across the room that
         // PairVox is not listening.
-        .toolbarBackground(model.micAsleep ? Style.asleep.opacity(0.32) : Color.clear, for: .windowToolbar)
-        .toolbarBackgroundVisibility(model.micAsleep ? .visible : .automatic, for: .windowToolbar)
+        .modifier(AsleepToolbar(asleep: model.micAsleep))
         .navigationTitle(model.project?.lastPathComponent ?? "PairVox")
         .navigationSubtitle(model.snapshot.session.map { "\($0.model) · \(model.statusLine)" } ?? model.statusLine)
         .sheet(isPresented: $model.showSetup) {
@@ -72,6 +71,19 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+    }
+}
+
+/// The orange top bar while the microphone sleeps. Awake, the toolbar keeps the system's own background (a clear
+/// style there replaced its material).
+private struct AsleepToolbar: ViewModifier {
+    let asleep: Bool
+    // One branch whose values change, so sleeping and waking do not rebuild the window's content (and lose its
+    // scroll position and focus).
+    func body(content: Content) -> some View {
+        content
+            .toolbarBackground(asleep ? AnyShapeStyle(Style.asleep.opacity(0.32)) : AnyShapeStyle(.bar), for: .windowToolbar)
+            .toolbarBackgroundVisibility(asleep ? .visible : .automatic, for: .windowToolbar)
     }
 }
 

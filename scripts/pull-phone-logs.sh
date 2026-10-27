@@ -12,13 +12,14 @@
 #   scripts/pull-phone-logs.sh --json             # one JSON object at the end
 # Exit codes: 0 copied, 1 nothing could be copied, 2 bad usage or no device found.
 set -uo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/lib/common.sh"
 
 BUNDLE="app.pairvox.PairVoxPhone"
 DEVICE="" OUT="" DRY=0 JSON=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --device) DEVICE="${2:-}"; shift 2 ;;
-    --out) OUT="${2:-}"; shift 2 ;;
+    --device) [[ $# -ge 2 ]] || { echo "--device needs a name or identifier" >&2; exit 2; }; DEVICE="$2"; shift 2 ;;
+    --out) [[ $# -ge 2 ]] || { echo "--out needs a folder" >&2; exit 2; }; OUT="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --json) JSON=1; shift ;;
     *) echo "usage: scripts/pull-phone-logs.sh [--device NAME|ID] [--out DIR] [--dry-run] [--json]" >&2; exit 2 ;;
@@ -26,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 say() { (( JSON )) && echo "$@" >&2 || echo "$@"; }
 
-# A simulator first if one was named or is the only thing booted with the app; otherwise a physical iPhone.
+# A booted simulator when --device names one; otherwise the only paired physical iPhone (or the one --device names).
 SIM=""
 if [[ -n "$DEVICE" ]]; then
   SIM="$(xcrun simctl list devices -j 2>/dev/null | python3 -c "
@@ -56,7 +57,7 @@ if (( DRY )); then
   say "device: $TARGET ($([[ -n "$SIM" ]] && echo simulator || echo iPhone))"
   say "would copy: the app's Library/Logs/PairVox, and system crash reports named PairVoxPhone-*"
   say "into: $OUT"
-  (( JSON )) && printf '{"ok":true,"dryRun":true,"device":"%s","out":"%s"}\n' "$TARGET" "$OUT"
+  (( JSON )) && printf '{"ok":true,"dryRun":true,"device":"%s","out":"%s"}\n' "$(json_escape "$TARGET")" "$(json_escape "$OUT")"
   exit 0
 fi
 
@@ -67,18 +68,23 @@ if [[ -n "$SIM" ]]; then
   # Simulator crashes are reported on the Mac.
   cp ~/Library/Logs/DiagnosticReports/PairVoxPhone-*.ips "$OUT/crash-reports/" 2>/dev/null
 else
-  xcrun devicectl device copy from --device "$PHONE" --domain-type appDataContainer --domain-identifier "$BUNDLE" \
-    --source Library/Logs/PairVox --destination "$OUT/app-log" >/dev/null 2>&1 \
-    || say "Could not read the app's log folder (is the app installed, and has it run since the update?)."
+  # Each call is time-limited (a locked or asleep phone can make devicectl wait for ever) and reads no stdin (inside
+  # the loop it would swallow the remaining file names). The reason for a failure is kept, not thrown away.
+  ERR="$(mktemp)"
+  if ! xcrun devicectl device copy from --timeout 60 --device "$PHONE" --domain-type appDataContainer --domain-identifier "$BUNDLE" \
+       --source Library/Logs/PairVox --destination "$OUT/app-log" </dev/null >/dev/null 2>"$ERR"; then
+    say "Could not read the app's log folder: $(grep -v '^[[:space:]]*$' "$ERR" | tail -1). Is the phone past its passcode screen, the app installed, and has it run since the update?"
+  fi
   while read -r f; do
-    [[ -n "$f" ]] && xcrun devicectl device copy from --device "$PHONE" --domain-type systemCrashLogs \
-      --source "$f" --destination "$OUT/crash-reports/$(basename "$f")" >/dev/null 2>&1
-  done < <(xcrun devicectl device info files --device "$PHONE" --domain-type systemCrashLogs 2>/dev/null \
+    [[ -n "$f" ]] && xcrun devicectl device copy from --timeout 30 --device "$PHONE" --domain-type systemCrashLogs \
+      --source "$f" --destination "$OUT/crash-reports/$(basename "$f")" </dev/null >/dev/null 2>&1
+  done < <(xcrun devicectl device info files --timeout 60 --device "$PHONE" --domain-type systemCrashLogs 2>/dev/null </dev/null \
              | awk '{print $1}' | grep -E '(^|/)PairVoxPhone[-_].*\.ips$')
+  rm -f "$ERR"
 fi
 
 N=$(find "$OUT" -type f | wc -l | tr -d ' ')
-if (( N == 0 )); then say "Nothing to copy yet: run the updated phone app first."; (( JSON )) && printf '{"ok":false,"out":"%s","files":0}\n' "$OUT"; exit 1; fi
+if (( N == 0 )); then say "Nothing to copy yet: run the updated phone app first."; (( JSON )) && printf '{"ok":false,"out":"%s","files":0}\n' "$(json_escape "$OUT")"; exit 1; fi
 say "Copied $N files to $OUT. Nothing was uploaded."
-(( JSON )) && printf '{"ok":true,"device":"%s","out":"%s","files":%s}\n' "$TARGET" "$OUT" "$N"
+(( JSON )) && printf '{"ok":true,"device":"%s","out":"%s","files":%s}\n' "$(json_escape "$TARGET")" "$(json_escape "$OUT")" "$N"
 exit 0

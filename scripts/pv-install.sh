@@ -30,7 +30,7 @@ done
 LOCK=.build/install.lock
 steps=()
 say() { [[ $JSON -eq 1 ]] || echo "$*"; steps+=("$*"); }
-json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'; }
+source scripts/lib/common.sh   # json_escape (the script has already changed to the repo root)
 finish() {   # ok detail exit-code
   if [[ $JSON -eq 1 ]]; then
     local list="" s
@@ -57,8 +57,11 @@ detail_of() { sed -n 's/.*"detail":"\([^"]*\)".*/\1/p' <<<"$1"; }
 # Swaps $1 into dist/ and reopens it (scripts/restart-app.sh does the quit, verified copy and open). Sets $restart_detail.
 swap_in() {
   local out
-  out=$(SRC_OVERRIDE="$1" scripts/restart-app.sh --json 2>/dev/null) && return 0
+  restart_swapped=0
+  out=$(SRC_OVERRIDE="$1" scripts/restart-app.sh --json 2>/dev/null) && { restart_swapped=1; return 0; }
   restart_detail=$(detail_of "$out")
+  # restart-app can fail after the swap (the new app did not open), and then dist/ already holds the new build.
+  [[ "$out" == *'"swapped":true'* ]] && restart_swapped=1
   return 1
 }
 
@@ -136,10 +139,18 @@ fi
 
 before=$(newest_run)
 restart_detail="" check_detail=""
-swap_in .build/install/PairVox.app || finish false "Swapping in the new build failed: ${restart_detail:-see scripts/restart-app.sh}. The installed app was not changed." 1
-say "Installed and reopened"
+swapped_ok=1
+if ! swap_in .build/install/PairVox.app; then
+  # Only a swap that never happened leaves the installed app as it was. After the swap, a new app that did not open
+  # is treated like one that failed its launch check: the old one is put back (stability audit, 2026-10-26).
+  [[ $restart_swapped -eq 1 ]] || finish false "Swapping in the new build failed: ${restart_detail:-see scripts/restart-app.sh}. The installed app was not changed." 1
+  swapped_ok=0
+  check_detail="the new app did not open: ${restart_detail:-see scripts/restart-app.sh}"
+else
+  say "Installed and reopened"
+fi
 
-if launch_ok "$before"; then
+if [[ $swapped_ok -eq 1 ]] && launch_ok "$before"; then
   say "Launch check passed"
   if [[ $had_app -eq 1 ]]; then
     rm -rf dist/PairVox.previous.app

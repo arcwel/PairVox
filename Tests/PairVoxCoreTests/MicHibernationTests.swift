@@ -16,9 +16,16 @@ final class MicHibernationTests: XCTestCase {
         XCTAssertTrue(h.tick(phases: [.idle], handsFreeListening: true, minutes: 3, now: at(180)))
     }
 
-    func testAWaitingRequestDoesNotKeepTheMicrophoneAwake() {
+    // Stability audit 2026-10-26: the microphone slept while the card was being read, so the spoken yes was lost.
+    // A waiting request keeps it awake for as long as a spoken answer can count (five minutes), not for ever.
+    func testAWaitingRequestKeepsTheMicrophoneAwakeOnlyWhileAnAnswerCanCount() {
         var h = MicHibernation(now: start)
-        XCTAssertTrue(h.tick(phases: [.awaitingPermission], handsFreeListening: true, minutes: 3, now: at(181)))
+        for t in stride(from: 0.0, through: 300, by: 5) {
+            XCTAssertFalse(h.tick(phases: [.awaitingPermission], handsFreeListening: true, minutes: 3, now: at(t)), "\(t)")
+        }
+        XCTAssertFalse(h.tick(phases: [.awaitingPermission], handsFreeListening: true, minutes: 3, now: at(450)))
+        XCTAssertTrue(h.tick(phases: [.awaitingPermission], handsFreeListening: true, minutes: 3, now: at(481)),
+                      "three quiet minutes after the request went stale")
     }
 
     func testClaudeWorkingInAnyProjectRestartsTheClock() {

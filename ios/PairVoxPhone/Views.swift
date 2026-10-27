@@ -176,7 +176,7 @@ struct SessionView: View {
                         Button("Interrupt Claude", systemImage: "stop.fill") { model.interrupt() }
                         Toggle(isOn: $model.pushToTalk) { Label("Push to talk", systemImage: "hand.tap") }
                         Button("Connection…", systemImage: "network") { showConnection = true }
-                        ShareLink(items: PhoneModel.log.files) { Label("Share Logs…", systemImage: "doc.text") }
+                        ShareLogsItem()
                         Button("Forget this Mac", systemImage: "trash", role: .destructive) { model.forget() }
                     } label: { Image(systemName: "ellipsis.circle") }
                     .accessibilityLabel("More")
@@ -652,5 +652,13 @@ struct PhoneFieldStyle: TextFieldStyle {
             .padding(.horizontal, PhoneStyle.fieldHorizontal)
             .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: PhoneStyle.radius))
             .overlay(RoundedRectangle(cornerRadius: PhoneStyle.radius).stroke(Color.primary.opacity(0.18), lineWidth: 1))
+    }
+}
+
+/// Its own view, so the log folder is listed when the menu is built, not on every redraw of the session screen
+/// (which redraws with the microphone level).
+private struct ShareLogsItem: View {
+    var body: some View {
+        ShareLink(items: PhoneModel.log.files) { Label("Share Logs…", systemImage: "doc.text") }
     }
 }
