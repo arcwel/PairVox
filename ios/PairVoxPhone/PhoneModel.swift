@@ -16,14 +16,22 @@ final class PhoneModel: ObservableObject {
         case refused(String)
     }
 
-    @Published private(set) var state: LinkState = .unpaired
+    /// The phone's own log (Library/Logs/PairVox): events and lengths, never what was said or a request's text.
+    static let log = PhoneLog(directory: PhoneLog.defaultDirectory())
+    @Published private(set) var state: LinkState = .unpaired {
+        didSet { if "\(state)" != "\(oldValue)" { Self.log.log("link.state", ["state": Self.stateName(state)]) } }
+    }
     @Published private(set) var snapshot: LinkSnapshot?
-    @Published private(set) var notice: String?
+    @Published private(set) var notice: String? {
+        didSet { if let notice, notice != oldValue { Self.log.log("notice", ["text": notice]) } }
+    }
     @Published var typed = ""
     @Published private(set) var heard = ""
     @Published private(set) var listening = false
     /// The microphone is off until the person turns it back on. Hands-free listening never runs while muted.
-    @Published private(set) var muted = false
+    @Published private(set) var muted = false {
+        didSet { if muted != oldValue { Self.log.log("mic.muted", ["on": "\(muted)"]) } }
+    }
     /// The phone is saying something (a reply or a request); listening pauses meanwhile so it does not hear itself.
     @Published private(set) var phoneSpeaking = false
     /// Hold to talk instead of hands-free listening. Off by default (owner, 2026-10-18).
@@ -201,6 +209,12 @@ final class PhoneModel: ObservableObject {
     }
 
     /// Pairing does not retry, so none of its sentences promise that it will.
+    /// The link state's name for the log, without the human message (it can quote an address).
+    static func stateName(_ state: LinkState) -> String {
+        let text = "\(state)"
+        return String(text.prefix(while: { $0 != "(" }))
+    }
+
     static func plainPairingFailure(_ error: Error, network: String, port: UInt16) -> String {
         if error as? LinkError == .authFailed {
             return "The QR code or link did not match. Show a new QR code on the Mac and try again; each one works once and expires after two minutes."
@@ -501,12 +515,14 @@ final class PhoneModel: ObservableObject {
             if auth == .none, request.risk == "high" { notice = "This phone has no passcode. Approve high-risk requests on the Mac."; return }
             // Face ID takes seconds: the link may have dropped or the request been answered on the Mac meanwhile.
             guard stillWaiting(request) else { notice = "That request is no longer waiting."; return }
+            Self.log.log("request.approve", ["method": "tap", "auth": "\(auth)", "risk": request.risk])
             send(.approve(requestID: request.requestID, method: .tap, auth: auth, projectID: request.projectID))
         }
     }
 
     func deny(_ request: LinkRequest) {
         guard isLive else { notice = "Not connected to your Mac. Try again when it is back."; return }
+        Self.log.log("request.deny", ["risk": request.risk])
         send(.deny(requestID: request.requestID, projectID: request.projectID))
     }
     func interrupt() { send(.interrupt) }
@@ -607,6 +623,7 @@ final class PhoneModel: ObservableObject {
             recognizer.endAfterSilence = endAfterSilence
             do { try recognizer.start(); listening = true; heard = "" }
             catch {
+                Self.log.log("listen.startFailed", ["error": error.localizedDescription])
                 notice = "Could not start listening: \(error.localizedDescription)"
                 muted = true   // do not retry in a loop; the person can unmute to try again
             }
@@ -618,6 +635,8 @@ final class PhoneModel: ObservableObject {
         inputLevel = 0
         let spoken = text.trimmingCharacters(in: .whitespacesAndNewlines)
         heard = ""
+        Self.log.log("listen.ended", ["seconds": String(format: "%.1f", recognizer.lastListenSeconds),
+                                      "chars": "\(spoken.count)", "error": recognizer.lastError.map { $0.localizedDescription } ?? ""])
         if listenFailures.ended(afterSeconds: recognizer.lastListenSeconds, heardSomething: !spoken.isEmpty,
                                 failed: recognizer.lastError != nil) {
             listenFailures.reset()

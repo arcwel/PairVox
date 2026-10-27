@@ -1703,3 +1703,46 @@ final class ListenFailureGuardTests: XCTestCase {
         XCTAssertEqual(g.streak, 0)
     }
 }
+
+/// 2026-10-26: the iPhone app kept no log, so its problems could not be read afterwards.
+final class PhoneLogTests: XCTestCase {
+    private func makeLog() -> (PhoneLog, URL) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pv-phonelog-\(UUID().uuidString)")
+        return (PhoneLog(directory: dir), dir)
+    }
+
+    func testEventsAreWrittenOnePerLine() throws {
+        let (log, dir) = makeLog(); defer { try? FileManager.default.removeItem(at: dir) }
+        log.log("app.launch", ["version": "0.1.0"])
+        log.log("listen.failed", ["error": "Failed to initialize recognizer"])
+        let lines = try String(contentsOf: log.currentFile, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(lines.count, 2)
+        let first = try JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: String]
+        XCTAssertEqual(first?["ev"], "app.launch")
+        XCTAssertEqual(first?["version"], "0.1.0")
+    }
+
+    func testSecretsAndLongValuesNeverReachTheFile() throws {
+        let (log, dir) = makeLog(); defer { try? FileManager.default.removeItem(at: dir) }
+        log.log("pair", ["link": "pairvox://pair?h=100.1.2.3&p=47821&s=qQ6lVk75etNX7QZL0Feebg==",
+                         "key": "sk-ant-api03-abcdefghijklmnop", "blob": String(repeating: "x", count: 500)])
+        let text = try String(contentsOf: log.currentFile, encoding: .utf8)
+        XCTAssertFalse(text.contains("qQ6lVk75"))
+        XCTAssertFalse(text.contains("sk-ant-api03-abc"))
+        XCTAssertLessThan(text.count, 700)
+    }
+
+    func testTheLogRotatesAndKeepsThreeFiles() throws {
+        let (log, dir) = makeLog(); defer { try? FileManager.default.removeItem(at: dir) }
+        let filler = String(repeating: "a word ", count: 21)   // spaces, so it is not taken for a secret
+        for _ in 0..<(PhoneLog.maxFileBytes / 150 * 3 + 50) { log.log("e", ["a": filler]) }
+        let names = Set(log.files.map(\.lastPathComponent))
+        XCTAssertEqual(names, ["phone.log", "phone.1.log", "phone.2.log"])
+    }
+
+    func testCrashReportsAreKeptBesideTheLog() {
+        let (log, dir) = makeLog(); defer { try? FileManager.default.removeItem(at: dir) }
+        for i in 0..<7 { log.saveCrashReport(Data("{}".utf8), receivedAt: Date(timeIntervalSince1970: Double(1_000_000 + i))) }
+        XCTAssertEqual(log.files.filter { $0.lastPathComponent.hasPrefix("crash-") }.count, 5, "the five newest are kept")
+    }
+}

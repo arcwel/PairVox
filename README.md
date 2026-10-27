@@ -132,6 +132,13 @@ Short phrases are handled locally; everything else goes to Claude.
 | “faster” / “slower” | Speech rate |
 | “new session” | Start a fresh Claude Code session |
 
+## Logs
+
+Both apps keep logs on the device and never upload them.
+
+- **Mac:** Help, Export Diagnostics… (⇧⌘L), or `scripts/collect-diagnostics.sh`, makes a zip of the logs, recent crash reports and a system summary.
+- **iPhone:** the "…" menu, Share Logs…, or, with the phone connected, `scripts/pull-phone-logs.sh` on the Mac, which also fetches the phone's crash reports.
+
 ## Privacy
 
 - Audio is captured, transcribed and synthesized **on your Mac**.

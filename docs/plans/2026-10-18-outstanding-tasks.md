@@ -1,4 +1,6 @@
-# PairVox: outstanding tasks (2026-10-18, updated 2026-10-25)
+# PairVox: outstanding tasks (2026-10-18, updated 2026-10-26)
+
+**Update 2026-10-26.** The tests only the owner can run are in [2026-10-26-owner-test-checklist.md](2026-10-26-owner-test-checklist.md). Everything on `main` is installed on the Mac and on Noava17. No other branches or worktrees are left.
 
 **Update 2026-10-25.** Two public pre-releases are out on GitHub: 0.1.0-beta.1 and 0.1.0-beta.2.
 - **Shipped in beta.2.** Hands-free microphone sleep, click-only folder access, `scripts/release-assets.sh`, and the fixes from audit runs 8 and 9.

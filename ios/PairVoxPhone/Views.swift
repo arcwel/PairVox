@@ -15,6 +15,7 @@ struct RootView: View {
         .tint(.orange)
         .overlay { if scenePhase != .active { Curtain() } }
         .onChange(of: scenePhase) { _, phase in
+            PhoneModel.log.log("app.phase", ["phase": "\(phase)"])
             if phase == .active { model.becameActive() } else if phase == .background { model.wentToBackground() }
         }
     }
@@ -175,6 +176,7 @@ struct SessionView: View {
                         Button("Interrupt Claude", systemImage: "stop.fill") { model.interrupt() }
                         Toggle(isOn: $model.pushToTalk) { Label("Push to talk", systemImage: "hand.tap") }
                         Button("Connection…", systemImage: "network") { showConnection = true }
+                        ShareLink(items: PhoneModel.log.files) { Label("Share Logs…", systemImage: "doc.text") }
                         Button("Forget this Mac", systemImage: "trash", role: .destructive) { model.forget() }
                     } label: { Image(systemName: "ellipsis.circle") }
                     .accessibilityLabel("More")
