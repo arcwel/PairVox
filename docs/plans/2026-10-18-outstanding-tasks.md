@@ -1,4 +1,12 @@
-# PairVox: outstanding tasks (2026-10-18, updated 2026-10-26)
+# PairVox: outstanding tasks (2026-10-18, updated 2026-10-27)
+
+**Update 2026-10-27.** The stability audit and cleanup of all changes since 0.1.0-beta.1 is on `main` (6e31783). The report is [docs/audits/2026-10-26-stability-audit.md](../audits/2026-10-26-stability-audit.md). The audit fixed 31 of 45 findings, and 594 tests pass with 5 skipped. The 14 remaining findings are listed at the end of the report.
+- **Installed on both devices.** The Mac app was installed with `scripts/pv-install.sh` and passed its launch check. The iPhone app was installed on Noava17 and connected to the Mac, and its log was copied with `scripts/pull-phone-logs.sh`.
+- **No rollback copy.** The old `dist/PairVox.previous.app` was moved to the Trash, so `pv-install.sh --rollback` has nothing to restore until the next install.
+- **Repository.** `main` is the only branch. There are no open PRs, issues or worktrees.
+- **Backlog 5.10 is done.** A clean rebuild of the app module on 2026-10-27 showed no warnings in `AppModel.swift`.
+- **Still open.** The owner checklist, checks 2 to 4, and the frozen backlog in §5 are unchanged.
+- **Test hang.** A `make test` run hung for nine hours on 2026-10-26. It did not happen again in three later runs, and the log did not show which test it was. If it comes back, run the suite with line-by-line output (`script -q LOG make test`) so the log names the stuck test.
 
 **Update 2026-10-26.** The tests only the owner can run are in [2026-10-26-owner-test-checklist.md](2026-10-26-owner-test-checklist.md). Everything on `main` is installed on the Mac and on Noava17. No other branches or worktrees are left.
 
@@ -71,7 +79,7 @@ From [2026-10-16-hardening-task-list.md](2026-10-16-hardening-task-list.md). The
 - **Audio:** 2.6 (leveling after sanitize), 2.7 (voice processing chosen from the resolved route), 2.10 (screech root cause), 2.11 (latency, which is check 2), 2.12 (output-only starts, "microphone not authorized"), 2.13 (capture- and restart-path tests).
 - **Phone link:** 3.3 (risky approvals from the phone need a check on the Mac), 3.7 (pairing limits counted for each phone), 3.9 (nonce fingerprint in the Pair dialog), 3.10 (fuzz the frame parser that runs before the handshake).
 - **Session and logging:** 4.7 (owner and mode checks on the auto-located `claude`), 4.8 (`LineBuffer` scan cost, JSON depth cap), 4.9 (stale `.part` downloads, `mktemp` guards).
-- **App layer:** 5.5 (permission card layout: fixed, not yet checked on screen), 5.6 (input level still shares the model), 5.7 (window, setup sheet and restore fixes), 5.8 (stderr capture decision), 5.9 (serialize `setActive`), 5.10 (21 capture warnings in `AppModel.swift`).
+- **App layer:** 5.5 (permission card layout: fixed, not yet checked on screen), 5.6 (input level still shares the model), 5.7 (window, setup sheet and restore fixes), 5.8 (stderr capture decision), 5.9 (serialize `setActive`). 5.10 (the capture warnings in `AppModel.swift`) was done in the 2026-10-26 stability audit.
 - **Tooling and docs:** 6.2 (bundle path and CDHash in `app.launch`), 6.4 (pin the CI container by digest), 6.5 (threat model corrections), 6.6 (CHANGELOG and RELEASE checklist).
 - **Release:** 7.1 (MIC_TEST parts 1 to 5 on speakers and headset), 7.2 (security gates, which is check 5), 7.3 (soak test and release dry run). 7.4 (iPhone device test) has been covered by the 2026-10-18 phone tests.
 
@@ -80,4 +88,6 @@ From [2026-10-16-hardening-task-list.md](2026-10-16-hardening-task-list.md). The
 | Command | What it does | Effort |
 |---|---|---|
 | `pv-install` | Builds the current commit into `dist-new/` and swaps it in, keeping the running build as `PairVox.previous.app`. After the relaunch it runs `scripts/launch-check.sh`. `--json`, `--dry-run`. | Small |
+| `pv-install --prune` | Moves `PairVox.previous.app` to the Trash once the new build passes its launch check. `--json`, `--dry-run`. | Small |
+| `phone-install` | Builds the iPhone app for any iPhone and retries the install on Noava17 until the phone is past its passcode screen, then opens it. `--json`, `--dry-run`. | Small |
 | `pv-consolidate` | Merges every PR whose CI is green at the tested head, deletes merged branches locally and on GitHub, removes leftover worktrees, and reports what remains. `--json`, `--dry-run`. | Medium |
