@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The iPhone no longer cuts you off when you pause mid-sentence. Hands-free, it ended your turn 1.2 s after its speech recognizer last changed the text, and that text lags your voice, so a short pause sent half a sentence to Claude and the rest arrived as a second message (2026-10-28: "Pair box but basically it's a conversation that", then "Your computer"; Claude said the message was cut off). The phone now waits 1.5 s, the Mac's default, with neither new words nor a voice-loud sound on the microphone. A steady noise counts as the room, and without a new word for 4 s the turn ends anyway.
 - Stability audit and cleanup of everything since 0.1.0-beta.1 (docs/audits/2026-10-26-stability-audit.md).
   - iPhone: listening no longer sticks on after a call, Siri, an alarm or a headset change; it resumes hands-free a second later. A late callback from an earlier listen can no longer end the next one, a failed start is retried once, and one failure no longer mutes the mic for good.
   - Rating a very long command can no longer freeze the engine: the approval-gate lookup and the `ps e` check no longer take quadratic time.

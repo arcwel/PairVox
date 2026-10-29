@@ -1704,6 +1704,67 @@ final class ListenFailureGuardTests: XCTestCase {
     }
 }
 
+/// 2026-10-28: the phone ended a hands-free turn 1.2 s after the recognizer's text last changed, so a pause to think
+/// sent half a sentence to Claude ("Pair box but basically it's a conversation that") and the rest as a second message.
+final class PhoneTurnEndTests: XCTestCase {
+    /// Levels every 0.1 s from `from` to `to`.
+    private func levels(_ t: inout PhoneTurnEnd, _ db: Float, from: Double, to: Double) {
+        var now = from
+        while now <= to + 1e-9 { t.heardLevel(db, at: now); now += 0.1 }
+    }
+
+    func testAVoiceTheRecognizerHasNotCaughtUpWithKeepsTheTurnOpen() {
+        var t = PhoneTurnEnd()
+        levels(&t, -65, from: 0, to: 0.5)            // the room
+        t.heardWords(at: 1.0); t.heardWords(at: 2.0)
+        levels(&t, -30, from: 0.6, to: 3.0)          // still talking; the text stopped changing at 2.0
+        levels(&t, -65, from: 3.1, to: 5.0)
+        XCTAssertFalse(t.isOver(at: 3.3), "1.3 s since the last word, but the voice stopped only 0.3 s ago")
+        XCTAssertFalse(t.isOver(at: 4.4))
+        XCTAssertTrue(t.isOver(at: 4.6), "1.5 s of quiet after the voice")
+    }
+
+    func testAPauseShorterThanTheMacsEndOfTurnDoesNotEndIt() {
+        var t = PhoneTurnEnd()
+        levels(&t, -65, from: 0, to: 3)
+        t.heardWords(at: 1.0)
+        XCTAssertFalse(t.isOver(at: 2.3), "the old 1.2 s rule ended the turn here")
+        XCTAssertTrue(t.isOver(at: 2.6))
+        XCTAssertEqual(PhoneTurnEnd.silence, AppSettings().endOfTurnSilence, "the phone waits as long as the Mac")
+    }
+
+    func testASteadyNoiseIsTheRoomNotAVoice() {
+        var t = PhoneTurnEnd()
+        levels(&t, -35, from: 0, to: 4)              // a fan or a television
+        t.heardWords(at: 1.0)
+        XCTAssertTrue(t.isOver(at: 2.6))
+    }
+
+    func testANoisyRoomCannotHoldTheTurnOpenForEver() {
+        var t = PhoneTurnEnd()
+        var now = 0.0
+        while now < 8 { t.heardLevel(Int(now * 10) % 2 == 0 ? -65 : -25, at: now); now += 0.1 }   // clatter
+        t.heardWords(at: 1.0)
+        XCTAssertFalse(t.isOver(at: 4.9))
+        XCTAssertTrue(t.isOver(at: 5.0), "four seconds without a new word")
+    }
+
+    func testNothingSaidNeverEndsTheTurn() {
+        var t = PhoneTurnEnd()
+        levels(&t, -65, from: 0, to: 10)
+        XCTAssertFalse(t.isOver(at: 10))
+    }
+
+    func testAQuietVoiceStillCounts() {
+        var t = PhoneTurnEnd()
+        levels(&t, -75, from: 0, to: 0.5)
+        t.heardWords(at: 1.0)
+        levels(&t, -48, from: 0.6, to: 2.5)          // 27 dB over a quiet room
+        XCTAssertFalse(t.isOver(at: 3.0))
+        XCTAssertTrue(t.isOver(at: 4.1))
+    }
+}
+
 /// 2026-10-26: the iPhone app kept no log, so its problems could not be read afterwards.
 final class PhoneLogTests: XCTestCase {
     private func makeLog() -> (PhoneLog, URL) {

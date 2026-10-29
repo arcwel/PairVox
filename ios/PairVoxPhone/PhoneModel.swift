@@ -623,7 +623,7 @@ final class PhoneModel: ObservableObject {
         Task {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             guard !pushToTalk, !muted, appActive, isLive, !listening, !phoneSpeaking, micAllowed != false else { return }
-            startListening(endAfterSilence: 1.2)
+            startListening(endAfterSilence: PhoneTurnEnd.silence)
         }
     }
 

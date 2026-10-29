@@ -25,7 +25,8 @@ Tick a box when it passes. If one fails, note the time it happened and send the 
 
 ## D. iPhone (Noava17)
 
-- [ ] **Open the updated app once.** It was installed while the phone was locked and has not run yet.
+- [x] **Open the updated app once.** Done 2026-10-27: it connected to the Mac.
+- [ ] **No cut-offs on the phone** (fixed 2026-10-29). Hands-free, say a sentence with a one-second pause in the middle. Pass: Claude gets one message with the whole sentence, and answers it instead of saying it was cut off.
 - [ ] **No crash with AirPods.** Start talking hands-free, then connect AirPods or another Bluetooth headset. Pass: no crash. It keeps listening, or says the microphone is not ready and works after a tap.
 - [ ] **No crash on a fresh start.** Force-quit the app, open it and talk before it has said anything. Pass: no crash.
 - [ ] **Hearing itself does not deny.** With a request that needs a tap, say "yes". Pass: the phone says it needs a tap, and the request stays waiting instead of being denied.

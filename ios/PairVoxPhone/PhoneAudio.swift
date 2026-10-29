@@ -163,8 +163,10 @@ final class PhoneRecognizer {
     /// How the listen that just ended went, read by the model in `onFinal`.
     private(set) var lastError: Error?
     var lastListenSeconds: TimeInterval { Date().timeIntervalSince(startedAt) }
-    /// Hands-free: the utterance ends after this long without new words (push-to-talk ends on release instead).
+    /// Hands-free: the utterance ends after this long with neither new words nor a voice (push-to-talk ends on
+    /// release instead).
     var endAfterSilence: TimeInterval?
+    private var turnEnd = PhoneTurnEnd()
     private var silenceTimer: Timer?
 
     func requestPermission() async -> Bool {
@@ -204,9 +206,14 @@ final class PhoneRecognizer {
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak req, weak self] buffer, _ in
             req?.append(buffer)
             let now = Date()
-            if now.timeIntervalSince(lastLevel) >= 1.0 / 15, let onLevel = self?.onLevel {
-                lastLevel = now
-                onLevel(Self.level(of: buffer))
+            guard now.timeIntervalSince(lastLevel) >= 1.0 / 15 else { return }
+            lastLevel = now
+            let db = Self.rmsDB(of: buffer)
+            self?.onLevel?(Self.level(fromDB: db))
+            // The end of the turn listens to the voice too, not only to the recognizer's text, which lags it.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == current else { return }
+                self.turnEnd.heardLevel(db, at: ProcessInfo.processInfo.systemUptime)
             }
         }
         tapped = true
@@ -215,6 +222,8 @@ final class PhoneRecognizer {
         delivered = false
         lastError = nil
         startedAt = Date()
+        turnEnd = PhoneTurnEnd(silence: endAfterSilence ?? PhoneTurnEnd.silence)
+        armSilenceTimer()
         observe(current)
         task = recognizer.recognitionTask(with: req) { [weak self] result, error in
             guard let self, self.generation == current, !self.delivered else { return }
@@ -222,7 +231,7 @@ final class PhoneRecognizer {
                 self.last = result.bestTranscription.formattedString
                 self.onPartial?(self.last)
                 if result.isFinal { self.finish(); return }
-                self.armSilenceTimer()
+                if !self.last.isEmpty { self.turnEnd.heardWords(at: ProcessInfo.processInfo.systemUptime) }
             }
             if let error { self.lastError = error; self.finish() }
         }
@@ -247,10 +256,14 @@ final class PhoneRecognizer {
 
     /// Created on the main queue, where the recognition handler runs, so every teardown (which invalidates it) sees
     /// it: a timer from an earlier listen cannot fire into a later one.
+    /// Hands-free only: checks ten times a second whether the person has stopped talking (`PhoneTurnEnd`).
     private func armSilenceTimer() {
-        guard let wait = endAfterSilence, !last.isEmpty else { return }
-        silenceTimer?.invalidate()
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: wait, repeats: false) { [weak self] _ in self?.stop() }
+        silenceTimer?.invalidate(); silenceTimer = nil
+        guard endAfterSilence != nil else { return }
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self, self.turnEnd.isOver(at: ProcessInfo.processInfo.systemUptime) else { return }
+            self.stop()
+        }
     }
 
     var isRunning: Bool { engine.isRunning }
@@ -272,15 +285,17 @@ final class PhoneRecognizer {
         task?.cancel(); task = nil; request = nil
     }
 
-    /// RMS of the buffer, mapped from -50 dBFS (silence) to 0 dBFS onto 0...1.
-    static func level(of buffer: AVAudioPCMBuffer) -> Double {
-        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+    /// RMS of the buffer in dBFS (-120 for an empty one).
+    static func rmsDB(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return -120 }
         var sum: Float = 0
         for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }
         let rms = (sum / Float(buffer.frameLength)).squareRoot()
-        let db = 20 * log10(max(rms, 1e-6))
-        return Double(min(max((db + 50) / 50, 0), 1))
+        return 20 * log10(max(rms, 1e-6))
     }
+
+    /// A level in dBFS mapped from -50 (silence) to 0 onto 0...1, for the meter.
+    static func level(fromDB db: Float) -> Double { Double(min(max((db + 50) / 50, 0), 1)) }
 
     /// Stops listening and throws away what was heard (the phone is about to speak, or the person muted).
     func cancel() {
